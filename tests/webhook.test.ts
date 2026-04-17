@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
+import { buildAllowlist } from "../src/config/repos";
+import type { Octokit } from "../src/github";
 import { createWebhooks } from "../src/server/webhooks";
 
 const SECRET = "test-secret";
@@ -11,7 +13,10 @@ function sign(payload: string, secret = SECRET): string {
 type ServerHandle = { server: ReturnType<typeof Bun.serve>; url: string };
 
 async function startTestServer(): Promise<ServerHandle> {
-  const webhooks = createWebhooks(SECRET);
+  const webhooks = createWebhooks(SECRET, {
+    allowlist: buildAllowlist({}),
+    octokit: {} as Octokit,
+  });
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
@@ -75,7 +80,7 @@ describe("webhook endpoint", () => {
     expect(res.status).toBe(401);
   });
 
-  test("accepts valid pull_request.opened payload", async () => {
+  test("accepts valid pull_request.opened payload (not allowlisted)", async () => {
     const payload = {
       action: "opened",
       number: 42,
@@ -100,7 +105,7 @@ describe("webhook endpoint", () => {
     expect(res.status).toBe(200);
   });
 
-  test("accepts valid check_suite.completed payload", async () => {
+  test("accepts valid check_suite.completed payload (not allowlisted)", async () => {
     const payload = {
       action: "completed",
       check_suite: {

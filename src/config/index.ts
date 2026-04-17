@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { loadReposFile, type RepoAllowlist } from "./repos";
 
 const EnvSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
@@ -9,6 +10,7 @@ const EnvSchema = z.object({
   JIRA_BASE_URL: z.string().url().optional(),
   JIRA_EMAIL: z.string().email().optional(),
   JIRA_API_TOKEN: z.string().optional(),
+  REPOS_PATH: z.string().default("./repos.yaml"),
 });
 
 export type Config = {
@@ -17,6 +19,7 @@ export type Config = {
   githubPat: string;
   githubWebhookSecret: string;
   anthropicApiKey: string;
+  reposPath: string;
   jira?: {
     baseUrl: string;
     email: string;
@@ -42,6 +45,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     githubPat: parsed.GITHUB_PAT,
     githubWebhookSecret: parsed.GITHUB_WEBHOOK_SECRET,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY,
+    reposPath: parsed.REPOS_PATH,
     jira,
   };
 }
+
+export function loadAllowlist(path: string): RepoAllowlist {
+  return loadReposFile(path);
+}
+
+export type { RepoAllowlist, RepoEntry } from "./repos";

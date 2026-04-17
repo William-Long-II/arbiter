@@ -1,9 +1,15 @@
-import { loadConfig } from "../config";
+import { loadAllowlist, loadConfig } from "../config";
+import { createOctokit } from "../github";
 import { log } from "./logger";
 import { createWebhooks } from "./webhooks";
 
 const config = loadConfig();
-const webhooks = createWebhooks(config.githubWebhookSecret);
+const allowlist = loadAllowlist(config.reposPath);
+const octokit = createOctokit(config.githubPat);
+const webhooks = createWebhooks(config.githubWebhookSecret, {
+  allowlist,
+  octokit,
+});
 
 const server = Bun.serve({
   port: config.port,
@@ -27,6 +33,7 @@ const server = Bun.serve({
 log.info("server started", {
   hostname: server.hostname,
   port: server.port,
+  allowlistedRepos: Object.keys(allowlist.all()).length,
 });
 
 async function handleWebhook(
@@ -57,7 +64,6 @@ async function handleWebhook(
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    // Signature failures throw with a specific message; treat as 401.
     if (message.includes("signature does not match")) {
       log.warn("webhook signature rejected", { deliveryId: id });
       return new Response("invalid signature", { status: 401 });
