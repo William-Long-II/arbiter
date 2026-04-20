@@ -24,6 +24,16 @@ export type RunReviewOptions = {
   maxDiffChars?: number;
 };
 
+export type TraceMetadata = {
+  headSha: string;
+  model: string;
+  mode: "single" | "chunked" | "budget_exhausted" | "too_large";
+  intentSource: string; // from intent.source
+  intentRef: string; // intent.ticketKey or '' when source=pr-body
+  promptHash: string; // sha256(userMessage).slice(0,12), or '' for fail-open paths
+  ts: string; // ISO-8601
+};
+
 export type RunReviewOutput = {
   result: ReviewResult;
   warnings: string[];
@@ -33,4 +43,5 @@ export type RunReviewOutput = {
     cacheCreationInputTokens?: number;
     cacheReadInputTokens?: number;
   };
+  traceMetadata?: TraceMetadata;
 };

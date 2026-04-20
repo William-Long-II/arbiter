@@ -16,6 +16,7 @@ import { resultCache } from "./result-cache";
 import { getWeeklyTokenSum } from "./budget";
 import { recordUsage } from "./usage";
 import { log } from "../server/logger";
+import { createHash } from "node:crypto";
 import { resolveAnthropicClient } from "./client";
 import {
   DEFAULT_MODEL,
@@ -24,10 +25,21 @@ import {
   type RunReviewInput,
   type RunReviewOptions,
   type RunReviewOutput,
+  type TraceMetadata,
 } from "./types";
 
 export { DEFAULT_MODEL, DEFAULT_MAX_TOKENS, DEFAULT_MAX_DIFF_CHARS };
 export type { RunReviewInput, RunReviewOptions, RunReviewOutput };
+export type { TraceMetadata } from "./types";
+
+/**
+ * Compute a short, stable fingerprint of the final user message sent to the
+ * LLM. The first 12 hex characters of SHA-256 are sufficient for traceability
+ * debugging without leaking prompt content in the posted review body.
+ */
+function computePromptHash(userMessage: string): string {
+  return createHash("sha256").update(userMessage).digest("hex").slice(0, 12);
+}
 
 /** Valid values for the REVIEW_MODE environment variable. */
 export type ReviewMode = "auto" | "single" | "chunked";
@@ -102,6 +114,15 @@ export async function runReview(
           lineComments: [],
         },
         warnings: ["weekly token budget exhausted"],
+        traceMetadata: {
+          headSha: input.diff.headSha,
+          model,
+          mode: "budget_exhausted",
+          intentSource: input.intent.source,
+          intentRef: input.intent.ticketKey ?? "",
+          promptHash: "",
+          ts: new Date().toISOString(),
+        },
       };
     }
   }
@@ -215,6 +236,15 @@ export async function runReview(
       warnings: [
         `diff exceeded review threshold (${diffSize} > ${maxDiffChars}); fail-open`,
       ],
+      traceMetadata: {
+        headSha: input.diff.headSha,
+        model,
+        mode: "too_large",
+        intentSource: input.intent.source,
+        intentRef: input.intent.ticketKey ?? "",
+        promptHash: "",
+        ts: new Date().toISOString(),
+      },
     };
     resultCache.set(cacheKey, failOpenResult);
     return failOpenResult;
@@ -227,6 +257,8 @@ export async function runReview(
     coverageDelta,
     heuristics,
   });
+
+  const promptHash = computePromptHash(userMessage);
 
   // withBreaker gates BEFORE withRetry so a tripped breaker short-circuits
   // the retry loop entirely rather than burning quota on repeated attempts.
@@ -281,6 +313,15 @@ export async function runReview(
     result: response.parsed_output,
     warnings: [],
     usage: usageOut,
+    traceMetadata: {
+      headSha: input.diff.headSha,
+      model,
+      mode: "single",
+      intentSource: input.intent.source,
+      intentRef: input.intent.ticketKey ?? "",
+      promptHash,
+      ts: new Date().toISOString(),
+    },
   };
   resultCache.set(cacheKey, singlePassResult);
   return singlePassResult;
