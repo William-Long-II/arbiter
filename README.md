@@ -167,6 +167,9 @@ Open a pull request on a repo in your allowlist. Once CI goes green, within ~60 
 | `USAGE_LOG_DIR` | no | `./var/usage` | Directory for JSONL per-review token-usage records |
 | `DEAD_LETTER_DIR` | no | `./var/dead-letter` | Directory for events that exhaust the handler |
 | `DEAD_LETTER_RETENTION_DAYS` | no | `30` | Retention for dead-letter date-dirs |
+| `DEAD_LETTER_AUTO_REPLAY` | no | `enabled` | `enabled` or `disabled` — replays recent dead-letter records on boot |
+| `DEAD_LETTER_REPLAY_MAX_AGE_MINUTES` | no | `60` | Max age of DL files eligible for auto-replay |
+| `DEAD_LETTER_REPLAY_MAX_COUNT` | no | `50` | Hard cap on DL files replayed per boot |
 | `AUDIT_LOG_DIR` | no | `./var/audit` | Directory for prompt + LLM-response audit records; set to `disabled` to suppress writes |
 | `AUDIT_RETENTION_DAYS` | no | `7` | Retention for audit date-dirs |
 | `METRICS_BIND_TOKEN` | no | — | If set, `GET /metrics` requires `Authorization: Bearer <token>` |
@@ -180,16 +183,17 @@ orgs:
     rereview: auto-on-sync | label-or-mention
     rereview_label: string    # only meaningful for label-or-mention
     review:
-      include_paths: [glob, ...]     # only review files matching; others omitted
-      exclude_paths: [glob, ...]     # omit files matching these globs
-      max_weekly_tokens: integer     # optional; summary-only once exhausted, resets on ISO week roll
+      include_paths: [glob, ...]         # only review files matching; others omitted
+      exclude_paths: [glob, ...]         # omit files matching these globs
+      max_weekly_tokens: integer         # optional; summary-only once exhausted, resets on ISO week roll
+      anthropic_api_key_env: string      # optional; name of env var holding this org's Anthropic key
 
 repos:
   <owner/name>:
     enabled: boolean          # default true
     rereview: auto-on-sync | label-or-mention
     rereview_label: string
-    review: { include_paths, exclude_paths, max_weekly_tokens }
+    review: { include_paths, exclude_paths, max_weekly_tokens, anthropic_api_key_env }
 ```
 
 Repo entries override org defaults field-by-field. A repo is allowed if it has an explicit enabled entry OR its owner has an enabled `orgs:` entry.
@@ -342,6 +346,26 @@ The bot only reacts to slash commands it did not author; `reviewme_slash_command
 
 Repos can set `review.max_weekly_tokens` in `repos.yaml` (per-repo or inherited from the `orgs:` layer). When the rolling ISO-week token total (summed from the usage JSONL) reaches the cap, further reviews on that repo return a short summary-only comment — no LLM call — until Monday 00:00 UTC rolls the window. The metric `reviewme_budget_exhausted_total{repo}` fires every time the cap blocks a review.
 
+### Per-repo Anthropic key override
+
+Repos can pin reviews to a specific Anthropic API key for per-team cost attribution. Set `review.anthropic_api_key_env: NAME_OF_ENV_VAR` in `repos.yaml`; the bot will resolve the value from `process.env[NAME_OF_ENV_VAR]` at review time and use a fresh client for that request. **The config file never holds the key itself — only the env-var name.** When the configured env var is empty the bot falls back to the shared default key and logs a warning.
+
+### Prompt-cache observability
+
+The system prompt is cached via Anthropic's `cache_control`. Every review emits a `prompt.cache` log line with `hit_ratio`, `cache_read_tokens`, `cache_creation_tokens`, and `input_tokens`. The per-kind totals also land in `reviewme_prompt_cache_read_tokens_total` and `reviewme_prompt_cache_creation_tokens_total` for long-term trending. On a repo with steady flow, hit-ratio above `0.5` is a sign the cache is paying for itself; below `0.2` usually means the prompt prefix is churning.
+
+### Review-comment thread resolution
+
+When a reviewer marks a bot line-comment thread as Resolved in GitHub's UI, the bot stops replying to new messages in that thread (queried via GraphQL before every reply, cached 5 minutes). Resolving is the UI-equivalent of a user typing `/stop` — both halt the conversation cleanly. Tracked by `reviewme_thread_resolved_skip_total`.
+
+### Dead-letter auto-replay on boot
+
+On startup, after the retention sweep, the bot automatically replays any dead-letter files newer than `DEAD_LETTER_REPLAY_MAX_AGE_MINUTES` (default 60), up to `DEAD_LETTER_REPLAY_MAX_COUNT` (default 50). Successfully-replayed files are renamed to `<name>.replayed` so they are not re-attempted on the next boot. Set `DEAD_LETTER_AUTO_REPLAY=disabled` to opt out. Metric: `reviewme_dead_letter_replay_total{result}`.
+
+### Review traceability footer
+
+Every posted review summary ends with a hidden HTML comment recording `head_sha`, `model`, `mode` (`single`/`chunked`/`budget_exhausted`/`too_large`), `intent_source`, `intent_ref`, `prompt_hash` (first 12 chars of the user-message SHA-256), and `ts`. Hidden from GitHub's rendered UI; visible via the comment's three-dots → Edit. Pair with the audit-trail JSONL to trace a surprising review back to its exact prompt.
+
 ### Secret rotation
 
 **Zero-downtime procedure** (no dropped deliveries):
@@ -381,6 +405,10 @@ JSON to stdout — route via journald, Fluent Bit, Vector, etc. Every log payloa
 | `reviewme_ratelimit_rejected_total` | counter | `installation` |
 | `reviewme_shutdown_drain_seconds` | histogram | — |
 | `reviewme_config_reload_total` | counter | `result` |
+| `reviewme_prompt_cache_read_tokens_total` | counter | — |
+| `reviewme_prompt_cache_creation_tokens_total` | counter | — |
+| `reviewme_dead_letter_replay_total` | counter | `result` — `success` / `failure` / `skipped` |
+| `reviewme_thread_resolved_skip_total` | counter | — |
 | `reviewme_draft_skipped_total` | counter | — |
 | `reviewme_breaker_state` | gauge (via counter) | `dep` — `0` closed / `1` open / `2` half-open |
 | `reviewme_coverage_signal_total` | counter | `bucket` — `no_new_src` / `has_tests` / `untested` |
