@@ -149,7 +149,8 @@ Open a pull request on a repo in your allowlist. Once CI goes green, within ~60 
 | `PORT` | no | `3000` | HTTP listen port |
 | `HOSTNAME` | no | `127.0.0.1` | Bind address |
 | `GITHUB_PAT` | **yes** | — | Machine-user fine-grained PAT |
-| `GITHUB_WEBHOOK_SECRET` | **yes** | — | Shared secret for HMAC signature verification |
+| `GITHUB_WEBHOOK_SECRET` | **yes** | — | Primary shared secret for HMAC signature verification |
+| `GITHUB_WEBHOOK_SECRET_SECONDARY` | no | — | Secondary webhook secret accepted during rotation; remove once rotation is complete |
 | `GITHUB_MACHINE_USER_LOGIN` | no | — | Skip the `GET /user` lookup at boot. Use for local dev with placeholder PATs; leave unset in prod. |
 | `ANTHROPIC_API_KEY` | **yes** | — | For the Claude review pass |
 | `REPOS_PATH` | no | `./repos.yaml` | Path to the allowlist file |
@@ -319,7 +320,20 @@ Delivery IDs are cached for 10 minutes after a successful signature verify. A se
 
 ### Secret rotation
 
-Update `GITHUB_PAT` / `ANTHROPIC_API_KEY` / `GITHUB_WEBHOOK_SECRET` in the env file and restart. Rotate the webhook secret in GitHub simultaneously — signature mismatches during the swap will `401` briefly. Log redaction scrubs PATs, Anthropic keys, JWTs, and `Bearer` tokens from any accidentally-logged payloads.
+**Zero-downtime procedure** (no dropped deliveries):
+
+1. **Set the secondary secret and deploy.**
+   Add `GITHUB_WEBHOOK_SECRET_SECONDARY=<new-secret>` to `.env` (keep `GITHUB_WEBHOOK_SECRET=<old-secret>` unchanged). Restart the bot. It now accepts both secrets. Boot log confirms: `"webhookSecondarySecret":true`.
+
+2. **Update GitHub's webhook to the new secret.**
+   In GitHub → repo/org Settings → Webhooks, change the Secret field to `<new-secret>`. GitHub immediately starts signing deliveries with the new secret. Watch the bot logs for `"evt":"webhook.secret_secondary_used"` — each occurrence confirms a delivery verified via the secondary. Once you stop seeing the secondary-used log, all in-flight deliveries have transitioned.
+
+3. **Promote and remove the secondary secret, then deploy.**
+   Set `GITHUB_WEBHOOK_SECRET=<new-secret>` and remove `GITHUB_WEBHOOK_SECRET_SECONDARY`. Restart. The rotation is complete.
+
+> **Reminder**: complete step 3. Leaving `GITHUB_WEBHOOK_SECRET_SECONDARY` set indefinitely means both secrets remain valid indefinitely, which widens the attack surface. The secondary-used metric (`reviewme_webhook_secret_used_total{slot="secondary"}`) dropping to zero is the signal that step 3 is safe.
+
+For non-webhook secrets (`GITHUB_PAT`, `ANTHROPIC_API_KEY`): update in the env file and restart. Log redaction scrubs PATs, Anthropic keys, JWTs, and `Bearer` tokens from any accidentally-logged payloads.
 
 ### Logs
 
@@ -330,6 +344,7 @@ JSON to stdout — route via journald, Fluent Bit, Vector, etc. Every log payloa
 | Metric | Kind | Labels |
 |---|---|---|
 | `reviewme_webhook_received_total` | counter | `event` |
+| `reviewme_webhook_secret_used_total` | counter | `slot` (`primary`/`secondary`) |
 | `reviewme_webhook_replay_total` | counter | — |
 | `reviewme_webhook_unknown_event_total` | counter | `event` |
 | `reviewme_reviews_total` | counter | `repo`, `verdict` |

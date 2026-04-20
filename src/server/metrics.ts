@@ -286,6 +286,13 @@ registry.registerHistogram(
   "Seconds elapsed waiting for CI gate to pass.",
 );
 
+/** Webhook deliveries that verified successfully, labelled by secret slot (primary/secondary). */
+export const webhookSecretUsedTotal = "reviewme_webhook_secret_used_total";
+registry.registerCounter(
+  webhookSecretUsedTotal,
+  "Total webhook deliveries verified successfully, by secret slot (primary/secondary).",
+);
+
 // --- Replay-protection counters ---
 
 /** Webhook deliveries rejected as replays (duplicate delivery ID). */
@@ -328,6 +335,10 @@ export function observeReviewDuration(seconds: number): void {
 
 export function observeCiWaitSeconds(seconds: number): void {
   registry.observeHistogram(ciWaitSeconds, seconds);
+}
+
+export function incWebhookSecretUsed(slot: "primary" | "secondary"): void {
+  registry.incrementCounter(webhookSecretUsedTotal, { slot });
 }
 
 export function incWebhookReplay(): void {

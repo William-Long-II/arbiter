@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { getAllowlist, loadAllowlist, loadConfig, reload } from "../config";
 import { createOctokit, fetchAuthenticatedLogin } from "../github";
 import { createAnthropic } from "../review";
@@ -9,6 +10,7 @@ import {
   incRatelimitRejected,
   incWebhookReceived,
   incWebhookReplay,
+  incWebhookSecretUsed,
   incWebhookUnknownEvent,
   observeShutdownDrain,
 } from "./metrics";
@@ -46,13 +48,31 @@ log.info("machine user identity resolved", {
   source: config.machineUserLogin ? "env" : "github",
 });
 
-const webhooks = createWebhooks(config.githubWebhookSecret, {
-  getAllowlist,
-  octokit,
-  anthropic,
-  selfLogin,
-  jiraCreds: config.jira,
-});
+// Build one Webhooks instance per secret slot so we can dispatch via
+// verifyAndReceive on whichever slot successfully pre-verified the request.
+// Two instances are used rather than hand-rolling the dispatch path, keeping
+// all event-handler wiring in createWebhooks unchanged.
+const webhooksDeps = { getAllowlist, octokit, anthropic, selfLogin, jiraCreds: config.jira };
+const webhooksPrimary = createWebhooks(config.githubWebhookSecret, webhooksDeps);
+const webhooksSecondary = config.githubWebhookSecretSecondary
+  ? createWebhooks(config.githubWebhookSecretSecondary, webhooksDeps)
+  : null;
+
+/**
+ * Timing-safe HMAC-SHA256 comparison for a single secret.
+ * Returns true when `signature` equals `sha256=<hmac(secret, payload)>`.
+ * Using timingSafeEqual prevents timing-oracle attacks even if an attacker
+ * can measure response latency precisely.
+ */
+function verifyHmac(payload: string, signature: string, secret: string): boolean {
+  const expected = `sha256=${createHmac("sha256", secret).update(payload).digest("hex")}`;
+  try {
+    return timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+  } catch {
+    // Buffers were different lengths — definitely not equal.
+    return false;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Drain state — flipped to true on SIGTERM.
@@ -83,7 +103,7 @@ const server = Bun.serve({
     },
     "/metrics": { GET: buildMetricsHandler() },
     "/webhook": {
-      POST: (req) => handleWebhook(req, webhooks),
+      POST: (req) => handleWebhook(req, webhooksPrimary, webhooksSecondary),
     },
   },
   fetch() {
@@ -100,6 +120,7 @@ log.info("server started", {
   port: server.port,
   allowlistedRepos: Object.keys(getAllowlist().all()).length,
   jiraConfigured: Boolean(config.jira),
+  webhookSecondarySecret: Boolean(config.githubWebhookSecretSecondary),
 });
 
 // ---------------------------------------------------------------------------
@@ -176,7 +197,8 @@ sweepDeadLetters().catch((err: unknown) => {
 
 export async function handleWebhook(
   req: Request,
-  webhooks: ReturnType<typeof createWebhooks>,
+  webhooksPrimary: ReturnType<typeof createWebhooks>,
+  webhooksSecondary: ReturnType<typeof createWebhooks> | null = null,
 ): Promise<Response> {
   // Refuse new work while draining.
   if (isDraining) {
@@ -240,19 +262,43 @@ export async function handleWebhook(
   incWebhookReceived(name);
 
   // Pre-verify the signature independently before touching the replay cache.
-  // We use webhooks.verify() (standalone, synchronous-equivalent) so that:
-  //   1. Signature errors return 401 cleanly without inserting into the cache.
-  //   2. We can insert into the cache BEFORE dispatching the event, so that
-  //      a second concurrent request with the same ID arriving during a slow
-  //      handler is still rejected.
-  // This is why we split verify + dispatch instead of calling verifyAndReceive
-  // alone — verifyAndReceive runs handlers inline, making it impossible to
-  // intercept between verification and dispatch.
-  const signatureValid = await webhooks.verify(payload, signature);
-  if (!signatureValid) {
+  // WHY hand-rolled HMAC instead of webhooks.verify(): we need to try two
+  // secrets and pick the matching Webhooks instance for dispatch.
+  // timingSafeEqual is used to prevent timing-oracle attacks.
+  //
+  // Ordering:
+  //   1. Try primary (the common, post-rotation steady state).
+  //   2. If primary fails and secondary is configured, try secondary.
+  //   3. Return 401 only when both fail.
+  //
+  // Inserting into the replay cache AFTER verify but BEFORE dispatch means a
+  // concurrent duplicate delivery is still rejected even during slow handlers.
+  let matchedWebhooks: ReturnType<typeof createWebhooks>;
+  let secretSlot: "primary" | "secondary";
+
+  if (verifyHmac(payload, signature, config.githubWebhookSecret)) {
+    matchedWebhooks = webhooksPrimary;
+    secretSlot = "primary";
+  } else if (
+    webhooksSecondary !== null &&
+    config.githubWebhookSecretSecondary !== undefined &&
+    verifyHmac(payload, signature, config.githubWebhookSecretSecondary)
+  ) {
+    matchedWebhooks = webhooksSecondary;
+    secretSlot = "secondary";
+    // Signal operators that rotation is in progress and the secondary secret
+    // is actively being used; they can grep for this event to confirm GitHub
+    // has been updated to the new secret.
+    log.info("webhook verified with secondary secret", {
+      evt: "webhook.secret_secondary_used",
+      delivery_id: id,
+    });
+  } else {
     log.warn("webhook signature rejected", { deliveryId: id });
     return new Response("invalid signature", { status: 401 });
   }
+
+  incWebhookSecretUsed(secretSlot);
 
   // Replay check: insert delivery ID into the nonce cache.  If the ID is
   // already present and unexpired, the request is a replay.
@@ -268,9 +314,9 @@ export async function handleWebhook(
   }
 
   try {
-    await webhooks.verifyAndReceive({
+    await matchedWebhooks.verifyAndReceive({
       id,
-      name: name as Parameters<typeof webhooks.verifyAndReceive>[0]["name"],
+      name: name as Parameters<typeof matchedWebhooks.verifyAndReceive>[0]["name"],
       signature,
       payload,
     });
