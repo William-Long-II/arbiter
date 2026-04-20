@@ -279,6 +279,13 @@ registry.registerHistogram(
   "Seconds elapsed waiting for CI gate to pass.",
 );
 
+/** Circuit breaker state gauge (0=closed, 1=open, 2=half-open), labelled by dep. */
+export const breakerState = "reviewme_breaker_state";
+registry.registerCounter(
+  breakerState,
+  "Current circuit breaker state by dependency (0=closed, 1=open, 2=half-open).",
+);
+
 // --- Replay-protection counters ---
 
 /** Webhook deliveries rejected as replays (duplicate delivery ID). */
@@ -349,6 +356,30 @@ export function incThreadReply(outcome: "sent" | "error"): void {
 
 export function incThreadRateLimited(): void {
   registry.incrementCounter(threadRateLimitedTotal);
+}
+
+/**
+ * Record the current circuit-breaker state for `dep`.
+ *
+ * The metrics registry only has Counter (monotonic). We simulate a gauge by
+ * directly setting the counter value — valid here because breaker state is a
+ * small bounded enum value (0, 1, or 2), not a rate, and the semantics of
+ * "latest wins" match what operators need for alerting on open breakers.
+ */
+export function setBreakerState(dep: string, value: number): void {
+  const entry = (
+    registry as unknown as {
+      counters: Map<string, { series: Map<string, { value: number }> }>;
+    }
+  ).counters.get(breakerState);
+  if (!entry) return;
+  const key = `dep="${dep}"`;
+  let state = entry.series.get(key);
+  if (!state) {
+    state = { value: 0 };
+    entry.series.set(key, state);
+  }
+  state.value = value;
 }
 
 // ---------------------------------------------------------------------------

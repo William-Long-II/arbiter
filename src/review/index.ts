@@ -5,6 +5,7 @@ import { buildUserMessage, SYSTEM_PROMPT } from "./prompt";
 import { ReviewResultSchema } from "./schema";
 import { filterDiff } from "./diff-filter";
 import { withRetry } from "../util/retry";
+import { withBreaker } from "./breaker";
 import { runChunkedReview } from "./synthesize";
 import { fetchConventions } from "./conventions";
 import {
@@ -115,23 +116,27 @@ export async function runReview(
 
   const userMessage = buildUserMessage({ ...input, conventions, filterResult });
 
-  const response = await withRetry(() =>
-    anthropic.messages.parse({
-      model,
-      max_tokens: maxTokens,
-      thinking: { type: "adaptive" },
-      system: [
-        {
-          type: "text",
-          text: SYSTEM_PROMPT,
-          cache_control: { type: "ephemeral" },
+  // withBreaker gates BEFORE withRetry so a tripped breaker short-circuits
+  // the retry loop entirely rather than burning quota on repeated attempts.
+  const response = await withBreaker("anthropic", () =>
+    withRetry(() =>
+      anthropic.messages.parse({
+        model,
+        max_tokens: maxTokens,
+        thinking: { type: "adaptive" },
+        system: [
+          {
+            type: "text",
+            text: SYSTEM_PROMPT,
+            cache_control: { type: "ephemeral" },
+          },
+        ],
+        messages: [{ role: "user", content: userMessage }],
+        output_config: {
+          format: zodOutputFormat(ReviewResultSchema),
         },
-      ],
-      messages: [{ role: "user", content: userMessage }],
-      output_config: {
-        format: zodOutputFormat(ReviewResultSchema),
-      },
-    }),
+      }),
+    ),
   );
 
   if (!response.parsed_output) {
@@ -173,6 +178,7 @@ export {
   makeJiraNotFoundError,
   makeAnthropicRateLimitedError,
   makeAnthropicInvalidOutputError,
+  makeAnthropicCircuitOpenError,
   makePostReviewForbiddenError,
   wrapDiffFetchError,
   wrapIntentResolveError,
@@ -187,3 +193,12 @@ export {
   type PostReviewError,
   type ReviewErrorContext,
 } from "./errors";
+export {
+  CircuitBreaker,
+  CircuitOpenError,
+  getBreaker,
+  withBreaker,
+  type BreakerState,
+  type BreakerOptions,
+  type CheckResult,
+} from "./breaker";

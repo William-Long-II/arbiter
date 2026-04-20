@@ -40,6 +40,8 @@ export const ReviewErrorCode = {
   POST_REVIEW_FORBIDDEN: "POST_REVIEW_FORBIDDEN",
   /** The PR diff exceeded the configured character budget and was not reviewed. */
   DIFF_TOO_LARGE: "DIFF_TOO_LARGE",
+  /** Anthropic calls rejected because the circuit breaker is open. */
+  ANTHROPIC_CIRCUIT_OPEN: "ANTHROPIC_CIRCUIT_OPEN",
 } as const;
 
 export type ReviewErrorCode =
@@ -79,7 +81,8 @@ export type LlmReviewError = ReviewErrorBase & {
   stage: "llm-review";
   code:
     | typeof ReviewErrorCode.ANTHROPIC_RATE_LIMITED
-    | typeof ReviewErrorCode.ANTHROPIC_INVALID_TOOL_OUTPUT;
+    | typeof ReviewErrorCode.ANTHROPIC_INVALID_TOOL_OUTPUT
+    | typeof ReviewErrorCode.ANTHROPIC_CIRCUIT_OPEN;
 };
 
 export type PostReviewError = ReviewErrorBase & {
@@ -159,6 +162,19 @@ export function makeAnthropicRateLimitedError(cause: unknown): LlmReviewError {
   };
 }
 
+export function makeAnthropicCircuitOpenError(
+  cause: unknown,
+  retryAfterSeconds: number,
+): LlmReviewError {
+  return {
+    code: ReviewErrorCode.ANTHROPIC_CIRCUIT_OPEN,
+    stage: "llm-review",
+    retryable: false,
+    message: `anthropic circuit breaker open; retry in ${retryAfterSeconds}s`,
+    cause,
+  };
+}
+
 export function makeAnthropicInvalidOutputError(cause: unknown): LlmReviewError {
   return {
     code: ReviewErrorCode.ANTHROPIC_INVALID_TOOL_OUTPUT,
@@ -214,6 +230,18 @@ export function wrapIntentResolveError(
  */
 export function wrapLlmReviewError(err: unknown): LlmReviewError {
   if (isReviewError(err) && err.stage === "llm-review") return err as LlmReviewError;
+  // Duck-type CircuitOpenError to avoid a circular import (breaker → metrics,
+  // errors ← breaker would be circular if we imported CircuitOpenError here).
+  if (
+    err instanceof Error &&
+    err.name === "CircuitOpenError" &&
+    "retryAfterSeconds" in err
+  ) {
+    return makeAnthropicCircuitOpenError(
+      err,
+      (err as { retryAfterSeconds: number }).retryAfterSeconds,
+    );
+  }
   const status = extractHttpStatus(err);
   if (status === 429) return makeAnthropicRateLimitedError(err);
   const msg = extractMessage(err) ?? "";
