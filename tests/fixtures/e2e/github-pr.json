@@ -1,0 +1,19 @@
+{
+  "number": 7,
+  "title": "Add widget factory",
+  "body": "This PR adds a factory function for creating widgets.",
+  "additions": 15,
+  "deletions": 2,
+  "changed_files": 2,
+  "head": {
+    "ref": "feature/widget-factory",
+    "sha": "aabbccddee0011223344556677889900aabbccdd"
+  },
+  "base": {
+    "ref": "main",
+    "sha": "1111111111111111111111111111111111111111"
+  },
+  "user": { "login": "octocat", "id": 1 },
+  "state": "open",
+  "merged": false
+}

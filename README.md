@@ -153,6 +153,20 @@ Configure GitHub's webhook URL as `https://your-host/review-me/webhook` and set:
 - **Secret rotation**: update `GITHUB_PAT` / `ANTHROPIC_API_KEY` / `GITHUB_WEBHOOK_SECRET` in the env file and restart. Rotate the webhook secret in GitHub simultaneously (signature mismatches during the swap will 401 briefly).
 - **Allowlist changes**: edit `repos.yaml` and restart. It is read once at boot; there is no hot-reload.
 
+## CI
+
+[![CI](https://github.com/William-Long-II/review-me/actions/workflows/ci.yml/badge.svg)](https://github.com/William-Long-II/review-me/actions/workflows/ci.yml)
+
+Every pull request and every push to `main` runs `.github/workflows/ci.yml`, which:
+
+1. Checks out the repo and sets up Bun 1.3.x.
+2. Restores the Bun install cache (keyed on `bun.lock`) to speed up repeated runs.
+3. Runs `bun install --frozen-lockfile` — fails if the lockfile is out of date.
+4. Runs `bun run typecheck` — fails on any TypeScript error.
+5. Runs `bun test` — fails on any test failure.
+
+The workflow does not build a Docker image or publish artifacts; those steps are out of scope for CI (see `deploy/`).
+
 ## Configuration reference
 
 | Variable | Required | Default | Purpose |
