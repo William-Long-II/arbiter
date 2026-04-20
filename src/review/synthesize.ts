@@ -6,6 +6,7 @@ import { planReview, toFileDiffs, DEFAULT_BATCH_BUDGET_CHARS } from "./chunker";
 import type { FileDiff } from "./chunker";
 import { buildUserMessage, SYSTEM_PROMPT } from "./prompt";
 import { withRetry } from "../util/retry";
+import { withBreaker } from "./breaker";
 import { recordUsage } from "./usage";
 import { writeAuditRecord } from "./audit";
 import {
@@ -266,22 +267,24 @@ export async function runChunkedReview(
 
       const userMessage = buildBatchUserMessage(batch, intentSection);
 
-      const response = await withRetry(() =>
-        anthropic.messages.parse({
-          model,
-          max_tokens: maxTokens,
-          system: [
-            {
-              type: "text",
-              text: BATCH_SYSTEM_PROMPT,
-              cache_control: { type: "ephemeral" },
+      const response = await withBreaker("anthropic", () =>
+        withRetry(() =>
+          anthropic.messages.parse({
+            model,
+            max_tokens: maxTokens,
+            system: [
+              {
+                type: "text",
+                text: BATCH_SYSTEM_PROMPT,
+                cache_control: { type: "ephemeral" },
+              },
+            ],
+            messages: [{ role: "user", content: userMessage }],
+            output_config: {
+              format: zodOutputFormat(BatchSummarySchema),
             },
-          ],
-          messages: [{ role: "user", content: userMessage }],
-          output_config: {
-            format: zodOutputFormat(BatchSummarySchema),
-          },
-        }),
+          }),
+        ),
       );
 
       if (!response.parsed_output) {
@@ -355,22 +358,24 @@ export async function runChunkedReview(
 
   const synthesisMessage = buildSynthesisUserMessage(intentSection, batchSummaries);
 
-  const synthesisResponse = await withRetry(() =>
-    anthropic.messages.parse({
-      model,
-      max_tokens: maxTokens,
-      system: [
-        {
-          type: "text",
-          text: SYSTEM_PROMPT,
-          cache_control: { type: "ephemeral" },
+  const synthesisResponse = await withBreaker("anthropic", () =>
+    withRetry(() =>
+      anthropic.messages.parse({
+        model,
+        max_tokens: maxTokens,
+        system: [
+          {
+            type: "text",
+            text: SYSTEM_PROMPT,
+            cache_control: { type: "ephemeral" },
+          },
+        ],
+        messages: [{ role: "user", content: synthesisMessage }],
+        output_config: {
+          format: zodOutputFormat(ReviewResultSchema),
         },
-      ],
-      messages: [{ role: "user", content: synthesisMessage }],
-      output_config: {
-        format: zodOutputFormat(ReviewResultSchema),
-      },
-    }),
+      }),
+    ),
   );
 
   if (!synthesisResponse.parsed_output) {
