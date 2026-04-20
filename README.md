@@ -141,6 +141,15 @@ Configure GitHub's webhook URL as `https://your-host/review-me/webhook` and set:
 
 - **Health checks**: `GET /health`, `GET /ready` → `200 ok`.
 - **Logs**: JSON to stdout — route via journald, Fluent Bit, Vector, etc.
+- **Metrics**: `GET /metrics` returns Prometheus text-format counters and histograms covering webhook throughput (`reviewme_webhook_received_total`), review outcomes (`reviewme_reviews_total{repo,verdict}`), pipeline failures (`reviewme_review_failures_total{stage,reason}`), Anthropic token consumption (`reviewme_anthropic_tokens_total{kind}`), end-to-end review latency (`reviewme_review_duration_seconds`), and CI wait time (`reviewme_ci_wait_seconds`). Set `METRICS_BIND_TOKEN` to a secret string and the endpoint will require `Authorization: Bearer <token>`; omit it for unauthenticated scraping behind a trusted network. Example Prometheus scrape config:
+  ```yaml
+  scrape_configs:
+    - job_name: review-me
+      static_configs:
+        - targets: ["127.0.0.1:3000"]
+      bearer_token: "<your METRICS_BIND_TOKEN>"   # omit if not set
+      metrics_path: /metrics
+  ```
 - **Secret rotation**: update `GITHUB_PAT` / `ANTHROPIC_API_KEY` / `GITHUB_WEBHOOK_SECRET` in the env file and restart. Rotate the webhook secret in GitHub simultaneously (signature mismatches during the swap will 401 briefly).
 - **Allowlist changes**: edit `repos.yaml` and restart. It is read once at boot; there is no hot-reload.
 
@@ -155,6 +164,7 @@ Configure GitHub's webhook URL as `https://your-host/review-me/webhook` and set:
 | `ANTHROPIC_API_KEY` | yes | — | For the Claude review pass |
 | `REPOS_PATH` | no | `./repos.yaml` | Path to the allowlist file |
 | `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` | no | — | Enable Jira intent lookup when all three are set |
+| `METRICS_BIND_TOKEN` | no | — | If set, `GET /metrics` requires `Authorization: Bearer <token>` |
 
 ## Development notes
 
