@@ -104,7 +104,7 @@ describe("fetchGitattributes — 404 response", () => {
     }
   });
 
-  test("404 result is cached (does not re-fetch on second call)", async () => {
+  test("404 result is NOT cached (re-fetches on second call — cheap per spec)", async () => {
     let callCount = 0;
     const octokit = makeOctokit(async () => {
       callCount++;
@@ -114,7 +114,7 @@ describe("fetchGitattributes — 404 response", () => {
     await fetchGitattributes({ octokit, owner: "acme", repo: "widget", ref: "sha1" });
     await fetchGitattributes({ octokit, owner: "acme", repo: "widget", ref: "sha1" });
 
-    expect(callCount).toBe(1);
+    expect(callCount).toBe(2);
   });
 });
 

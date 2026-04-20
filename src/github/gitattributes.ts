@@ -61,8 +61,9 @@ export function _clearGitattributesCache(): void {
  * occurs — the caller should treat `null` as "no gitattributes available"
  * and proceed without it.
  *
- * Results are cached by `owner/repo@ref` for 10 minutes to avoid redundant
- * API calls across concurrent pipeline invocations for the same PR head.
+ * Successful (200) results are cached by `owner/repo@ref` for 10 minutes to
+ * avoid redundant API calls across concurrent pipeline invocations for the
+ * same PR head. 404 and transient-error results are not cached.
  */
 export async function fetchGitattributes({
   octokit,
@@ -75,49 +76,48 @@ export async function fetchGitattributes({
   const cached = cacheGet(key);
   if (cached !== undefined) return cached;
 
-  let result: string | null;
+  let content: string;
   try {
     const res = await octokit.repos.getContent({ owner, repo, path: ".gitattributes", ref });
 
     // getContent can return a single file object or an array (directory listing).
     // An array means the path resolved to a directory — return null defensively.
     if (Array.isArray(res.data)) {
-      result = null;
+      return null;
     } else if (res.data.type !== "file") {
       // Symlinks and submodules have different shapes; treat them as absent.
-      result = null;
+      return null;
     } else {
       // The content field is base64-encoded in the file response.
-      result = Buffer.from((res.data as { content: string }).content, "base64").toString("utf8");
+      content = Buffer.from((res.data as { content: string }).content, "base64").toString("utf8");
     }
   } catch (err) {
     const status = (err as { status?: number } | undefined)?.status;
     if (status === 404) {
-      // File absent — normal for repos without .gitattributes.
-      result = null;
-    } else {
-      // Unexpected error — warn so operators can investigate, but don't block
-      // the review pipeline. Emit a structured JSON line matching the project
-      // log format; we avoid importing ../server/logger to keep the dependency
-      // direction clean (server depends on github, not the reverse).
-      console.error(
-        JSON.stringify({
-          ts: new Date().toISOString(),
-          level: "warn",
-          msg: "gitattributes fetch failed",
-          evt: "gitattributes.fetch_failed",
-          owner,
-          repo,
-          ref,
-          error: err instanceof Error ? err.message : String(err),
-        }),
-      );
-      // Do NOT cache failures: a transient 500 should be retried on the next
-      // pipeline run (only 404 "file absent" results are cached).
+      // File absent — normal for repos without .gitattributes. Not cached:
+      // the file may be added on a future push and 404 fetches are cheap.
       return null;
     }
+    // Unexpected error — warn so operators can investigate, but don't block
+    // the review pipeline. Emit a structured JSON line matching the project
+    // log format; we avoid importing ../server/logger to keep the dependency
+    // direction clean (server depends on github, not the reverse).
+    console.error(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        level: "warn",
+        msg: "gitattributes fetch failed",
+        evt: "gitattributes.fetch_failed",
+        owner,
+        repo,
+        ref,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
+    // Do not cache transient failures — the next pipeline run should retry.
+    return null;
   }
 
-  cacheSet(key, result);
-  return result;
+  cacheSet(key, content);
+  return content;
 }
