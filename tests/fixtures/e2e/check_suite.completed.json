@@ -1,0 +1,31 @@
+{
+  "action": "completed",
+  "check_suite": {
+    "id": 8888,
+    "head_branch": "feature/widget-factory",
+    "head_sha": "aabbccddee0011223344556677889900aabbccdd",
+    "status": "completed",
+    "conclusion": "success",
+    "pull_requests": [
+      {
+        "number": 7,
+        "head": {
+          "ref": "feature/widget-factory",
+          "sha": "aabbccddee0011223344556677889900aabbccdd"
+        },
+        "base": {
+          "ref": "main",
+          "sha": "1111111111111111111111111111111111111111"
+        }
+      }
+    ]
+  },
+  "repository": {
+    "id": 42,
+    "full_name": "acme/widget",
+    "owner": { "login": "acme", "id": 10 },
+    "name": "widget",
+    "private": false
+  },
+  "sender": { "login": "github-actions[bot]", "id": 2 }
+}
