@@ -256,6 +256,13 @@ registry.registerCounter(
   "Total thread replies suppressed by the per-thread rate limit.",
 );
 
+/** PRs skipped because they were in draft state. */
+export const draftSkippedTotal = "reviewme_draft_skipped_total";
+registry.registerCounter(
+  draftSkippedTotal,
+  "Total PR events skipped because the pull request was in draft state.",
+);
+
 // --- Histograms ---
 
 /** Seconds spent draining in-flight tasks on SIGTERM before process.exit(). */
@@ -284,6 +291,13 @@ export const breakerState = "reviewme_breaker_state";
 registry.registerCounter(
   breakerState,
   "Current circuit breaker state by dependency (0=closed, 1=open, 2=half-open).",
+);
+
+/** Webhook deliveries that verified successfully, labelled by secret slot (primary/secondary). */
+export const webhookSecretUsedTotal = "reviewme_webhook_secret_used_total";
+registry.registerCounter(
+  webhookSecretUsedTotal,
+  "Total webhook deliveries verified successfully, by secret slot (primary/secondary).",
 );
 
 // --- Replay-protection counters ---
@@ -328,6 +342,10 @@ export function observeReviewDuration(seconds: number): void {
 
 export function observeCiWaitSeconds(seconds: number): void {
   registry.observeHistogram(ciWaitSeconds, seconds);
+}
+
+export function incWebhookSecretUsed(slot: "primary" | "secondary"): void {
+  registry.incrementCounter(webhookSecretUsedTotal, { slot });
 }
 
 export function incWebhookReplay(): void {
@@ -380,6 +398,10 @@ export function setBreakerState(dep: string, value: number): void {
     entry.series.set(key, state);
   }
   state.value = value;
+}
+
+export function incDraftSkipped(): void {
+  registry.incrementCounter(draftSkippedTotal);
 }
 
 // ---------------------------------------------------------------------------

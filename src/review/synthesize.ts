@@ -8,6 +8,7 @@ import { buildUserMessage, SYSTEM_PROMPT } from "./prompt";
 import { withRetry } from "../util/retry";
 import { withBreaker } from "./breaker";
 import { recordUsage } from "./usage";
+import { writeAuditRecord } from "./audit";
 import {
   DEFAULT_MODEL,
   DEFAULT_MAX_TOKENS,
@@ -321,6 +322,28 @@ export async function runChunkedReview(
     pass: 1,
   });
 
+  // Persist audit record for pass 1.
+  await writeAuditRecord({
+    repo: `${input.diff.owner}/${input.diff.repo}`,
+    pr: input.diff.number,
+    headSha: input.diff.headSha,
+    mode: "chunked-pass-1",
+    promptSystem: BATCH_SYSTEM_PROMPT,
+    // Summarise all batch user messages as a JSON array for auditing.
+    promptUser: JSON.stringify(
+      plan.batches.map((batch) => buildBatchUserMessage(batch, intentSection)),
+    ),
+    responseRaw: batchSummaries,
+    usage: {
+      inputTokens: pass1InputTokens,
+      outputTokens: pass1OutputTokens,
+      cacheCreationInputTokens: pass1CacheCreation,
+      cacheReadInputTokens: pass1CacheRead,
+    },
+    verdict: "chunked_pass_1",
+    warnings: [],
+  });
+
   log.info("[chunked-review] pass-1 complete", {
     pr: `${input.diff.owner}/${input.diff.repo}#${input.diff.number}`,
     inputTokens: pass1InputTokens,
@@ -377,6 +400,27 @@ export async function runChunkedReview(
     cacheReadTokens:
       synthesisResponse.usage.cache_read_input_tokens ?? undefined,
     pass: 2,
+  });
+
+  // Persist audit record for pass 2.
+  await writeAuditRecord({
+    repo: `${input.diff.owner}/${input.diff.repo}`,
+    pr: input.diff.number,
+    headSha: input.diff.headSha,
+    mode: "chunked-pass-2",
+    promptSystem: SYSTEM_PROMPT,
+    promptUser: synthesisMessage,
+    responseRaw: rawResult,
+    usage: {
+      inputTokens: synthesisResponse.usage.input_tokens,
+      outputTokens: synthesisResponse.usage.output_tokens,
+      cacheCreationInputTokens:
+        synthesisResponse.usage.cache_creation_input_tokens ?? undefined,
+      cacheReadInputTokens:
+        synthesisResponse.usage.cache_read_input_tokens ?? undefined,
+    },
+    verdict: rawResult.verdict,
+    warnings: [],
   });
 
   log.info("[chunked-review] pass-2 complete", {

@@ -7,6 +7,8 @@ const EnvSchema = z.object({
   HOSTNAME: z.string().default("127.0.0.1"),
   GITHUB_PAT: z.string().min(1),
   GITHUB_WEBHOOK_SECRET: z.string().min(1),
+  /** Optional secondary webhook secret for zero-downtime rotation. */
+  GITHUB_WEBHOOK_SECRET_SECONDARY: z.string().min(1).optional(),
   ANTHROPIC_API_KEY: z.string().min(1),
   JIRA_BASE_URL: z.string().url().optional(),
   JIRA_EMAIL: z.string().email().optional(),
@@ -20,6 +22,8 @@ export type Config = {
   hostname: string;
   githubPat: string;
   githubWebhookSecret: string;
+  /** Optional secondary secret for zero-downtime rotation. When set, both secrets are accepted. */
+  githubWebhookSecretSecondary?: string;
   anthropicApiKey: string;
   reposPath: string;
   machineUserLogin?: string;
@@ -47,6 +51,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     hostname: parsed.HOSTNAME,
     githubPat: parsed.GITHUB_PAT,
     githubWebhookSecret: parsed.GITHUB_WEBHOOK_SECRET,
+    githubWebhookSecretSecondary: parsed.GITHUB_WEBHOOK_SECRET_SECONDARY,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY,
     reposPath: parsed.REPOS_PATH,
     machineUserLogin: parsed.GITHUB_MACHINE_USER_LOGIN,
