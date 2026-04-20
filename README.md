@@ -398,6 +398,8 @@ scrape_configs:
 
 Any non-zero exit fails the workflow.
 
+Dependabot watches the repo for npm and GitHub Actions updates via `.github/dependabot.yml`: npm dependencies are grouped into a single weekly PR every Monday (patch + minor together; majors as separate PRs), and action versions are bumped monthly. To change the schedule or grouping, edit that file.
+
 ---
 
 ## Development

@@ -9,6 +9,7 @@ import { withBreaker } from "./breaker";
 import { runChunkedReview } from "./synthesize";
 import { fetchConventions } from "./conventions";
 import { computeCoverageDelta } from "./coverage-delta";
+import { applicableHeuristics } from "./heuristics/index";
 import { incCoverageSignal, incReviewCache } from "../server/metrics";
 import { writeAuditRecord } from "./audit";
 import { resultCache } from "./result-cache";
@@ -109,6 +110,7 @@ export async function runReview(
     (f) => !omittedPathSet.has(f.filename),
   );
   const coverageDelta = computeCoverageDelta(keptFiles);
+  const heuristics = applicableHeuristics(keptFiles);
 
   // Emit metric — one bump per review, not per file, to avoid cardinality issues.
   if (coverageDelta.addedSrcLines === 0) {
@@ -169,6 +171,7 @@ export async function runReview(
     conventions,
     filterResult,
     coverageDelta,
+    heuristics,
   });
 
   // withBreaker gates BEFORE withRetry so a tripped breaker short-circuits
