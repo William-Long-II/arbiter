@@ -235,6 +235,20 @@ registry.registerCounter(
   "Total Anthropic API tokens consumed, by kind (input/output/cache_read/cache_write).",
 );
 
+/** Thread replies posted (or errored), labelled by outcome (sent/error). */
+export const threadReplyTotal = "reviewme_thread_reply_total";
+registry.registerCounter(
+  threadReplyTotal,
+  "Total thread reply attempts, by outcome (sent/error).",
+);
+
+/** Threads rate-limited (exceeded per-thread reply cap). */
+export const threadRateLimitedTotal = "reviewme_thread_rate_limited_total";
+registry.registerCounter(
+  threadRateLimitedTotal,
+  "Total thread replies suppressed by the per-thread rate limit.",
+);
+
 // --- Histograms ---
 
 /** End-to-end review duration in seconds. */
@@ -281,6 +295,14 @@ export function observeCiWaitSeconds(seconds: number): void {
 
 export function incConfigReload(result: "success" | "failure"): void {
   registry.incrementCounter(configReloadTotal, { result });
+}
+
+export function incThreadReply(outcome: "sent" | "error"): void {
+  registry.incrementCounter(threadReplyTotal, { outcome });
+}
+
+export function incThreadRateLimited(): void {
+  registry.incrementCounter(threadRateLimitedTotal);
 }
 
 // ---------------------------------------------------------------------------
