@@ -12,7 +12,8 @@ import {
   type Octokit,
 } from "../github";
 import { resolveIntent, type JiraCredentials } from "../jira";
-import { runReview } from "../review";
+import { runReview, DEFAULT_MODEL } from "../review";
+import { recordUsage } from "../review/usage";
 import { log } from "./logger";
 import { decideFromCheckSuite, mentionsReviewCommand } from "./triggers";
 
@@ -370,6 +371,34 @@ async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
   const { result, warnings, usage } = await runReview(deps.anthropic, {
     intent,
     diff,
+  });
+
+  const isTooLarge = warnings.some((w) => w.includes("diff exceeded review threshold"));
+  const usageVerdict = isTooLarge ? "too_large" : result.verdict;
+
+  await recordUsage({
+    repo: repoFull,
+    pr: ref.pullNumber,
+    headSha: ref.headSha,
+    model: DEFAULT_MODEL,
+    verdict: usageVerdict,
+    inputTokens: usage?.inputTokens ?? 0,
+    outputTokens: usage?.outputTokens ?? 0,
+    cacheReadTokens: usage?.cacheReadInputTokens,
+    cacheCreationTokens: usage?.cacheCreationInputTokens,
+  });
+
+  log.info("review.usage", {
+    repo: repoFull,
+    pr: ref.pullNumber,
+    headSha: ref.headSha,
+    model: DEFAULT_MODEL,
+    verdict: usageVerdict,
+    inputTokens: usage?.inputTokens ?? 0,
+    outputTokens: usage?.outputTokens ?? 0,
+    cacheReadTokens: usage?.cacheReadInputTokens ?? 0,
+    cacheCreationTokens: usage?.cacheCreationInputTokens ?? 0,
+    evt: "review.usage",
   });
 
   log.info("review produced", {
