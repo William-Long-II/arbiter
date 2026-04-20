@@ -235,6 +235,13 @@ registry.registerCounter(
   "Total Anthropic API tokens consumed, by kind (input/output/cache_read/cache_write).",
 );
 
+/** Webhook requests rejected by the per-installation rate limiter. */
+export const ratelimitRejected = "reviewme_ratelimit_rejected_total";
+registry.registerCounter(
+  ratelimitRejected,
+  "Total webhook requests rejected by the per-installation rate limiter.",
+);
+
 /** Thread replies posted (or errored), labelled by outcome (sent/error). */
 export const threadReplyTotal = "reviewme_thread_reply_total";
 registry.registerCounter(
@@ -250,6 +257,13 @@ registry.registerCounter(
 );
 
 // --- Histograms ---
+
+/** Seconds spent draining in-flight tasks on SIGTERM before process.exit(). */
+export const shutdownDrainSeconds = "reviewme_shutdown_drain_seconds";
+registry.registerHistogram(
+  shutdownDrainSeconds,
+  "Seconds elapsed draining in-flight tasks during graceful shutdown.",
+);
 
 /** End-to-end review duration in seconds. */
 export const reviewDuration = "reviewme_review_duration_seconds";
@@ -319,6 +333,14 @@ export function incWebhookUnknownEvent(event: string): void {
 
 export function incConfigReload(result: "success" | "failure"): void {
   registry.incrementCounter(configReloadTotal, { result });
+}
+
+export function incRatelimitRejected(installation: string): void {
+  registry.incrementCounter(ratelimitRejected, { installation });
+}
+
+export function observeShutdownDrain(seconds: number): void {
+  registry.observeHistogram(shutdownDrainSeconds, seconds);
 }
 
 export function incThreadReply(outcome: "sent" | "error"): void {
