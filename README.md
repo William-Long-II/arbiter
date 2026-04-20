@@ -6,12 +6,14 @@ An intent-aware GitHub pull-request review bot. Listens for webhooks, waits unti
 
 1. GitHub sends `pull_request.*`, `check_suite.completed`, `issue_comment.created`, and `pull_request_review_comment.created` webhooks to `/webhook`.
 2. For allowlisted repos, the bot waits until the check suite's aggregate status is green.
-3. It fetches the PR diff (rename-aware; lockfiles, binaries, and `linguist-generated` files stripped), resolves the intent from a pluggable provider chain (Jira → GitHub Issues → Linear, falling back to PR description), ingests the target repo's own conventions (`CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `.cursorrules`), computes a deterministic test-coverage delta (added source lines vs. added test lines, plus flagged untested symbols), and runs a Claude Opus 4.7 review.
+3. It fetches the PR diff (rename-aware; lockfiles, binaries, and `linguist-generated` files stripped), resolves the intent from a pluggable provider chain (Jira → GitHub Issues → Linear, falling back to PR description), ingests the target repo's own conventions (`CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `.cursorrules`), computes a deterministic test-coverage delta (added source lines vs. added test lines, plus flagged untested symbols), attaches per-language heuristic hints (TypeScript, Python, Go, Java), and runs a Claude Opus 4.7 review. Results are cached per `(repo, head SHA)` for 10 minutes so redundant webhook re-triggers don't burn tokens.
 4. For large PRs the reviewer runs a two-pass summarize-then-synthesize pipeline so the bot still produces actionable feedback where it would previously have failed open.
 5. The review is posted as a GitHub review — `APPROVE` for clean PRs, `COMMENT` with inline feedback when there's something to call out. It never uses `REQUEST_CHANGES`.
 6. If a human replies to a bot line-comment, the bot replies once in-thread (capped at three replies per thread; `/stop` in a reply ends the thread permanently).
 7. Per-repo config (with org-level defaults) decides whether re-reviews trigger automatically on every push (`auto-on-sync`) or only when a reviewer applies a label or mentions `/review-me` in a comment (`label-or-mention`).
 8. Draft PRs are skipped entirely — the bot does not review them until the author marks the PR as ready for review, at which point the normal CI-gate flow runs.
+9. Operators and reviewers control the bot via slash commands in any PR comment: `/review-me` re-triggers a review, `/review-me skip` pauses it for that PR (7-day TTL), `/review-me resume` re-enables it, `/review-me help` lists the commands.
+10. Each repo can set a weekly token budget (`review.max_weekly_tokens` in `repos.yaml`). When the budget is hit the bot returns a short summary-only comment instead of calling the LLM, and automatically resumes full reviews the following ISO week.
 
 ---
 
@@ -178,15 +180,16 @@ orgs:
     rereview: auto-on-sync | label-or-mention
     rereview_label: string    # only meaningful for label-or-mention
     review:
-      include_paths: [glob, ...]    # only review files matching; others omitted
-      exclude_paths: [glob, ...]    # omit files matching these globs
+      include_paths: [glob, ...]     # only review files matching; others omitted
+      exclude_paths: [glob, ...]     # omit files matching these globs
+      max_weekly_tokens: integer     # optional; summary-only once exhausted, resets on ISO week roll
 
 repos:
   <owner/name>:
     enabled: boolean          # default true
     rereview: auto-on-sync | label-or-mention
     rereview_label: string
-    review: { include_paths, exclude_paths }
+    review: { include_paths, exclude_paths, max_weekly_tokens }
 ```
 
 Repo entries override org defaults field-by-field. A repo is allowed if it has an explicit enabled entry OR its owner has an enabled `orgs:` entry.
@@ -324,6 +327,21 @@ Delivery IDs are cached for 10 minutes after a successful signature verify. A se
 
 Calls to Anthropic are gated by a three-state circuit breaker. When the failure ratio exceeds 50% over a rolling 60-second window with at least 20 samples, the breaker **opens** for 60 seconds and new review requests short-circuit with a `CircuitOpenError` rather than queuing more retries. After the open window elapses, a single probe request is admitted (**half-open**); success closes the breaker, failure reopens it for another 60 seconds. Current state is observable via `reviewme_breaker_state{dep}` (see [Metrics](#metrics)).
 
+### Slash commands
+
+Any user can drive the bot from a PR comment. Commands must appear at the start of a line (case-insensitive):
+
+- `/review-me` — re-trigger a review (the original command, still the default).
+- `/review-me help` — post a short command reference as a comment.
+- `/review-me skip` — suppress the bot on this PR for 7 days (per-PR, in-memory, TTL-bounded).
+- `/review-me resume` — clear an active skip.
+
+The bot only reacts to slash commands it did not author; `reviewme_slash_command_total{command}` tracks usage.
+
+### Weekly token budget
+
+Repos can set `review.max_weekly_tokens` in `repos.yaml` (per-repo or inherited from the `orgs:` layer). When the rolling ISO-week token total (summed from the usage JSONL) reaches the cap, further reviews on that repo return a short summary-only comment — no LLM call — until Monday 00:00 UTC rolls the window. The metric `reviewme_budget_exhausted_total{repo}` fires every time the cap blocks a review.
+
 ### Secret rotation
 
 **Zero-downtime procedure** (no dropped deliveries):
@@ -366,6 +384,9 @@ JSON to stdout — route via journald, Fluent Bit, Vector, etc. Every log payloa
 | `reviewme_draft_skipped_total` | counter | — |
 | `reviewme_breaker_state` | gauge (via counter) | `dep` — `0` closed / `1` open / `2` half-open |
 | `reviewme_coverage_signal_total` | counter | `bucket` — `no_new_src` / `has_tests` / `untested` |
+| `reviewme_review_cache_total` | counter | `result` — `hit` / `miss` |
+| `reviewme_slash_command_total` | counter | `command` — `help` / `skip` / `resume` / `re-review` / `unknown` |
+| `reviewme_budget_exhausted_total` | counter | `repo` |
 
 Example Prometheus scrape config:
 
