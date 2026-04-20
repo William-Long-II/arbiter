@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
+import type Anthropic from "@anthropic-ai/sdk";
 import { buildAllowlist } from "../src/config/repos";
 import type { Octokit } from "../src/github";
 import { createWebhooks } from "../src/server/webhooks";
@@ -16,6 +17,8 @@ async function startTestServer(): Promise<ServerHandle> {
   const webhooks = createWebhooks(SECRET, {
     allowlist: buildAllowlist({}),
     octokit: {} as Octokit,
+    anthropic: {} as Anthropic,
+    selfLogin: "reviewme-bot",
   });
   const server = Bun.serve({
     port: 0,

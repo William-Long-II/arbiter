@@ -1,14 +1,23 @@
 import { loadAllowlist, loadConfig } from "../config";
-import { createOctokit } from "../github";
+import { createOctokit, fetchAuthenticatedLogin } from "../github";
+import { createAnthropic } from "../review";
 import { log } from "./logger";
 import { createWebhooks } from "./webhooks";
 
 const config = loadConfig();
 const allowlist = loadAllowlist(config.reposPath);
 const octokit = createOctokit(config.githubPat);
+const anthropic = createAnthropic(config.anthropicApiKey);
+
+const selfLogin = await fetchAuthenticatedLogin(octokit);
+log.info("machine user identity resolved", { login: selfLogin });
+
 const webhooks = createWebhooks(config.githubWebhookSecret, {
   allowlist,
   octokit,
+  anthropic,
+  selfLogin,
+  jiraCreds: config.jira,
 });
 
 const server = Bun.serve({
@@ -34,6 +43,7 @@ log.info("server started", {
   hostname: server.hostname,
   port: server.port,
   allowlistedRepos: Object.keys(allowlist.all()).length,
+  jiraConfigured: Boolean(config.jira),
 });
 
 async function handleWebhook(
