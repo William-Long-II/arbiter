@@ -58,4 +58,10 @@ export function loadAllowlist(path: string): RepoAllowlist {
   return loadReposFile(path);
 }
 
-export type { RepoAllowlist, RepoEntry } from "./repos";
+export type {
+  RepoAllowlist,
+  RepoEntry,
+  OrgDefaults,
+  ResolvedRepoConfig,
+  RepoReviewConfig,
+} from "./repos";

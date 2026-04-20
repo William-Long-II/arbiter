@@ -29,18 +29,29 @@ cp .env.example .env
 
 ### Configure allowlisted repos
 
-Edit `repos.yaml`:
+Edit `repos.yaml`. You can allow individual repos, or use org-level defaults to avoid repeating settings across repos in the same GitHub org:
 
 ```yaml
+# Org-level defaults — applied to every repo under that org unless overridden.
+orgs:
+  acme:
+    enabled: true
+    rereview: auto-on-sync
+    review:
+      exclude_paths: ["docs/**"]
+
+# Per-repo entries override any org default for that field.
 repos:
+  acme/legacy-service:
+    # Inherits acme org defaults; only rereview is overridden here.
+    rereview: label-or-mention
+    rereview_label: re-review
   acme/widget:
     enabled: true
     rereview: auto-on-sync
-  acme/legacy-service:
-    enabled: true
-    rereview: label-or-mention
-    rereview_label: re-review
 ```
+
+All fields in both `orgs.<name>` and `repos.<owner/name>` are optional. Resolution order for each field: explicit repo entry → org default → built-in default (`enabled: true`, `rereview: auto-on-sync`, `rereview_label: re-review`). Absence of the `orgs:` block is fully backward-compatible.
 
 Restart the bot after editing (the file is loaded at boot).
 
@@ -151,7 +162,7 @@ Configure GitHub's webhook URL as `https://your-host/review-me/webhook` and set:
       metrics_path: /metrics
   ```
 - **Secret rotation**: update `GITHUB_PAT` / `ANTHROPIC_API_KEY` / `GITHUB_WEBHOOK_SECRET` in the env file and restart. Rotate the webhook secret in GitHub simultaneously (signature mismatches during the swap will 401 briefly).
-- **Allowlist changes**: edit `repos.yaml` then send `SIGHUP` to the process — no restart required. The bot re-reads and validates the file atomically; if the file is unreadable or contains invalid YAML the old allowlist is kept in memory and the error is logged. Events already in flight when the signal arrives continue with the snapshot they started with; only new events pick up the refreshed allowlist.
+- **Allowlist changes**: edit `repos.yaml` then send `SIGHUP` to the process — no restart required. The bot re-reads and validates the file atomically; if the file is unreadable or contains invalid YAML the old allowlist is kept in memory and the error is logged. Events already in flight when the signal arrives continue with the snapshot they started with; only new events pick up the refreshed allowlist. Both `repos:` entries and `orgs:` org-level defaults are refreshed.
   - systemd: `sudo systemctl kill --kill-who=main --signal=SIGHUP review-me`
   - Docker: `docker kill --signal=SIGHUP <container>`
   - bare process: `kill -HUP <pid>`
