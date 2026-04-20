@@ -178,6 +178,8 @@ The workflow does not build a Docker image or publish artifacts; those steps are
 | `ANTHROPIC_API_KEY` | yes | — | For the Claude review pass |
 | `REPOS_PATH` | no | `./repos.yaml` | Path to the allowlist file |
 | `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` | no | — | Enable Jira intent lookup when all three are set |
+| `LINEAR_API_KEY` | no | — | Enable Linear intent lookup; silently skipped when unset |
+| `INTENT_PROVIDERS` | no | `jira,github-issue,linear` | Comma-separated list of intent providers in priority order. First matching provider wins. Providers whose credentials are absent are automatically skipped. Set to an empty string to disable all providers (PR-body fallback only). |
 | `METRICS_BIND_TOKEN` | no | — | If set, `GET /metrics` requires `Authorization: Bearer <token>` |
 
 ## Development notes
