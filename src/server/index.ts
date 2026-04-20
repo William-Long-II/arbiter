@@ -2,6 +2,7 @@ import { loadAllowlist, loadConfig } from "../config";
 import { createOctokit, fetchAuthenticatedLogin } from "../github";
 import { createAnthropic } from "../review";
 import { log } from "./logger";
+import { buildMetricsHandler, incWebhookReceived } from "./metrics";
 import { createWebhooks } from "./webhooks";
 
 const config = loadConfig();
@@ -30,6 +31,7 @@ const server = Bun.serve({
   routes: {
     "/health": new Response("ok"),
     "/ready": new Response("ok"),
+    "/metrics": { GET: buildMetricsHandler() },
     "/webhook": {
       POST: (req) => handleWebhook(req, webhooks),
     },
@@ -68,6 +70,7 @@ async function handleWebhook(
   }
 
   const payload = await req.text();
+  incWebhookReceived(name);
 
   try {
     await webhooks.verifyAndReceive({
