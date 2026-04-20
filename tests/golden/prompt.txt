@@ -11,6 +11,13 @@ Changed files: 2 (+15 / -2)
 ### PR description
 This PR adds a factory function for creating widgets.
 
+## Test coverage signal
+added_source_lines: 15
+added_test_lines: 0
+untested_new_symbols:
+- src/factory.ts :: createWidget
+note: symbol list is regex-derived and may miss dynamic exports or destructured assignments.
+
 ## Diff
 
 ### src/factory.ts (added, +12 / -0)

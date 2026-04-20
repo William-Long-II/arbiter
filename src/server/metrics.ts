@@ -286,6 +286,22 @@ registry.registerHistogram(
   "Seconds elapsed waiting for CI gate to pass.",
 );
 
+// --- Coverage signal counter ---
+
+/**
+ * Test-coverage signal bucket per review.
+ *
+ * bucket values:
+ *   no_new_src — diff had no net-new source lines (no signal to inject)
+ *   has_tests  — source lines were added and at least some test lines too
+ *   untested   — source lines were added but zero test lines
+ */
+export const coverageSignalTotal = "reviewme_coverage_signal_total";
+registry.registerCounter(
+  coverageSignalTotal,
+  "Total PR reviews by test-coverage signal bucket (no_new_src/has_tests/untested).",
+);
+
 /** Circuit breaker state gauge (0=closed, 1=open, 2=half-open), labelled by dep. */
 export const breakerState = "reviewme_breaker_state";
 registry.registerCounter(
@@ -342,6 +358,12 @@ export function observeReviewDuration(seconds: number): void {
 
 export function observeCiWaitSeconds(seconds: number): void {
   registry.observeHistogram(ciWaitSeconds, seconds);
+}
+
+export function incCoverageSignal(
+  bucket: "no_new_src" | "has_tests" | "untested",
+): void {
+  registry.incrementCounter(coverageSignalTotal, { bucket });
 }
 
 export function incWebhookSecretUsed(slot: "primary" | "secondary"): void {
