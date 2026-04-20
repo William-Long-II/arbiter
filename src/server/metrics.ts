@@ -286,6 +286,13 @@ registry.registerHistogram(
   "Seconds elapsed waiting for CI gate to pass.",
 );
 
+/** Slash commands processed, labelled by command name. */
+export const slashCommandTotal = "reviewme_slash_command_total";
+registry.registerCounter(
+  slashCommandTotal,
+  "Total slash commands processed, by command name (help/skip/resume/re-review/unknown).",
+);
+
 // --- Coverage signal counter ---
 
 /**
@@ -424,6 +431,12 @@ export function setBreakerState(dep: string, value: number): void {
 
 export function incDraftSkipped(): void {
   registry.incrementCounter(draftSkippedTotal);
+}
+
+export function incSlashCommand(
+  command: "help" | "skip" | "resume" | "re-review" | "unknown",
+): void {
+  registry.incrementCounter(slashCommandTotal, { command });
 }
 
 // ---------------------------------------------------------------------------
