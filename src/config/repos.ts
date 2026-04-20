@@ -9,6 +9,11 @@ import { z } from "zod";
 const RepoReviewConfigSchema = z.object({
   include_paths: z.array(z.string()).optional(),
   exclude_paths: z.array(z.string()).optional(),
+  /** Weekly token cap (inputTokens + outputTokens) for this repo. When the
+   *  running total for the current ISO week (Mon 00:00 UTC → Sun 23:59:59 UTC)
+   *  reaches this value, reviews fall back to a summary-only response with no
+   *  Anthropic call until the week rolls over. */
+  max_weekly_tokens: z.number().int().positive().optional(),
 });
 
 export type RepoReviewConfig = z.infer<typeof RepoReviewConfigSchema>;

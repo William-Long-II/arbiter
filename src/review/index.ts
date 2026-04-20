@@ -9,8 +9,11 @@ import { withBreaker } from "./breaker";
 import { runChunkedReview } from "./synthesize";
 import { fetchConventions } from "./conventions";
 import { computeCoverageDelta } from "./coverage-delta";
-import { incCoverageSignal } from "../server/metrics";
+import { incCoverageSignal, incBudgetExhausted } from "../server/metrics";
 import { writeAuditRecord } from "./audit";
+import { getWeeklyTokenSum } from "./budget";
+import { recordUsage } from "./usage";
+import { log } from "../server/logger";
 import {
   DEFAULT_MODEL,
   DEFAULT_MAX_TOKENS,
@@ -54,6 +57,51 @@ export async function runReview(
   const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
   const maxDiffChars = options.maxDiffChars ?? DEFAULT_MAX_DIFF_CHARS;
   const mode = getReviewMode();
+
+  // -------------------------------------------------------------------------
+  // Weekly token budget check (per-repo, no LLM call when exhausted).
+  // Must run before any Anthropic I/O so we never burn quota past the cap.
+  // -------------------------------------------------------------------------
+  const maxWeeklyTokens = input.reviewConfig?.max_weekly_tokens;
+  if (maxWeeklyTokens !== undefined) {
+    const repoFull = `${input.diff.owner}/${input.diff.repo}`;
+    const weeklyUsed = await getWeeklyTokenSum(repoFull);
+    if (weeklyUsed >= maxWeeklyTokens) {
+      log.info("review.budget_exhausted", {
+        evt: "review.budget_exhausted",
+        repo: repoFull,
+        weekly_used: weeklyUsed,
+        weekly_cap: maxWeeklyTokens,
+      });
+
+      incBudgetExhausted(repoFull);
+
+      // Record usage so operators can grep for budget_exhausted events.
+      // Tokens are 0 — no LLM was invoked.
+      await recordUsage({
+        repo: repoFull,
+        pr: input.diff.number,
+        headSha: input.diff.headSha,
+        model,
+        verdict: "budget_exhausted",
+        inputTokens: 0,
+        outputTokens: 0,
+      });
+
+      return {
+        result: {
+          verdict: "comment",
+          summary:
+            `This repository has reached its weekly automated-review token budget ` +
+            `(${weeklyUsed.toLocaleString()} / ${maxWeeklyTokens.toLocaleString()} tokens used this week). ` +
+            `Full LLM reviews will resume when the ISO week rolls over on Monday 00:00 UTC. ` +
+            `Human reviewers are encouraged in the meantime.`,
+          lineComments: [],
+        },
+        warnings: ["weekly token budget exhausted"],
+      };
+    }
+  }
 
   // Fetch conventions and .gitattributes in parallel — both are GitHub reads
   // with no ordering dependency. Errors inside each helper are already

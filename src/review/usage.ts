@@ -1,12 +1,25 @@
 import { mkdir, appendFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 
+/**
+ * Known verdict values stored in usage records.
+ * Using a union here gives call-sites and tests a single authoritative list.
+ * The `verdict` field on UsageRecord is kept as `string` so that unexpected
+ * values from old files do not fail at parse time.
+ */
+export type UsageVerdict =
+  | "approve"
+  | "comment"
+  | "too_large"
+  | "budget_exhausted";
+
 export type UsageRecord = {
   ts: string;
   repo: string;
   pr: number;
   headSha: string;
   model: string;
+  /** See UsageVerdict for known values. */
   verdict: string;
   inputTokens: number;
   outputTokens: number;
