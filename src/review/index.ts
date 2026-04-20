@@ -107,3 +107,26 @@ export async function runReview(
 export { buildUserMessage, SYSTEM_PROMPT } from "./prompt";
 export { ReviewResultSchema, type ReviewResult, type LineComment } from "./schema";
 export { createAnthropic } from "./client";
+export {
+  ReviewErrorCode,
+  isReviewError,
+  logReviewError,
+  makeDiffFetchError,
+  makeDiffTooLargeError,
+  makeJiraNotFoundError,
+  makeAnthropicRateLimitedError,
+  makeAnthropicInvalidOutputError,
+  makePostReviewForbiddenError,
+  wrapDiffFetchError,
+  wrapIntentResolveError,
+  wrapLlmReviewError,
+  wrapPostReviewError,
+  type ReviewError,
+  type PipelineStage,
+  type ReviewErrorBase,
+  type DiffFetchError,
+  type IntentResolveError,
+  type LlmReviewError,
+  type PostReviewError,
+  type ReviewErrorContext,
+} from "./errors";

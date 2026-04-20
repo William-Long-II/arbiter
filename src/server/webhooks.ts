@@ -13,6 +13,14 @@ import {
 } from "../github";
 import { resolveIntent, type JiraCredentials } from "../jira";
 import { runReview } from "../review";
+import {
+  isReviewError,
+  logReviewError,
+  wrapDiffFetchError,
+  wrapIntentResolveError,
+  wrapLlmReviewError,
+  wrapPostReviewError,
+} from "../review/errors";
 import { log } from "./logger";
 import { decideFromCheckSuite, mentionsReviewCommand } from "./triggers";
 
@@ -181,13 +189,19 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
           );
         }
       } catch (err) {
-        log.error("review pipeline failed", {
-          deliveryId: id,
-          repo: repoFull,
-          pr: ref.pullNumber,
-          headSha,
-          error: err instanceof Error ? err.message : String(err),
-        });
+        // ReviewErrors are already logged inside runPipeline with the structured
+        // `review.error` event. Only log the outer context for non-ReviewErrors
+        // (e.g. mode-gate checks, label removal) or for unexpected errors that
+        // slipped through without wrapping.
+        if (!isReviewError(err)) {
+          log.error("review pipeline failed", {
+            deliveryId: id,
+            repo: repoFull,
+            pr: ref.pullNumber,
+            headSha,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     }
   });
@@ -320,10 +334,12 @@ async function triggerExplicit(
 
     await runPipeline(ref, deps);
   } catch (err) {
-    log.error("explicit trigger failed", {
-      ...logFields,
-      error: err instanceof Error ? err.message : String(err),
-    });
+    if (!isReviewError(err)) {
+      log.error("explicit trigger failed", {
+        ...logFields,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 }
 
@@ -336,6 +352,7 @@ async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
     headSha: ref.headSha,
     source: deps.source,
   };
+  const errorCtx = { repo: repoFull, pr: ref.pullNumber };
 
   if (
     await hasExistingReview(
@@ -353,24 +370,52 @@ async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
 
   log.info("starting review", logFields);
 
-  const diff = await fetchPullRequestDiff(
-    deps.octokit,
-    ref.owner,
-    ref.repo,
-    ref.pullNumber,
-  );
+  // Stage: diff-fetch
+  let diff: Awaited<ReturnType<typeof fetchPullRequestDiff>>;
+  try {
+    diff = await fetchPullRequestDiff(
+      deps.octokit,
+      ref.owner,
+      ref.repo,
+      ref.pullNumber,
+    );
+  } catch (err) {
+    const reviewErr = wrapDiffFetchError(err);
+    logReviewError(reviewErr, errorCtx, { deliveryId: deps.deliveryId });
+    throw reviewErr;
+  }
 
-  const intent = await resolveIntent({
-    prTitle: diff.title,
-    prBody: diff.body,
-    branch: "",
-    creds: deps.jiraCreds,
-  });
+  // Stage: intent-resolve
+  let intent: Awaited<ReturnType<typeof resolveIntent>>;
+  try {
+    intent = await resolveIntent({
+      prTitle: diff.title,
+      prBody: diff.body,
+      branch: "",
+      creds: deps.jiraCreds,
+    });
+  } catch (err) {
+    // resolveIntent is fail-open by design; an error here is unexpected
+    // (e.g. a programming error). We wrap it with a placeholder ticket key.
+    const reviewErr = wrapIntentResolveError(err, "(unknown)");
+    logReviewError(reviewErr, errorCtx, { deliveryId: deps.deliveryId });
+    throw reviewErr;
+  }
 
-  const { result, warnings, usage } = await runReview(deps.anthropic, {
-    intent,
-    diff,
-  });
+  // Stage: llm-review
+  let result: Awaited<ReturnType<typeof runReview>>["result"];
+  let warnings: string[];
+  let usage: Awaited<ReturnType<typeof runReview>>["usage"];
+  try {
+    ({ result, warnings, usage } = await runReview(deps.anthropic, {
+      intent,
+      diff,
+    }));
+  } catch (err) {
+    const reviewErr = wrapLlmReviewError(err);
+    logReviewError(reviewErr, errorCtx, { deliveryId: deps.deliveryId });
+    throw reviewErr;
+  }
 
   log.info("review produced", {
     ...logFields,
@@ -382,14 +427,22 @@ async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
     usage,
   });
 
-  const outcome = await postReview(deps.octokit, {
-    owner: ref.owner,
-    repo: ref.repo,
-    pullNumber: ref.pullNumber,
-    headSha: ref.headSha,
-    selfLogin: deps.selfLogin,
-    review: result,
-  });
+  // Stage: post-review
+  let outcome: Awaited<ReturnType<typeof postReview>>;
+  try {
+    outcome = await postReview(deps.octokit, {
+      owner: ref.owner,
+      repo: ref.repo,
+      pullNumber: ref.pullNumber,
+      headSha: ref.headSha,
+      selfLogin: deps.selfLogin,
+      review: result,
+    });
+  } catch (err) {
+    const reviewErr = wrapPostReviewError(err);
+    logReviewError(reviewErr, errorCtx, { deliveryId: deps.deliveryId });
+    throw reviewErr;
+  }
 
   log.info("review posted", { ...logFields, outcome });
 }
