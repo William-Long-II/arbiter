@@ -9,8 +9,12 @@ const allowlist = loadAllowlist(config.reposPath);
 const octokit = createOctokit(config.githubPat);
 const anthropic = createAnthropic(config.anthropicApiKey);
 
-const selfLogin = await fetchAuthenticatedLogin(octokit);
-log.info("machine user identity resolved", { login: selfLogin });
+const selfLogin =
+  config.machineUserLogin ?? (await fetchAuthenticatedLogin(octokit));
+log.info("machine user identity resolved", {
+  login: selfLogin,
+  source: config.machineUserLogin ? "env" : "github",
+});
 
 const webhooks = createWebhooks(config.githubWebhookSecret, {
   allowlist,

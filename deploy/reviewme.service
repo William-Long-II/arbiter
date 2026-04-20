@@ -1,0 +1,29 @@
+[Unit]
+Description=reviewme PR review bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=reviewme
+Group=reviewme
+WorkingDirectory=/opt/reviewme
+EnvironmentFile=/etc/reviewme/reviewme.env
+ExecStart=/usr/local/bin/bun run /opt/reviewme/index.ts
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Harden the service — adjust if your deployment needs broader access.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

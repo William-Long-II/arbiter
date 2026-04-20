@@ -11,6 +11,7 @@ const EnvSchema = z.object({
   JIRA_EMAIL: z.string().email().optional(),
   JIRA_API_TOKEN: z.string().optional(),
   REPOS_PATH: z.string().default("./repos.yaml"),
+  GITHUB_MACHINE_USER_LOGIN: z.string().optional(),
 });
 
 export type Config = {
@@ -20,6 +21,7 @@ export type Config = {
   githubWebhookSecret: string;
   anthropicApiKey: string;
   reposPath: string;
+  machineUserLogin?: string;
   jira?: {
     baseUrl: string;
     email: string;
@@ -46,6 +48,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     githubWebhookSecret: parsed.GITHUB_WEBHOOK_SECRET,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY,
     reposPath: parsed.REPOS_PATH,
+    machineUserLogin: parsed.GITHUB_MACHINE_USER_LOGIN,
     jira,
   };
 }
