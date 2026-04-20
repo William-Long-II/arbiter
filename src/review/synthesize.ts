@@ -18,6 +18,7 @@ import {
 } from "./types";
 import { filterDiff } from "./diff-filter";
 import { log } from "../server/logger";
+import { resolveAnthropicClient } from "./client";
 
 // ─── Pass-1 schema ───────────────────────────────────────────────────────────
 
@@ -227,6 +228,10 @@ export async function runChunkedReview(
   const model = options.model ?? DEFAULT_MODEL;
   const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
 
+  // Resolve a per-repo Anthropic client once; reused for both pass-1 and pass-2
+  // so a single override key is used consistently throughout this review.
+  const effectiveClient = resolveAnthropicClient(input.reviewConfig, anthropic);
+
   // Apply the same diff filter as the single-pass path so we skip lockfiles etc.
   const filterResult = filterDiff(input.diff.files, {
     include: input.reviewConfig?.include_paths,
@@ -269,7 +274,7 @@ export async function runChunkedReview(
 
       const response = await withBreaker("anthropic", () =>
         withRetry(() =>
-          anthropic.messages.parse({
+          effectiveClient.messages.parse({
             model,
             max_tokens: maxTokens,
             system: [
@@ -360,7 +365,7 @@ export async function runChunkedReview(
 
   const synthesisResponse = await withBreaker("anthropic", () =>
     withRetry(() =>
-      anthropic.messages.parse({
+      effectiveClient.messages.parse({
         model,
         max_tokens: maxTokens,
         system: [
