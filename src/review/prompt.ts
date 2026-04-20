@@ -3,6 +3,7 @@ import type { Intent } from "../jira";
 import type { ConventionsResult } from "./conventions";
 import type { FilterDiffResult } from "./diff-filter";
 import { OMITTED_FILES_SENTINEL } from "./diff-filter";
+import type { CoverageDelta } from "./coverage-delta";
 
 export const SYSTEM_PROMPT = `You are review-me, an intent-aware pull-request reviewer.
 
@@ -31,6 +32,14 @@ export type ReviewPromptInput = {
   /** When provided, omitted files are surfaced in the prompt so the LLM knows
    *  not to comment on them. Pass the result from `filterDiff`. */
   filterResult?: FilterDiffResult;
+  /**
+   * When provided, a `## Test coverage signal` block is injected before the
+   * diff section so the LLM can reason about missing test coverage without
+   * having to infer it from raw patch text.
+   * Only inject when `addedSrcLines > 0`; callers should skip passing this
+   * when the diff contains no source additions.
+   */
+  coverageDelta?: CoverageDelta;
 };
 
 const PATCH_PLACEHOLDER =
@@ -50,6 +59,7 @@ export function buildUserMessage({
   diff,
   conventions,
   filterResult,
+  coverageDelta,
 }: ReviewPromptInput): string {
   const parts: string[] = [];
 
@@ -105,6 +115,27 @@ export function buildUserMessage({
   const omittedPaths = new Set(
     filterResult ? filterResult.omitted.map((o) => o.path) : [],
   );
+
+  // Inject the coverage signal block before the diff so the LLM sees the
+  // summary before reading individual hunks. Only included when source lines
+  // were added; when addedSrcLines === 0 the block adds no information.
+  if (coverageDelta && coverageDelta.addedSrcLines > 0) {
+    parts.push("");
+    parts.push("## Test coverage signal");
+    parts.push(`added_source_lines: ${coverageDelta.addedSrcLines}`);
+    parts.push(`added_test_lines: ${coverageDelta.addedTestLines}`);
+    if (coverageDelta.flaggedSymbols.length > 0) {
+      parts.push("untested_new_symbols:");
+      for (const { file, symbol } of coverageDelta.flaggedSymbols) {
+        parts.push(`- ${file} :: ${symbol}`);
+      }
+    } else {
+      parts.push("untested_new_symbols: none");
+    }
+    parts.push(
+      "note: symbol list is regex-derived and may miss dynamic exports or destructured assignments.",
+    );
+  }
 
   parts.push("");
   parts.push("## Diff");

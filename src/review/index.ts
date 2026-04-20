@@ -7,6 +7,8 @@ import { filterDiff } from "./diff-filter";
 import { withRetry } from "../util/retry";
 import { runChunkedReview } from "./synthesize";
 import { fetchConventions } from "./conventions";
+import { computeCoverageDelta } from "./coverage-delta";
+import { incCoverageSignal } from "../server/metrics";
 import {
   DEFAULT_MODEL,
   DEFAULT_MAX_TOKENS,
@@ -79,8 +81,24 @@ export async function runReview(
     gitattributes: gitattributes ?? undefined,
   });
 
-  // Measure diff size against the kept files only — use a Set for O(n) lookup.
+  // Compute coverage delta on kept files only — we don't want to flag symbols
+  // that are in omitted/filtered files since those won't appear in the prompt.
   const omittedPathSet = new Set(filterResult.omitted.map((o) => o.path));
+  const keptFiles = input.diff.files.filter(
+    (f) => !omittedPathSet.has(f.filename),
+  );
+  const coverageDelta = computeCoverageDelta(keptFiles);
+
+  // Emit metric — one bump per review, not per file, to avoid cardinality issues.
+  if (coverageDelta.addedSrcLines === 0) {
+    incCoverageSignal("no_new_src");
+  } else if (coverageDelta.addedTestLines > 0) {
+    incCoverageSignal("has_tests");
+  } else {
+    incCoverageSignal("untested");
+  }
+
+  // Measure diff size against the kept files only — use a Set for O(n) lookup.
   const diffSize = input.diff.files.reduce(
     (sum, f) =>
       omittedPathSet.has(f.filename) ? sum : sum + (f.patch?.length ?? 0),
@@ -113,7 +131,12 @@ export async function runReview(
     };
   }
 
-  const userMessage = buildUserMessage({ ...input, conventions, filterResult });
+  const userMessage = buildUserMessage({
+    ...input,
+    conventions,
+    filterResult,
+    coverageDelta,
+  });
 
   const response = await withRetry(() =>
     anthropic.messages.parse({

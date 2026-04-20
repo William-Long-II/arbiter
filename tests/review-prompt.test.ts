@@ -4,6 +4,7 @@ import type { Intent } from "../src/jira";
 import type { ConventionsResult } from "../src/review/conventions";
 import { buildUserMessage } from "../src/review/prompt";
 import { filterDiff, OMITTED_FILES_SENTINEL } from "../src/review/diff-filter";
+import type { CoverageDelta } from "../src/review/coverage-delta";
 
 function makeDiff(overrides: Partial<PullRequestDiff> = {}): PullRequestDiff {
   return {
@@ -128,6 +129,90 @@ describe("buildUserMessage", () => {
     });
     const out = buildUserMessage({ intent: makeIntent(), diff });
     expect(out).toContain("Renamed from: src/old.ts");
+  });
+});
+
+// ─── Prompt golden tests: Test coverage signal block ─────────────────────────
+
+describe("buildUserMessage — Test coverage signal golden", () => {
+  const srcDelta: CoverageDelta = {
+    addedSrcLines: 120,
+    addedTestLines: 0,
+    ratio: 0,
+    flaggedSymbols: [
+      { file: "src/widgets/factory.ts", symbol: "createWidget" },
+      { file: "src/widgets/factory.ts", symbol: "validateWidget" },
+    ],
+  };
+
+  test("coverage signal block present when addedSrcLines > 0", () => {
+    const out = buildUserMessage({
+      intent: makeIntent(),
+      diff: makeDiff(),
+      coverageDelta: srcDelta,
+    });
+    expect(out).toContain("## Test coverage signal");
+    expect(out).toContain("added_source_lines: 120");
+    expect(out).toContain("added_test_lines: 0");
+    expect(out).toContain(
+      "- src/widgets/factory.ts :: createWidget",
+    );
+    expect(out).toContain(
+      "- src/widgets/factory.ts :: validateWidget",
+    );
+  });
+
+  test("coverage signal block appears before ## Diff", () => {
+    const out = buildUserMessage({
+      intent: makeIntent(),
+      diff: makeDiff(),
+      coverageDelta: srcDelta,
+    });
+    const signalPos = out.indexOf("## Test coverage signal");
+    const diffPos = out.indexOf("## Diff");
+    expect(signalPos).toBeGreaterThanOrEqual(0);
+    expect(signalPos).toBeLessThan(diffPos);
+  });
+
+  test("coverage signal block absent when addedSrcLines === 0", () => {
+    const zeroDelta: CoverageDelta = {
+      addedSrcLines: 0,
+      addedTestLines: 0,
+      ratio: 0,
+      flaggedSymbols: [],
+    };
+    const out = buildUserMessage({
+      intent: makeIntent(),
+      diff: makeDiff(),
+      coverageDelta: zeroDelta,
+    });
+    expect(out).not.toContain("## Test coverage signal");
+  });
+
+  test("coverage signal block absent when coverageDelta not provided", () => {
+    const out = buildUserMessage({
+      intent: makeIntent(),
+      diff: makeDiff(),
+    });
+    expect(out).not.toContain("## Test coverage signal");
+  });
+
+  test("shows 'untested_new_symbols: none' when flaggedSymbols is empty but src lines > 0", () => {
+    const hasTestsDelta: CoverageDelta = {
+      addedSrcLines: 50,
+      addedTestLines: 30,
+      ratio: 0.6,
+      flaggedSymbols: [],
+    };
+    const out = buildUserMessage({
+      intent: makeIntent(),
+      diff: makeDiff(),
+      coverageDelta: hasTestsDelta,
+    });
+    expect(out).toContain("## Test coverage signal");
+    expect(out).toContain("added_source_lines: 50");
+    expect(out).toContain("added_test_lines: 30");
+    expect(out).toContain("untested_new_symbols: none");
   });
 });
 
