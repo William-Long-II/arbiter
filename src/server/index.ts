@@ -2,6 +2,7 @@ import { loadAllowlist, loadConfig } from "../config";
 import { createOctokit, fetchAuthenticatedLogin } from "../github";
 import { createAnthropic } from "../review";
 import { log } from "./logger";
+import { QueueFullError } from "./queue";
 import { createWebhooks } from "./webhooks";
 
 const config = loadConfig();
@@ -77,6 +78,10 @@ async function handleWebhook(
       payload,
     });
   } catch (err) {
+    if (err instanceof QueueFullError) {
+      log.warn("webhook rejected: review queue full", { deliveryId: id });
+      return new Response("review queue full", { status: 503 });
+    }
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes("signature does not match")) {
       log.warn("webhook signature rejected", { deliveryId: id });

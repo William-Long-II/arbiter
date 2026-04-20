@@ -1,4 +1,5 @@
 import { adfToText } from "./adf";
+import { withRetry } from "../util/retry";
 
 export type JiraCredentials = {
   baseUrl: string;
@@ -19,10 +20,10 @@ export class JiraFetchError extends Error {
   }
 }
 
-export async function fetchJiraIssue(
+async function fetchJiraIssueOnce(
   creds: JiraCredentials,
   key: string,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch,
 ): Promise<JiraIssue> {
   const auth = Buffer.from(`${creds.email}:${creds.apiToken}`).toString("base64");
   const url = `${creds.baseUrl.replace(/\/$/, "")}/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,description`;
@@ -51,4 +52,12 @@ export async function fetchJiraIssue(
     summary: json.fields.summary ?? "",
     description: adfToText(json.fields.description).trim(),
   };
+}
+
+export async function fetchJiraIssue(
+  creds: JiraCredentials,
+  key: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<JiraIssue> {
+  return withRetry(() => fetchJiraIssueOnce(creds, key, fetchImpl));
 }

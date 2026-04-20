@@ -1,4 +1,5 @@
 import type { Octokit } from "./client";
+import { withGitHubRetry } from "./client";
 import type { LineComment, ReviewResult } from "../review/schema";
 
 export type PostReviewInput = {
@@ -158,14 +159,16 @@ export async function postReview(
       `${review.summary}\n\n` +
       `_Note: inline comments were generated but could not be anchored to the diff (${msg}). ` +
       `They have been dropped from this review._`;
-    const res = await octokit.pulls.createReview({
-      owner,
-      repo,
-      pull_number: pullNumber,
-      commit_id: headSha,
-      event,
-      body: bodyWithNote,
-    });
+    const res = await withGitHubRetry(() =>
+      octokit.pulls.createReview({
+        owner,
+        repo,
+        pull_number: pullNumber,
+        commit_id: headSha,
+        event,
+        body: bodyWithNote,
+      }),
+    );
     return {
       status: "posted-summary-only",
       reviewId: res.data.id,
@@ -175,6 +178,6 @@ export async function postReview(
 }
 
 export async function fetchAuthenticatedLogin(octokit: Octokit): Promise<string> {
-  const res = await octokit.users.getAuthenticated();
+  const res = await withGitHubRetry(() => octokit.users.getAuthenticated());
   return res.data.login;
 }
