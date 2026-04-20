@@ -19,6 +19,7 @@ import {
 } from "./types";
 import { filterDiff } from "./diff-filter";
 import { log } from "../server/logger";
+import { recordCacheTelemetry } from "./cache-telemetry";
 import { resolveAnthropicClient } from "./client";
 
 // ─── Pass-1 schema ───────────────────────────────────────────────────────────
@@ -328,6 +329,18 @@ export async function runChunkedReview(
     pass: 1,
   });
 
+  recordCacheTelemetry({
+    repo: `${input.diff.owner}/${input.diff.repo}`,
+    pr: input.diff.number,
+    headSha: input.diff.headSha,
+    usage: {
+      input_tokens: pass1InputTokens,
+      cache_read_input_tokens: pass1CacheRead,
+      cache_creation_input_tokens: pass1CacheCreation,
+    },
+    mode: "chunked-pass-1",
+  });
+
   // Persist audit record for pass 1.
   await writeAuditRecord({
     repo: `${input.diff.owner}/${input.diff.repo}`,
@@ -406,6 +419,14 @@ export async function runChunkedReview(
     cacheReadTokens:
       synthesisResponse.usage.cache_read_input_tokens ?? undefined,
     pass: 2,
+  });
+
+  recordCacheTelemetry({
+    repo: `${input.diff.owner}/${input.diff.repo}`,
+    pr: input.diff.number,
+    headSha: input.diff.headSha,
+    usage: synthesisResponse.usage,
+    mode: "chunked-pass-2",
   });
 
   // Persist audit record for pass 2.
