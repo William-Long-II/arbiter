@@ -7,6 +7,7 @@ import { filterDiff } from "./diff-filter";
 import { withRetry } from "../util/retry";
 import { runChunkedReview } from "./synthesize";
 import { fetchConventions } from "./conventions";
+import { writeAuditRecord } from "./audit";
 import {
   DEFAULT_MODEL,
   DEFAULT_MAX_TOKENS,
@@ -138,17 +139,32 @@ export async function runReview(
     throw new Error("LLM returned a response that did not match the schema");
   }
 
+  const usageOut = {
+    inputTokens: response.usage.input_tokens,
+    outputTokens: response.usage.output_tokens,
+    cacheCreationInputTokens:
+      response.usage.cache_creation_input_tokens ?? undefined,
+    cacheReadInputTokens:
+      response.usage.cache_read_input_tokens ?? undefined,
+  };
+
+  await writeAuditRecord({
+    repo: `${input.diff.owner}/${input.diff.repo}`,
+    pr: input.diff.number,
+    headSha: input.diff.headSha,
+    mode: "single",
+    promptSystem: SYSTEM_PROMPT,
+    promptUser: userMessage,
+    responseRaw: response.parsed_output,
+    usage: usageOut,
+    verdict: response.parsed_output.verdict,
+    warnings: [],
+  });
+
   return {
     result: response.parsed_output,
     warnings: [],
-    usage: {
-      inputTokens: response.usage.input_tokens,
-      outputTokens: response.usage.output_tokens,
-      cacheCreationInputTokens:
-        response.usage.cache_creation_input_tokens ?? undefined,
-      cacheReadInputTokens:
-        response.usage.cache_read_input_tokens ?? undefined,
-    },
+    usage: usageOut,
   };
 }
 

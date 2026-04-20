@@ -2,6 +2,7 @@ import { getAllowlist, loadAllowlist, loadConfig, reload } from "../config";
 import { createOctokit, fetchAuthenticatedLogin } from "../github";
 import { createAnthropic } from "../review";
 import { sweepDeadLetters, writeDeadLetter } from "./dead-letter";
+import { sweepAudit } from "../review/audit";
 import { log } from "./logger";
 import {
   buildMetricsHandler,
@@ -170,6 +171,13 @@ process.on("SIGTERM", () => {
 // Prune old dead-letter dirs at startup (non-fatal).
 sweepDeadLetters().catch((err: unknown) => {
   log.error("dead letter sweep failed at startup", {
+    error: err instanceof Error ? err.message : String(err),
+  });
+});
+
+// Prune old audit dirs at startup (non-fatal).
+sweepAudit().catch((err: unknown) => {
+  log.error("audit sweep failed at startup", {
     error: err instanceof Error ? err.message : String(err),
   });
 });
