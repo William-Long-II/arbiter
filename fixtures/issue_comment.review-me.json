@@ -7,7 +7,7 @@
   },
   "comment": {
     "id": 777,
-    "body": "/reviewme",
+    "body": "/review-me",
     "user": { "login": "octocat", "id": 1 }
   },
   "repository": {

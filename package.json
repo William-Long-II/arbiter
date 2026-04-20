@@ -1,5 +1,5 @@
 {
-  "name": "reviewme",
+  "name": "review-me",
   "module": "index.ts",
   "type": "module",
   "private": true,

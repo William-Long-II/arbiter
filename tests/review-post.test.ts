@@ -68,7 +68,7 @@ const ref = {
   repo: "widget",
   pullNumber: 1,
   headSha: "abc123",
-  selfLogin: "reviewme-bot",
+  selfLogin: "review-me-bot",
 };
 
 describe("postReview", () => {
@@ -109,7 +109,7 @@ describe("postReview", () => {
   test("skips when the bot has already reviewed this head SHA", async () => {
     const { octokit, createCalls } = stubOctokit({
       existingReviews: [
-        { user: { login: "reviewme-bot" }, commit_id: "abc123" },
+        { user: { login: "review-me-bot" }, commit_id: "abc123" },
       ],
     });
     const out = await postReview(octokit, { ...ref, review: approve });
@@ -120,7 +120,7 @@ describe("postReview", () => {
   test("does not skip when a prior review was on a different head SHA", async () => {
     const { octokit, createCalls } = stubOctokit({
       existingReviews: [
-        { user: { login: "reviewme-bot" }, commit_id: "older-sha" },
+        { user: { login: "review-me-bot" }, commit_id: "older-sha" },
       ],
     });
     const out = await postReview(octokit, { ...ref, review: approve });

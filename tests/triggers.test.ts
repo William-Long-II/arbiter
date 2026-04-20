@@ -31,21 +31,21 @@ describe("decideFromCheckSuite", () => {
 });
 
 describe("mentionsReviewCommand", () => {
-  test("matches /reviewme at start of body", () => {
-    expect(mentionsReviewCommand("/reviewme please")).toBe(true);
+  test("matches /review-me at start of body", () => {
+    expect(mentionsReviewCommand("/review-me please")).toBe(true);
   });
 
-  test("matches /reviewme mid-body", () => {
-    expect(mentionsReviewCommand("hey bot, /reviewme this thing")).toBe(true);
+  test("matches /review-me mid-body", () => {
+    expect(mentionsReviewCommand("hey bot, /review-me this thing")).toBe(true);
   });
 
-  test("matches /reviewme at end of body", () => {
-    expect(mentionsReviewCommand("can you take a look /reviewme")).toBe(true);
+  test("matches /review-me at end of body", () => {
+    expect(mentionsReviewCommand("can you take a look /review-me")).toBe(true);
   });
 
   test("does not match a similar string", () => {
-    expect(mentionsReviewCommand("/reviewmepls")).toBe(false);
-    expect(mentionsReviewCommand("pre/reviewme")).toBe(false);
+    expect(mentionsReviewCommand("/review-mepls")).toBe(false);
+    expect(mentionsReviewCommand("pre/review-me")).toBe(false);
   });
 
   test("handles null/undefined/empty", () => {

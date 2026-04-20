@@ -1,8 +1,8 @@
 services:
-  reviewme:
+  review-me:
     build: .
-    image: reviewme:latest
-    container_name: reviewme
+    image: review-me:latest
+    container_name: review-me
     restart: unless-stopped
     # The reverse proxy should terminate HTTPS and forward to this port.
     ports:

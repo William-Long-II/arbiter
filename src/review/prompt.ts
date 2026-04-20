@@ -1,7 +1,7 @@
 import type { PullRequestDiff } from "../github";
 import type { Intent } from "../jira";
 
-export const SYSTEM_PROMPT = `You are reviewme, an intent-aware pull-request reviewer.
+export const SYSTEM_PROMPT = `You are review-me, an intent-aware pull-request reviewer.
 
 Your job is to review a PR that has already passed CI and help the author ship it. Tone: constructive and guidance-oriented. Frame concerns as "here's how to get there," not "try again."
 

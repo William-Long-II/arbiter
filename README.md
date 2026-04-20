@@ -1,4 +1,4 @@
-# reviewme
+# review-me
 
 An intent-aware GitHub pull-request review bot. Listens for webhooks, waits until CI goes green, then posts a constructive review — approving clean PRs and leaving line-level guidance on ones with issues. Never blocks a merge. Built with Bun + TypeScript; deployable on your own VMs behind an existing HTTPS reverse proxy.
 
@@ -8,7 +8,7 @@ An intent-aware GitHub pull-request review bot. Listens for webhooks, waits unti
 2. For allowlisted repos, the bot waits until the check suite's aggregate status is green.
 3. It fetches the PR diff, resolves the intent from the linked Jira ticket (or the PR description as fallback), and runs a Claude Opus 4.7 review.
 4. The review is posted as a GitHub review — `APPROVE` for clean PRs, `COMMENT` with inline feedback when there's something to call out. It never uses `REQUEST_CHANGES`.
-5. Per-repo config decides whether re-reviews trigger automatically on every push (`auto-on-sync`) or only when a reviewer applies a label or mentions `/reviewme` in a comment (`label-or-mention`).
+5. Per-repo config decides whether re-reviews trigger automatically on every push (`auto-on-sync`) or only when a reviewer applies a label or mentions `/review-me` in a comment (`label-or-mention`).
 
 ## Quick start
 
@@ -99,23 +99,23 @@ docker compose up -d --build
 
 ```bash
 # One-time setup on the host:
-sudo useradd --system --home /opt/reviewme --shell /usr/sbin/nologin reviewme
-sudo mkdir -p /opt/reviewme /etc/reviewme
-sudo cp -r . /opt/reviewme
-sudo chown -R reviewme:reviewme /opt/reviewme
-sudo cp .env.example /etc/reviewme/reviewme.env    # then edit with real values
-sudo chmod 600 /etc/reviewme/reviewme.env
-sudo chown reviewme:reviewme /etc/reviewme/reviewme.env
+sudo useradd --system --home /opt/review-me --shell /usr/sbin/nologin review-me
+sudo mkdir -p /opt/review-me /etc/review-me
+sudo cp -r . /opt/review-me
+sudo chown -R review-me:review-me /opt/review-me
+sudo cp .env.example /etc/review-me/review-me.env    # then edit with real values
+sudo chmod 600 /etc/review-me/review-me.env
+sudo chown review-me:review-me /etc/review-me/review-me.env
 
 # Install Bun system-wide:
 curl -fsSL https://bun.sh/install | sudo bash -s -- --install-dir=/usr/local
-sudo -u reviewme bash -c "cd /opt/reviewme && /usr/local/bin/bun install --frozen-lockfile --production"
+sudo -u review-me bash -c "cd /opt/review-me && /usr/local/bin/bun install --frozen-lockfile --production"
 
 # Enable the service:
-sudo cp deploy/reviewme.service /etc/systemd/system/
+sudo cp deploy/review-me.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now reviewme
-sudo journalctl -u reviewme -f
+sudo systemctl enable --now review-me
+sudo journalctl -u review-me -f
 ```
 
 ### Reverse proxy
@@ -123,7 +123,7 @@ sudo journalctl -u reviewme -f
 Route `POST /webhook` (and optionally `/health`, `/ready`) from your public ingress to the bot. nginx example:
 
 ```nginx
-location /reviewme/webhook {
+location /review-me/webhook {
     proxy_pass http://127.0.0.1:3000/webhook;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-For $remote_addr;
@@ -131,7 +131,7 @@ location /reviewme/webhook {
 }
 ```
 
-Configure GitHub's webhook URL as `https://your-host/reviewme/webhook` and set:
+Configure GitHub's webhook URL as `https://your-host/review-me/webhook` and set:
 
 - Content type: `application/json`
 - Secret: matches `GITHUB_WEBHOOK_SECRET`

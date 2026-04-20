@@ -1,15 +1,15 @@
 [Unit]
-Description=reviewme PR review bot
+Description=review-me PR review bot
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=reviewme
-Group=reviewme
-WorkingDirectory=/opt/reviewme
-EnvironmentFile=/etc/reviewme/reviewme.env
-ExecStart=/usr/local/bin/bun run /opt/reviewme/index.ts
+User=review-me
+Group=review-me
+WorkingDirectory=/opt/review-me
+EnvironmentFile=/etc/review-me/review-me.env
+ExecStart=/usr/local/bin/bun run /opt/review-me/index.ts
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal

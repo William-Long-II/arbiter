@@ -1,4 +1,4 @@
-# reviewme — Implementation Plan
+# review-me — Implementation Plan
 
 An intent-aware PR review bot that layers constructive, guidance-oriented feedback on top of CI. Approves clean PRs, leaves line-level comments with a summary when there are issues.
 
@@ -96,7 +96,7 @@ GitHub --webhook--> /webhook endpoint (Bun HTTP)
       rereview_label: "re-review"   # when mode is label-or-mention
   ```
 - [ ] `pull_request.synchronize` event → honor mode
-- [ ] `pull_request.labeled` and `issue_comment` (with `/reviewme`) for manual trigger
+- [ ] `pull_request.labeled` and `issue_comment` (with `/review-me`) for manual trigger
 
 ### Phase 8 — Deployment (self-hosted)
 - [ ] Dockerfile (Bun base image) — runnable via `docker run` or `docker compose`
@@ -105,7 +105,7 @@ GitHub --webhook--> /webhook endpoint (Bun HTTP)
 - [ ] `/health` endpoint for proxy health checks; `/ready` for warmup
 - [ ] Log to stdout (JSON); operator routes to journald / existing log pipeline
 - [ ] Secrets via env file mounted by the host (no cloud secret manager dependency)
-- [ ] GitHub webhook URL pointed at the public ingress path (e.g. `https://tools.example.com/reviewme/webhook`) — either per-repo or org-level webhook
+- [ ] GitHub webhook URL pointed at the public ingress path (e.g. `https://tools.example.com/review-me/webhook`) — either per-repo or org-level webhook
 - [ ] Document: required firewall rules (inbound 443 from GitHub IP ranges only), secret rotation procedure, restart/rollback runbook in README
 
 ## Open questions (to resolve during implementation, not blockers)

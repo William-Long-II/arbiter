@@ -7,12 +7,12 @@ FROM oven/bun:1-alpine
 WORKDIR /app
 
 # Run as non-root
-RUN addgroup -S reviewme && adduser -S reviewme -G reviewme
-COPY --from=deps --chown=reviewme:reviewme /app/node_modules ./node_modules
-COPY --chown=reviewme:reviewme package.json bun.lock tsconfig.json index.ts ./
-COPY --chown=reviewme:reviewme src ./src
+RUN addgroup -S review-me && adduser -S review-me -G review-me
+COPY --from=deps --chown=review-me:review-me /app/node_modules ./node_modules
+COPY --chown=review-me:review-me package.json bun.lock tsconfig.json index.ts ./
+COPY --chown=review-me:review-me src ./src
 
-USER reviewme
+USER review-me
 ENV NODE_ENV=production
 # Bind to all interfaces inside the container; the reverse proxy is
 # responsible for who can reach it.

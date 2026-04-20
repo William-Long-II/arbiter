@@ -265,7 +265,7 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
       headSha: prData.data.head.sha,
     };
 
-    log.info("/reviewme mention triggered review", {
+    log.info("/review-me mention triggered review", {
       deliveryId: id,
       repo: repoFull,
       pr: ref.pullNumber,

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Sign a fixture payload and POST it to a reviewme /webhook endpoint.
+ * Sign a fixture payload and POST it to a review-me /webhook endpoint.
  *
  * Usage:
  *   GITHUB_WEBHOOK_SECRET=... bun scripts/send-webhook.ts <event> <fixture-path> [url]

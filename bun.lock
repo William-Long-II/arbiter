@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "reviewme",
+      "name": "review-me",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.90.0",
         "@octokit/rest": "^22.0.1",

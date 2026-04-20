@@ -18,7 +18,7 @@ async function startTestServer(): Promise<ServerHandle> {
     allowlist: buildAllowlist({}),
     octokit: {} as Octokit,
     anthropic: {} as Anthropic,
-    selfLogin: "reviewme-bot",
+    selfLogin: "review-me-bot",
   });
   const server = Bun.serve({
     port: 0,

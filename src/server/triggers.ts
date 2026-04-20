@@ -10,7 +10,7 @@ export type CheckSuiteDecision =
  *
  * - `auto-on-sync` always proceeds.
  * - `label-or-mention` proceeds for the FIRST review (no prior review by
- *   the bot on any SHA), then waits for a label or a /reviewme mention on
+ *   the bot on any SHA), then waits for a label or a /review-me mention on
  *   subsequent pushes.
  */
 export function decideFromCheckSuite(
@@ -23,11 +23,11 @@ export function decideFromCheckSuite(
   if (hasRereviewLabel) return { proceed: true };
   return {
     proceed: false,
-    reason: "label-or-mention mode: awaiting rereview label or /reviewme",
+    reason: "label-or-mention mode: awaiting rereview label or /review-me",
   };
 }
 
-const MENTION_RE = /(^|\s)\/reviewme(\s|$)/;
+const MENTION_RE = /(^|\s)\/review-me(\s|$)/;
 
 export function mentionsReviewCommand(body: string | null | undefined): boolean {
   if (!body) return false;

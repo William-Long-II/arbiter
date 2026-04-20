@@ -1,11 +1,11 @@
-# Allowlist of repositories the reviewme bot will act on.
+# Allowlist of repositories the review-me bot will act on.
 # Keys are "owner/name" (case-insensitive).
 #
 # Fields:
 #   enabled        - if false, webhooks from this repo are acknowledged but ignored
 #   rereview       - how re-reviews are triggered on new commits:
 #                      auto-on-sync      (default) review again on every push
-#                      label-or-mention  wait for a label or /reviewme comment
+#                      label-or-mention  wait for a label or /review-me comment
 #   rereview_label - label name that triggers a re-review when rereview=label-or-mention
 repos: {}
 #   acme/widget:
