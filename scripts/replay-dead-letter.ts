@@ -13,12 +13,15 @@
  * Webhooks instance so the signature is accepted regardless of the
  * stored value.  This is useful for replaying in environments where
  * the original secret is unknown, or in tests.
+ *
+ * After a successful replay the file is renamed to <path>.replayed so it
+ * cannot be accidentally replayed again.  Failed replays leave the file
+ * in place — it remains a dead-letter; run the script again or investigate
+ * the root cause before retrying.
  */
 
-import { createHmac } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import type { DeadLetterEntry } from "../src/server/dead-letter";
 import { loadAllowlist, loadConfig } from "../src/config";
+import { replayOne } from "../src/server/dead-letter-replay";
 import { createWebhooks } from "../src/server/webhooks";
 import { log } from "../src/server/logger";
 
@@ -69,69 +72,13 @@ const webhooks = createWebhooks(effectiveSecret, stubDeps);
 let exitCode = 0;
 
 for (const filePath of filePaths) {
-  let raw: string;
-  try {
-    raw = await readFile(filePath, "utf8");
-  } catch (err: unknown) {
-    log.error("replay: failed to read file", {
-      path: filePath,
-      error: err instanceof Error ? err.message : String(err),
-    });
+  log.info("replay: replaying dead letter", { path: filePath, bypassSignature });
+
+  const result = await replayOne(filePath, webhooks, effectiveSecret);
+  if (result === "failure") {
     exitCode = 1;
-    continue;
-  }
-
-  let entry: DeadLetterEntry;
-  try {
-    entry = JSON.parse(raw) as DeadLetterEntry;
-  } catch (err: unknown) {
-    log.error("replay: invalid JSON in dead-letter file", {
-      path: filePath,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    exitCode = 1;
-    continue;
-  }
-
-  const { delivery_id, event, payload } = entry;
-
-  // Build a fresh signature over the stored payload with the effective secret.
-  const freshSignature = `sha256=${createHmac("sha256", effectiveSecret).update(payload).digest("hex")}`;
-
-  log.info("replay: replaying dead letter", {
-    path: filePath,
-    deliveryId: delivery_id,
-    event,
-    originalWrittenAt: entry.written_at,
-    bypassSignature,
-  });
-
-  try {
-    await webhooks.verifyAndReceive({
-      id: delivery_id,
-      name: event as Parameters<typeof webhooks.verifyAndReceive>[0]["name"],
-      signature: freshSignature,
-      payload,
-    });
-    log.info("replay: handler completed without error", {
-      deliveryId: delivery_id,
-    });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    // Signature mismatches become user errors.
-    if (message.includes("signature does not match")) {
-      log.error("replay: signature mismatch — use --bypass-signature or set GITHUB_WEBHOOK_SECRET", {
-        deliveryId: delivery_id,
-      });
-    } else {
-      // Handler threw — this is expected for events the bot genuinely cannot
-      // process; log and continue.
-      log.error("replay: handler threw", {
-        deliveryId: delivery_id,
-        error: message,
-      });
-    }
-    exitCode = 1;
+  } else {
+    log.info("replay: handler completed without error", { path: filePath });
   }
 }
 

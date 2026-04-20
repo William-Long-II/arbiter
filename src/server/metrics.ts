@@ -337,6 +337,21 @@ registry.registerCounter(
   "Total reviews skipped because the repo's weekly token budget was exhausted.",
 );
 
+// --- Dead-letter auto-replay counters ---
+
+/**
+ * Dead-letter auto-replay outcomes, labelled by result (success/failure/skipped).
+ *
+ * success  — file replayed and renamed to <name>.replayed
+ * failure  — replay attempt threw; file left in place
+ * skipped  — file too old, already .replayed, or over count cap
+ */
+export const deadLetterReplayTotal = "reviewme_dead_letter_replay_total";
+registry.registerCounter(
+  deadLetterReplayTotal,
+  "Total dead-letter auto-replay outcomes, by result (success/failure/skipped).",
+);
+
 // --- Result cache counters ---
 
 /** Review result cache hits and misses, labelled by result (hit/miss). */
@@ -472,6 +487,10 @@ export function incSlashCommand(
   command: "help" | "skip" | "resume" | "re-review" | "unknown",
 ): void {
   registry.incrementCounter(slashCommandTotal, { command });
+}
+
+export function incDeadLetterReplay(result: "success" | "failure" | "skipped"): void {
+  registry.incrementCounter(deadLetterReplayTotal, { result });
 }
 
 // ---------------------------------------------------------------------------
