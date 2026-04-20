@@ -17,6 +17,8 @@ import { resultCache } from "./result-cache";
 import { getWeeklyTokenSum } from "./budget";
 import { recordUsage } from "./usage";
 import { log } from "../server/logger";
+import { createHash } from "node:crypto";
+import { resolveAnthropicClient } from "./client";
 import {
   DEFAULT_MODEL,
   DEFAULT_MAX_TOKENS,
@@ -24,10 +26,21 @@ import {
   type RunReviewInput,
   type RunReviewOptions,
   type RunReviewOutput,
+  type TraceMetadata,
 } from "./types";
 
 export { DEFAULT_MODEL, DEFAULT_MAX_TOKENS, DEFAULT_MAX_DIFF_CHARS };
 export type { RunReviewInput, RunReviewOptions, RunReviewOutput };
+export type { TraceMetadata } from "./types";
+
+/**
+ * Compute a short, stable fingerprint of the final user message sent to the
+ * LLM. The first 12 hex characters of SHA-256 are sufficient for traceability
+ * debugging without leaking prompt content in the posted review body.
+ */
+function computePromptHash(userMessage: string): string {
+  return createHash("sha256").update(userMessage).digest("hex").slice(0, 12);
+}
 
 /** Valid values for the REVIEW_MODE environment variable. */
 export type ReviewMode = "auto" | "single" | "chunked";
@@ -102,6 +115,15 @@ export async function runReview(
           lineComments: [],
         },
         warnings: ["weekly token budget exhausted"],
+        traceMetadata: {
+          headSha: input.diff.headSha,
+          model,
+          mode: "budget_exhausted",
+          intentSource: input.intent.source,
+          intentRef: input.intent.ticketKey ?? "",
+          promptHash: "",
+          ts: new Date().toISOString(),
+        },
       };
     }
   }
@@ -180,8 +202,13 @@ export async function runReview(
   const isLarge = diffSize > maxDiffChars;
   const useChunked = mode === "chunked" || (mode === "auto" && isLarge);
 
+  // Resolve a per-repo Anthropic client if the repo config names one.
+  // A single resolution covers both the single-pass call below and the
+  // runChunkedReview delegation, keeping client construction to one instance.
+  const effectiveClient = resolveAnthropicClient(input.reviewConfig, anthropic);
+
   if (useChunked) {
-    const chunkedResult = await runChunkedReview(anthropic, input, options);
+    const chunkedResult = await runChunkedReview(effectiveClient, input, options);
     // Only cache chunked results that are complete.  A pass-2 overflow warning
     // indicates the synthesized output may be truncated — safer to re-run if
     // the same SHA is requested again rather than serving a partial review.
@@ -210,6 +237,15 @@ export async function runReview(
       warnings: [
         `diff exceeded review threshold (${diffSize} > ${maxDiffChars}); fail-open`,
       ],
+      traceMetadata: {
+        headSha: input.diff.headSha,
+        model,
+        mode: "too_large",
+        intentSource: input.intent.source,
+        intentRef: input.intent.ticketKey ?? "",
+        promptHash: "",
+        ts: new Date().toISOString(),
+      },
     };
     resultCache.set(cacheKey, failOpenResult);
     return failOpenResult;
@@ -223,11 +259,13 @@ export async function runReview(
     heuristics,
   });
 
+  const promptHash = computePromptHash(userMessage);
+
   // withBreaker gates BEFORE withRetry so a tripped breaker short-circuits
   // the retry loop entirely rather than burning quota on repeated attempts.
   const response = await withBreaker("anthropic", () =>
     withRetry(() =>
-      anthropic.messages.parse({
+      effectiveClient.messages.parse({
         model,
         max_tokens: maxTokens,
         thinking: { type: "adaptive" },
@@ -284,6 +322,15 @@ export async function runReview(
     result: response.parsed_output,
     warnings: [],
     usage: usageOut,
+    traceMetadata: {
+      headSha: input.diff.headSha,
+      model,
+      mode: "single",
+      intentSource: input.intent.source,
+      intentRef: input.intent.ticketKey ?? "",
+      promptHash,
+      ts: new Date().toISOString(),
+    },
   };
   resultCache.set(cacheKey, singlePassResult);
   return singlePassResult;
@@ -298,7 +345,7 @@ export {
   type FetchConventionsInput,
 } from "./conventions";
 export { ReviewResultSchema, type ReviewResult, type LineComment } from "./schema";
-export { createAnthropic } from "./client";
+export { createAnthropic, resolveAnthropicClient } from "./client";
 export { filterDiff, OMITTED_FILES_SENTINEL } from "./diff-filter";
 export type { FilterDiffOptions, FilterDiffResult, OmittedFile } from "./diff-filter";
 export {

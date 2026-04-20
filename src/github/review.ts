@@ -1,6 +1,7 @@
 import type { Octokit } from "./client";
 import { withGitHubRetry } from "./client";
 import type { LineComment, ReviewResult } from "../review/schema";
+import type { TraceMetadata } from "../review/types";
 
 export type PostReviewInput = {
   owner: string;
@@ -9,6 +10,7 @@ export type PostReviewInput = {
   headSha: string;
   selfLogin: string;
   review: ReviewResult;
+  traceMetadata?: TraceMetadata;
 };
 
 export type PostReviewOutcome =
@@ -117,6 +119,32 @@ function toApiComments(
 }
 
 /**
+ * Build the hidden HTML-comment footer for the review summary.
+ *
+ * YAML-in-HTML-comment is deliberate: it is invisible to PR reviewers in the
+ * GitHub UI but readable by operators via the three-dots → Edit menu or the
+ * REST API. It avoids polluting the rendered markdown while still giving a
+ * quick trace from a bad review → head SHA, model, mode, intent source, and
+ * a short prompt fingerprint.
+ *
+ * The footer is placed at the very end of the summary so it does not appear
+ * in GitHub's comment preview (which shows the first ~200 chars).
+ */
+function buildMetadataFooter(meta: TraceMetadata): string {
+  return (
+    `\n\n<!-- review-me:\n` +
+    `  head_sha: ${meta.headSha}\n` +
+    `  model: ${meta.model}\n` +
+    `  mode: ${meta.mode}\n` +
+    `  intent_source: ${meta.intentSource}\n` +
+    `  intent_ref: ${meta.intentRef}\n` +
+    `  prompt_hash: ${meta.promptHash}\n` +
+    `  ts: ${meta.ts}\n` +
+    `-->`
+  );
+}
+
+/**
  * Post a review on a PR. Never uses REQUEST_CHANGES — the bot guides, it does
  * not block. Falls back to a summary-only COMMENT review if the original
  * submission fails (most commonly: a line comment targets a line not present
@@ -126,7 +154,7 @@ export async function postReview(
   octokit: Octokit,
   input: PostReviewInput,
 ): Promise<PostReviewOutcome> {
-  const { owner, repo, pullNumber, headSha, selfLogin, review } = input;
+  const { owner, repo, pullNumber, headSha, selfLogin, review, traceMetadata } = input;
 
   if (
     await hasExistingReview(octokit, owner, repo, pullNumber, headSha, selfLogin)
@@ -136,6 +164,12 @@ export async function postReview(
 
   const event = review.verdict === "approve" ? "APPROVE" : "COMMENT";
 
+  // Append the hidden metadata footer at the very end of the summary so it
+  // does not appear in GitHub's comment preview. Falls back gracefully when
+  // traceMetadata is absent (back-compat for callers that don't set it).
+  const footer = traceMetadata ? buildMetadataFooter(traceMetadata) : "";
+  const summaryBody = `${review.summary}${footer}`;
+
   try {
     const res = await octokit.pulls.createReview({
       owner,
@@ -143,7 +177,7 @@ export async function postReview(
       pull_number: pullNumber,
       commit_id: headSha,
       event,
-      body: review.summary,
+      body: summaryBody,
       comments: toApiComments(review.lineComments),
     });
     return {
@@ -156,7 +190,7 @@ export async function postReview(
     if (review.lineComments.length === 0) throw err;
 
     const bodyWithNote =
-      `${review.summary}\n\n` +
+      `${summaryBody}\n\n` +
       `_Note: inline comments were generated but could not be anchored to the diff (${msg}). ` +
       `They have been dropped from this review._`;
     const res = await withGitHubRetry(() =>

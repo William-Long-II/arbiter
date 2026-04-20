@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type Anthropic from "@anthropic-ai/sdk";
@@ -19,6 +20,7 @@ import {
 import { filterDiff } from "./diff-filter";
 import { log } from "../server/logger";
 import { recordCacheTelemetry } from "./cache-telemetry";
+import { resolveAnthropicClient } from "./client";
 
 // ─── Pass-1 schema ───────────────────────────────────────────────────────────
 
@@ -228,6 +230,10 @@ export async function runChunkedReview(
   const model = options.model ?? DEFAULT_MODEL;
   const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
 
+  // Resolve a per-repo Anthropic client once; reused for both pass-1 and pass-2
+  // so a single override key is used consistently throughout this review.
+  const effectiveClient = resolveAnthropicClient(input.reviewConfig, anthropic);
+
   // Apply the same diff filter as the single-pass path so we skip lockfiles etc.
   const filterResult = filterDiff(input.diff.files, {
     include: input.reviewConfig?.include_paths,
@@ -270,7 +276,7 @@ export async function runChunkedReview(
 
       const response = await withBreaker("anthropic", () =>
         withRetry(() =>
-          anthropic.messages.parse({
+          effectiveClient.messages.parse({
             model,
             max_tokens: maxTokens,
             system: [
@@ -373,7 +379,7 @@ export async function runChunkedReview(
 
   const synthesisResponse = await withBreaker("anthropic", () =>
     withRetry(() =>
-      anthropic.messages.parse({
+      effectiveClient.messages.parse({
         model,
         max_tokens: maxTokens,
         system: [
@@ -471,6 +477,14 @@ export async function runChunkedReview(
     return true;
   });
 
+  // Compute prompt hash from the pass-2 synthesis message — that is the final
+  // user message actually sent to the LLM and is the most meaningful fingerprint
+  // for traceability purposes.
+  const promptHash = createHash("sha256")
+    .update(synthesisMessage)
+    .digest("hex")
+    .slice(0, 12);
+
   return {
     result: {
       ...rawResult,
@@ -486,6 +500,15 @@ export async function runChunkedReview(
       cacheReadInputTokens:
         pass1CacheRead +
         (synthesisResponse.usage.cache_read_input_tokens ?? 0),
+    },
+    traceMetadata: {
+      headSha: input.diff.headSha,
+      model,
+      mode: "chunked" as const,
+      intentSource: input.intent.source,
+      intentRef: input.intent.ticketKey ?? "",
+      promptHash,
+      ts: new Date().toISOString(),
     },
   };
 }
