@@ -4,6 +4,7 @@ import type { PullRequestDiff } from "../github";
 import type { Intent } from "../jira";
 import { buildUserMessage, SYSTEM_PROMPT } from "./prompt";
 import { ReviewResultSchema, type ReviewResult } from "./schema";
+import { withRetry } from "../util/retry";
 
 export const DEFAULT_MODEL = "claude-opus-4-7";
 export const DEFAULT_MAX_TOKENS = 16_000;
@@ -69,22 +70,24 @@ export async function runReview(
 
   const userMessage = buildUserMessage(input);
 
-  const response = await anthropic.messages.parse({
-    model,
-    max_tokens: maxTokens,
-    thinking: { type: "adaptive" },
-    system: [
-      {
-        type: "text",
-        text: SYSTEM_PROMPT,
-        cache_control: { type: "ephemeral" },
+  const response = await withRetry(() =>
+    anthropic.messages.parse({
+      model,
+      max_tokens: maxTokens,
+      thinking: { type: "adaptive" },
+      system: [
+        {
+          type: "text",
+          text: SYSTEM_PROMPT,
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+      messages: [{ role: "user", content: userMessage }],
+      output_config: {
+        format: zodOutputFormat(ReviewResultSchema),
       },
-    ],
-    messages: [{ role: "user", content: userMessage }],
-    output_config: {
-      format: zodOutputFormat(ReviewResultSchema),
-    },
-  });
+    }),
+  );
 
   if (!response.parsed_output) {
     throw new Error("LLM returned a response that did not match the schema");

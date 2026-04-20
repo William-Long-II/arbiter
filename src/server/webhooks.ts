@@ -29,6 +29,7 @@ import {
   incReviewsTotal,
   observeReviewDuration,
 } from "./metrics";
+import { enqueueOrThrow } from "./queue";
 import { decideFromCheckSuite, mentionsReviewCommand } from "./triggers";
 
 export type WebhookDeps = {
@@ -174,15 +175,19 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
           continue;
         }
 
-        await runPipeline(ref, {
-          octokit,
-          anthropic,
-          selfLogin,
-          jiraCreds,
-          deliveryId: id,
-          source: "check-suite",
-          entry,
-        });
+        enqueueOrThrow(
+          () =>
+            runPipeline(ref, {
+              octokit,
+              anthropic,
+              selfLogin,
+              jiraCreds,
+              deliveryId: id,
+              source: "check-suite",
+              entry,
+            }),
+          { deliveryId: id, repo: repoFull, pr: ref.pullNumber },
+        );
 
         // If a label triggered the gate, clear it so subsequent pushes need
         // re-confirmation. Mentions don't need clearing.
@@ -339,7 +344,10 @@ async function triggerExplicit(
       return;
     }
 
-    await runPipeline(ref, deps);
+    enqueueOrThrow(
+      () => runPipeline(ref, deps),
+      { deliveryId: deps.deliveryId, repo: repoFull, pr: ref.pullNumber },
+    );
   } catch (err) {
     if (!isReviewError(err)) {
       log.error("explicit trigger failed", {
