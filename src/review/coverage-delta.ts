@@ -15,6 +15,7 @@
  */
 
 import type { PullRequestFile } from "../github";
+import { langFromPath } from "./languages";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -238,17 +239,7 @@ const SYMBOL_PATTERNS: Record<string, RegExp[]> = {
   ],
 };
 
-function langFromPath(path: string): string | null {
-  const basename = path.split("/").pop() ?? path;
-  const dotIdx = basename.lastIndexOf(".");
-  if (dotIdx < 0) return null;
-  const ext = basename.slice(dotIdx + 1).toLowerCase();
-  if (ext === "ts" || ext === "tsx" || ext === "js" || ext === "jsx" || ext === "mjs" || ext === "cjs") return "ts";
-  if (ext === "py") return "py";
-  if (ext === "go") return "go";
-  if (ext === "java") return "java";
-  return null;
-}
+// langFromPath is imported from ./languages — shared with heuristics/index.ts.
 
 /**
  * Extract symbols from the added lines of a patch hunk.

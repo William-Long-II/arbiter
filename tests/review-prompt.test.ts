@@ -5,6 +5,7 @@ import type { ConventionsResult } from "../src/review/conventions";
 import { buildUserMessage } from "../src/review/prompt";
 import { filterDiff, OMITTED_FILES_SENTINEL } from "../src/review/diff-filter";
 import type { CoverageDelta } from "../src/review/coverage-delta";
+import type { Heuristic } from "../src/review/heuristics/index";
 
 function makeDiff(overrides: Partial<PullRequestDiff> = {}): PullRequestDiff {
   return {
@@ -213,6 +214,97 @@ describe("buildUserMessage — Test coverage signal golden", () => {
     expect(out).toContain("added_source_lines: 50");
     expect(out).toContain("added_test_lines: 30");
     expect(out).toContain("untested_new_symbols: none");
+  });
+});
+
+// ─── Prompt golden tests: Language hints block ───────────────────────────────
+
+describe("buildUserMessage — Language hints golden", () => {
+  const tsHint: Heuristic = {
+    id: "ts/unhandled-promise",
+    summary: "Unhandled promise rejection",
+    hint: "Check for floating promises.",
+  };
+
+  const pyHint: Heuristic = {
+    id: "py/mutable-default-arg",
+    summary: "Mutable default argument",
+    hint: "Watch for mutable defaults.",
+  };
+
+  test("## Language hints section present when heuristics non-empty", () => {
+    const out = buildUserMessage({
+      intent: makeIntent(),
+      diff: makeDiff(),
+      heuristics: [tsHint],
+    });
+    expect(out).toContain("## Language hints");
+    expect(out).toContain("Unhandled promise rejection");
+    expect(out).toContain("Check for floating promises.");
+  });
+
+  test("## Language hints section appears before ## Diff", () => {
+    const out = buildUserMessage({
+      intent: makeIntent(),
+      diff: makeDiff(),
+      heuristics: [tsHint],
+    });
+    const hintsPos = out.indexOf("## Language hints");
+    const diffPos = out.indexOf("## Diff");
+    expect(hintsPos).toBeGreaterThanOrEqual(0);
+    expect(hintsPos).toBeLessThan(diffPos);
+  });
+
+  test("mixed-language PR golden: .ts and .py hints both rendered", () => {
+    const out = buildUserMessage({
+      intent: makeIntent(),
+      diff: makeDiff(),
+      heuristics: [tsHint, pyHint],
+    });
+    expect(out).toContain("## Language hints");
+    // TypeScript hint rendered
+    expect(out).toContain("Unhandled promise rejection");
+    // Python hint rendered
+    expect(out).toContain("Mutable default argument");
+    // Both appear before ## Diff
+    const hintsPos = out.indexOf("## Language hints");
+    const diffPos = out.indexOf("## Diff");
+    expect(hintsPos).toBeLessThan(diffPos);
+  });
+
+  test("## Language hints section absent when heuristics is empty array", () => {
+    const out = buildUserMessage({
+      intent: makeIntent(),
+      diff: makeDiff(),
+      heuristics: [],
+    });
+    expect(out).not.toContain("## Language hints");
+  });
+
+  test("## Language hints section absent when heuristics not provided", () => {
+    const out = buildUserMessage({
+      intent: makeIntent(),
+      diff: makeDiff(),
+    });
+    expect(out).not.toContain("## Language hints");
+  });
+
+  test("hint bullets are formatted as bold-label markdown", () => {
+    const out = buildUserMessage({
+      intent: makeIntent(),
+      diff: makeDiff(),
+      heuristics: [tsHint],
+    });
+    expect(out).toContain("- **Unhandled promise rejection**:");
+  });
+
+  test("prompt instructs LLM not to comment if pattern is absent", () => {
+    const out = buildUserMessage({
+      intent: makeIntent(),
+      diff: makeDiff(),
+      heuristics: [tsHint],
+    });
+    expect(out).toContain("Do not comment if they are not present.");
   });
 });
 
