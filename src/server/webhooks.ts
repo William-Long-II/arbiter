@@ -25,6 +25,7 @@ import { recordUsage } from "../review/usage";
 import { log } from "./logger";
 import {
   incAnthropicTokens,
+  incDraftSkipped,
   incReviewFailures,
   incReviewsTotal,
   incThreadReply,
@@ -56,7 +57,7 @@ type PrRef = {
   headSha: string;
 };
 
-type TriggerSource = "check-suite" | "label" | "mention";
+type TriggerSource = "check-suite" | "label" | "mention" | "ready-for-review";
 
 type PipelineDeps = {
   octokit: Octokit;
@@ -80,6 +81,17 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
       log.debug("skip: repo not allowlisted", { deliveryId: id, repo });
       return;
     }
+    if (payload.pull_request.draft === true) {
+      log.info("skip.draft", {
+        evt: "skip.draft",
+        deliveryId: id,
+        repo,
+        pr: payload.pull_request.number,
+        headSha: payload.pull_request.head.sha,
+      });
+      incDraftSkipped();
+      return;
+    }
     log.info("pull_request.opened", {
       deliveryId: id,
       repo,
@@ -92,6 +104,17 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
     const repo = payload.repository.full_name;
     const allowlist = getAllowlist();
     if (!allowlist.isAllowed(repo)) return;
+    if (payload.pull_request.draft === true) {
+      log.info("skip.draft", {
+        evt: "skip.draft",
+        deliveryId: id,
+        repo,
+        pr: payload.pull_request.number,
+        headSha: payload.pull_request.head.sha,
+      });
+      incDraftSkipped();
+      return;
+    }
     log.info("pull_request.synchronize", {
       deliveryId: id,
       repo,
@@ -105,10 +128,57 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
     const repo = payload.repository.full_name;
     const allowlist = getAllowlist();
     if (!allowlist.isAllowed(repo)) return;
+    if (payload.pull_request.draft === true) {
+      log.info("skip.draft", {
+        evt: "skip.draft",
+        deliveryId: id,
+        repo,
+        pr: payload.pull_request.number,
+        headSha: payload.pull_request.head.sha,
+      });
+      incDraftSkipped();
+      return;
+    }
     log.info("pull_request.reopened", {
       deliveryId: id,
       repo,
       pr: payload.pull_request.number,
+    });
+  });
+
+  webhooks.on("pull_request.ready_for_review", async ({ id, payload }) => {
+    const repoFull = payload.repository.full_name;
+    const entry = getAllowlist().getEffectiveConfig(repoFull);
+    if (!entry?.enabled) {
+      log.debug("skip: repo not allowlisted", { deliveryId: id, repo: repoFull });
+      return;
+    }
+
+    const [owner, name] = repoFull.split("/");
+    if (!owner || !name) return;
+
+    const ref: PrRef = {
+      owner,
+      repo: name,
+      pullNumber: payload.pull_request.number,
+      headSha: payload.pull_request.head.sha,
+    };
+
+    log.info("pull_request.ready_for_review", {
+      deliveryId: id,
+      repo: repoFull,
+      pr: ref.pullNumber,
+      headSha: ref.headSha,
+    });
+
+    await triggerExplicit(ref, repoFull, {
+      octokit,
+      anthropic,
+      selfLogin,
+      jiraCreds,
+      deliveryId: id,
+      source: "ready-for-review",
+      entry,
     });
   });
 

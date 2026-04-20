@@ -256,6 +256,13 @@ registry.registerCounter(
   "Total thread replies suppressed by the per-thread rate limit.",
 );
 
+/** PRs skipped because they were in draft state. */
+export const draftSkippedTotal = "reviewme_draft_skipped_total";
+registry.registerCounter(
+  draftSkippedTotal,
+  "Total PR events skipped because the pull request was in draft state.",
+);
+
 // --- Histograms ---
 
 /** Seconds spent draining in-flight tasks on SIGTERM before process.exit(). */
@@ -349,6 +356,10 @@ export function incThreadReply(outcome: "sent" | "error"): void {
 
 export function incThreadRateLimited(): void {
   registry.incrementCounter(threadRateLimitedTotal);
+}
+
+export function incDraftSkipped(): void {
+  registry.incrementCounter(draftSkippedTotal);
 }
 
 // ---------------------------------------------------------------------------

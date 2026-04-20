@@ -11,6 +11,7 @@ An intent-aware GitHub pull-request review bot. Listens for webhooks, waits unti
 5. The review is posted as a GitHub review — `APPROVE` for clean PRs, `COMMENT` with inline feedback when there's something to call out. It never uses `REQUEST_CHANGES`.
 6. If a human replies to a bot line-comment, the bot replies once in-thread (capped at three replies per thread; `/stop` in a reply ends the thread permanently).
 7. Per-repo config (with org-level defaults) decides whether re-reviews trigger automatically on every push (`auto-on-sync`) or only when a reviewer applies a label or mentions `/review-me` in a comment (`label-or-mention`).
+8. Draft PRs are skipped entirely — the bot does not review them until the author marks the PR as ready for review, at which point the normal CI-gate flow runs.
 
 ---
 
@@ -341,6 +342,7 @@ JSON to stdout — route via journald, Fluent Bit, Vector, etc. Every log payloa
 | `reviewme_ratelimit_rejected_total` | counter | `installation` |
 | `reviewme_shutdown_drain_seconds` | histogram | — |
 | `reviewme_config_reload_total` | counter | `result` |
+| `reviewme_draft_skipped_total` | counter | — |
 
 Example Prometheus scrape config:
 
