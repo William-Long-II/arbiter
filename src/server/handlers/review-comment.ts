@@ -124,13 +124,23 @@ export async function handleReviewCommentCreated(
     return;
   }
 
-  // 7. Fetch PR title/body for intent resolution.
+  // 7. Fetch PR title/body for intent resolution; also check draft status.
   let prTitle = "";
   let prBody = "";
   try {
     const prResp = await withRetry(() =>
       octokit.pulls.get({ owner, repo, pull_number: pullNumber }),
     );
+    // Defensive: GitHub does not normally fire review comments on draft PRs, but
+    // guard here anyway since the check is cheap and avoids wasteful LLM calls.
+    if (prResp.data.draft === true) {
+      log.info("thread reply skipped: PR is draft", {
+        evt: "skip.draft",
+        repo: repoFull,
+        pr: pullNumber,
+      });
+      return;
+    }
     prTitle = prResp.data.title ?? "";
     prBody = prResp.data.body ?? "";
   } catch (err) {
