@@ -165,6 +165,8 @@ Open a pull request on a repo in your allowlist. Once CI goes green, within ~60 
 | `USAGE_LOG_DIR` | no | `./var/usage` | Directory for JSONL per-review token-usage records |
 | `DEAD_LETTER_DIR` | no | `./var/dead-letter` | Directory for events that exhaust the handler |
 | `DEAD_LETTER_RETENTION_DAYS` | no | `30` | Retention for dead-letter date-dirs |
+| `AUDIT_LOG_DIR` | no | `./var/audit` | Directory for prompt + LLM-response audit records; set to `disabled` to suppress writes |
+| `AUDIT_RETENTION_DAYS` | no | `7` | Retention for audit date-dirs |
 | `METRICS_BIND_TOKEN` | no | — | If set, `GET /metrics` requires `Authorization: Bearer <token>` |
 
 ### `repos.yaml` schema
@@ -374,6 +376,7 @@ scrape_configs:
 
 - Per-review token usage is appended to `var/usage/YYYY-MM.jsonl` (set `USAGE_LOG_DIR` to relocate). Summarize with `bun run scripts/usage-report.ts --since 7d`.
 - Events that escape the handler land in `var/dead-letter/YYYY-MM-DD/<delivery-id>.json`. Replay with `bun run scripts/replay-dead-letter.ts <file>`.
+- Prompt audit records (system prompt, user prompt, raw LLM response) land in `var/audit/YYYY-MM-DD/<owner>__<repo>_<pr>_<headSha>_<mode>.json` (set `AUDIT_LOG_DIR` to relocate, or `disabled` to turn off). Retained for `AUDIT_RETENTION_DAYS` (default 7) days; locate a specific review by repo slug, PR number, and head SHA.
 
 ---
 
