@@ -3,9 +3,31 @@ import { createOctokit, fetchAuthenticatedLogin } from "../github";
 import { createAnthropic } from "../review";
 import { sweepDeadLetters, writeDeadLetter } from "./dead-letter";
 import { log } from "./logger";
-import { buildMetricsHandler, incWebhookReceived } from "./metrics";
+import {
+  buildMetricsHandler,
+  incWebhookReceived,
+  incWebhookReplay,
+  incWebhookUnknownEvent,
+} from "./metrics";
 import { QueueFullError } from "./queue";
+import { replayCache } from "./replay-cache";
 import { createWebhooks } from "./webhooks";
+
+/**
+ * GitHub event names the bot actually handles.  Any other event arriving at
+ * the webhook endpoint is rejected with 400 before signature verification
+ * consumes CPU, so operators can see misconfigurations early.
+ *
+ * `ping` is sent by GitHub when a webhook is first created/updated and must
+ * always be accepted.
+ */
+const KNOWN_EVENTS = new Set([
+  "pull_request",
+  "check_suite",
+  "issue_comment",
+  "pull_request_review_comment",
+  "ping",
+]);
 
 const config = loadConfig();
 const allowlist = loadAllowlist(config.reposPath);
@@ -78,8 +100,48 @@ async function handleWebhook(
     return new Response("missing required headers", { status: 400 });
   }
 
+  // Reject unknown events before doing any signature work so misconfigurations
+  // are visible early and don't burn CPU on crypto verification.
+  if (!KNOWN_EVENTS.has(name)) {
+    log.warn("webhook rejected: unknown event", {
+      evt: "webhook.unknown_event",
+      event: name,
+      delivery_id: id,
+    });
+    incWebhookUnknownEvent(name);
+    return new Response("unknown event", { status: 400 });
+  }
+
   const payload = await req.text();
   incWebhookReceived(name);
+
+  // Pre-verify the signature independently before touching the replay cache.
+  // We use webhooks.verify() (standalone, synchronous-equivalent) so that:
+  //   1. Signature errors return 401 cleanly without inserting into the cache.
+  //   2. We can insert into the cache BEFORE dispatching the event, so that
+  //      a second concurrent request with the same ID arriving during a slow
+  //      handler is still rejected.
+  // This is why we split verify + dispatch instead of calling verifyAndReceive
+  // alone — verifyAndReceive runs handlers inline, making it impossible to
+  // intercept between verification and dispatch.
+  const signatureValid = await webhooks.verify(payload, signature);
+  if (!signatureValid) {
+    log.warn("webhook signature rejected", { deliveryId: id });
+    return new Response("invalid signature", { status: 401 });
+  }
+
+  // Replay check: insert delivery ID into the nonce cache.  If the ID is
+  // already present and unexpired, the request is a replay.
+  const { fresh } = replayCache.tryInsert(id);
+  if (!fresh) {
+    log.warn("webhook replay detected", {
+      evt: "webhook.replay",
+      delivery_id: id,
+      event: name,
+    });
+    incWebhookReplay();
+    return new Response("duplicate delivery", { status: 409 });
+  }
 
   try {
     await webhooks.verifyAndReceive({
@@ -95,7 +157,10 @@ async function handleWebhook(
     }
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes("signature does not match")) {
-      log.warn("webhook signature rejected", { deliveryId: id });
+      // This path is effectively unreachable now that we pre-verify above, but
+      // we keep it as a defensive fallback in case the library's internal
+      // verification disagrees with the standalone verify() call.
+      log.warn("webhook signature rejected (double-check)", { deliveryId: id });
       return new Response("invalid signature", { status: 401 });
     }
     log.error("webhook processing error", { deliveryId: id, error: message });

@@ -244,6 +244,22 @@ registry.registerHistogram(
   "Seconds elapsed waiting for CI gate to pass.",
 );
 
+// --- Replay-protection counters ---
+
+/** Webhook deliveries rejected as replays (duplicate delivery ID). */
+export const webhookReplayTotal = "reviewme_webhook_replay_total";
+registry.registerCounter(
+  webhookReplayTotal,
+  "Total webhook deliveries rejected as replays (duplicate delivery ID within TTL).",
+);
+
+/** Webhook deliveries rejected because the event name is not recognised. */
+export const webhookUnknownEventTotal = "reviewme_webhook_unknown_event_total";
+registry.registerCounter(
+  webhookUnknownEventTotal,
+  "Total webhook deliveries rejected because the X-GitHub-Event is not handled.",
+);
+
 // ---------------------------------------------------------------------------
 // Convenience wrappers used by instrumented call-sites
 // ---------------------------------------------------------------------------
@@ -270,6 +286,14 @@ export function observeReviewDuration(seconds: number): void {
 
 export function observeCiWaitSeconds(seconds: number): void {
   registry.observeHistogram(ciWaitSeconds, seconds);
+}
+
+export function incWebhookReplay(): void {
+  registry.incrementCounter(webhookReplayTotal, {});
+}
+
+export function incWebhookUnknownEvent(event: string): void {
+  registry.incrementCounter(webhookUnknownEventTotal, { event });
 }
 
 // ---------------------------------------------------------------------------
