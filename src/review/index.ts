@@ -1,46 +1,43 @@
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type Anthropic from "@anthropic-ai/sdk";
-import type { PullRequestDiff } from "../github";
-import type { Intent } from "../jira";
-import type { RepoReviewConfig } from "../config/repos";
 import { buildUserMessage, SYSTEM_PROMPT } from "./prompt";
-import { ReviewResultSchema, type ReviewResult } from "./schema";
+import { ReviewResultSchema } from "./schema";
 import { filterDiff } from "./diff-filter";
 import { withRetry } from "../util/retry";
+import { runChunkedReview } from "./synthesize";
+import {
+  DEFAULT_MODEL,
+  DEFAULT_MAX_TOKENS,
+  DEFAULT_MAX_DIFF_CHARS,
+  type RunReviewInput,
+  type RunReviewOptions,
+  type RunReviewOutput,
+} from "./types";
 
-export const DEFAULT_MODEL = "claude-opus-4-7";
-export const DEFAULT_MAX_TOKENS = 16_000;
-export const DEFAULT_MAX_DIFF_CHARS = 150_000;
+export { DEFAULT_MODEL, DEFAULT_MAX_TOKENS, DEFAULT_MAX_DIFF_CHARS };
+export type { RunReviewInput, RunReviewOptions, RunReviewOutput };
 
-export type RunReviewInput = {
-  intent: Intent;
-  diff: PullRequestDiff;
-  /** Per-repo filter config from `repos.yaml`. When absent, only built-in
-   *  rules (lockfiles, binaries, etc.) are applied. */
-  reviewConfig?: RepoReviewConfig;
-};
+/** Valid values for the REVIEW_MODE environment variable. */
+export type ReviewMode = "auto" | "single" | "chunked";
 
-export type RunReviewOptions = {
-  model?: string;
-  maxTokens?: number;
-  maxDiffChars?: number;
-};
-
-export type RunReviewOutput = {
-  result: ReviewResult;
-  warnings: string[];
-  usage?: {
-    inputTokens: number;
-    outputTokens: number;
-    cacheCreationInputTokens?: number;
-    cacheReadInputTokens?: number;
-  };
-};
+/**
+ * Reads REVIEW_MODE from the environment. Falls back to "auto".
+ * Any unrecognised value is treated as "auto" so operator mistakes
+ * never break the pipeline.
+ */
+export function getReviewMode(): ReviewMode {
+  const raw = process.env["REVIEW_MODE"];
+  if (raw === "single" || raw === "chunked") return raw;
+  return "auto";
+}
 
 /**
  * Runs the LLM review pass and returns a structured verdict.
- * Fails open with a single summary-only comment when the diff is too large
- * to review effectively — the bot will never block a PR that overflows.
+ *
+ * Routing:
+ * - REVIEW_MODE=single (or auto + small diff) → single-pass as before.
+ * - REVIEW_MODE=chunked (or auto + large diff) → two-pass summarize-synthesize.
+ * - REVIEW_MODE=single + large diff → fail-open (explicit operator opt-out).
  */
 export async function runReview(
   anthropic: Anthropic,
@@ -50,6 +47,7 @@ export async function runReview(
   const model = options.model ?? DEFAULT_MODEL;
   const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
   const maxDiffChars = options.maxDiffChars ?? DEFAULT_MAX_DIFF_CHARS;
+  const mode = getReviewMode();
 
   // Filter out lockfiles, binaries, and generated files before measuring size
   // or building the prompt.  Per-repo glob overrides come from repos.yaml.
@@ -66,7 +64,19 @@ export async function runReview(
     0,
   );
 
-  if (diffSize > maxDiffChars) {
+  const isLarge = diffSize > maxDiffChars;
+
+  // Determine which path to take.
+  const useChunked =
+    mode === "chunked" || (mode === "auto" && isLarge);
+
+  if (useChunked) {
+    return runChunkedReview(anthropic, input, options);
+  }
+
+  // Single-pass path (mode === "single" or auto + small diff).
+  if (mode === "single" && isLarge) {
+    // Operator explicitly opted into single-pass despite size — fail open.
     return {
       result: {
         verdict: "comment",

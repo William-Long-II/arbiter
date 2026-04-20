@@ -1,8 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, spyOn, beforeEach, afterEach } from "bun:test";
 import type Anthropic from "@anthropic-ai/sdk";
 import type { PullRequestDiff } from "../src/github";
 import type { Intent } from "../src/jira";
 import { runReview, type ReviewResult } from "../src/review";
+import * as synthesizeModule from "../src/review/synthesize";
+import * as usageModule from "../src/review/usage";
 
 function makeDiff(patchChars: number): PullRequestDiff {
   return {
@@ -56,7 +58,127 @@ function stubAnthropicReturning(result: ReviewResult) {
   return { stub, calls };
 }
 
-describe("runReview", () => {
+describe("runReview — REVIEW_MODE routing", () => {
+  let originalMode: string | undefined;
+  let recordUsageSpy: ReturnType<typeof spyOn<typeof usageModule, "recordUsage">>;
+
+  beforeEach(() => {
+    originalMode = process.env["REVIEW_MODE"];
+    recordUsageSpy = spyOn(usageModule, "recordUsage").mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    if (originalMode === undefined) {
+      delete process.env["REVIEW_MODE"];
+    } else {
+      process.env["REVIEW_MODE"] = originalMode;
+    }
+    recordUsageSpy.mockRestore();
+  });
+
+  test("default mode (auto) + small diff → single-pass path, no runChunkedReview", async () => {
+    delete process.env["REVIEW_MODE"];
+    const chunkedSpy = spyOn(synthesizeModule, "runChunkedReview");
+
+    const { stub } = stubAnthropicReturning({
+      verdict: "approve",
+      summary: "looks good",
+      lineComments: [],
+    });
+
+    const out = await runReview(stub, { intent, diff: makeDiff(100) });
+
+    expect(out.result.verdict).toBe("approve");
+    expect(chunkedSpy).not.toHaveBeenCalled();
+    chunkedSpy.mockRestore();
+  });
+
+  test("REVIEW_MODE=single + large diff → fail-open (old behavior preserved)", async () => {
+    process.env["REVIEW_MODE"] = "single";
+    const chunkedSpy = spyOn(synthesizeModule, "runChunkedReview");
+
+    const { stub, calls } = stubAnthropicReturning({
+      verdict: "approve",
+      summary: "should not be called",
+      lineComments: [],
+    });
+
+    const out = await runReview(stub, { intent, diff: makeDiff(500) }, { maxDiffChars: 100 });
+
+    expect(calls).toHaveLength(0); // LLM not invoked
+    expect(chunkedSpy).not.toHaveBeenCalled();
+    expect(out.result.verdict).toBe("comment");
+    expect(out.result.summary).toContain("too large for automated review");
+    chunkedSpy.mockRestore();
+  });
+
+  test("REVIEW_MODE=chunked + small diff → forces chunked path", async () => {
+    process.env["REVIEW_MODE"] = "chunked";
+
+    const { stub, calls } = stubAnthropicReturning({
+      verdict: "approve",
+      summary: "looks good",
+      lineComments: [],
+    });
+
+    // Mock runChunkedReview to avoid actually running it.
+    const chunkedSpy = spyOn(synthesizeModule, "runChunkedReview").mockResolvedValue({
+      result: { verdict: "approve", summary: "chunked result", lineComments: [] },
+      warnings: [],
+    });
+
+    const out = await runReview(stub, { intent, diff: makeDiff(100) });
+
+    expect(chunkedSpy).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveLength(0); // single-pass LLM not invoked
+    expect(out.result.summary).toBe("chunked result");
+    chunkedSpy.mockRestore();
+  });
+
+  test("REVIEW_MODE=auto + large diff → chunked path", async () => {
+    delete process.env["REVIEW_MODE"];
+
+    const { stub, calls } = stubAnthropicReturning({
+      verdict: "approve",
+      summary: "should not be called",
+      lineComments: [],
+    });
+
+    const chunkedSpy = spyOn(synthesizeModule, "runChunkedReview").mockResolvedValue({
+      result: { verdict: "comment", summary: "chunked for large", lineComments: [] },
+      warnings: [],
+    });
+
+    const out = await runReview(
+      stub,
+      { intent, diff: makeDiff(500) },
+      { maxDiffChars: 100 },
+    );
+
+    expect(chunkedSpy).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveLength(0);
+    expect(out.result.summary).toBe("chunked for large");
+    chunkedSpy.mockRestore();
+  });
+});
+
+describe("runReview — single-pass behavior", () => {
+  let originalMode: string | undefined;
+
+  beforeEach(() => {
+    originalMode = process.env["REVIEW_MODE"];
+    // Pin to single-pass for these tests so auto-routing doesn't interfere.
+    process.env["REVIEW_MODE"] = "single";
+  });
+
+  afterEach(() => {
+    if (originalMode === undefined) {
+      delete process.env["REVIEW_MODE"];
+    } else {
+      process.env["REVIEW_MODE"] = originalMode;
+    }
+  });
+
   test("returns the LLM's parsed verdict on a normal-sized diff", async () => {
     const { stub, calls } = stubAnthropicReturning({
       verdict: "approve",

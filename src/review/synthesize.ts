@@ -1,0 +1,421 @@
+import { z } from "zod";
+import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
+import type Anthropic from "@anthropic-ai/sdk";
+import { ReviewResultSchema } from "./schema";
+import { planReview, toFileDiffs, DEFAULT_BATCH_BUDGET_CHARS } from "./chunker";
+import type { FileDiff } from "./chunker";
+import { buildUserMessage, SYSTEM_PROMPT } from "./prompt";
+import { withRetry } from "../util/retry";
+import { recordUsage } from "./usage";
+import {
+  DEFAULT_MODEL,
+  DEFAULT_MAX_TOKENS,
+  type RunReviewInput,
+  type RunReviewOutput,
+  type RunReviewOptions,
+} from "./types";
+import { filterDiff } from "./diff-filter";
+import { log } from "../server/logger";
+
+// ─── Pass-1 schema ───────────────────────────────────────────────────────────
+
+const FileSummarySchema = z.object({
+  path: z.string().describe("Repository-relative file path."),
+  risks: z
+    .array(z.string())
+    .describe("Security, correctness, or data-integrity risks."),
+  suspected_bugs: z
+    .array(z.string())
+    .describe("Likely bugs or logic errors observed in this file."),
+  missing_tests: z
+    .array(z.string())
+    .describe("Specific code paths or branches that lack test coverage."),
+  notable_changes: z
+    .array(z.string())
+    .describe(
+      "Key changes worth highlighting to the pass-2 synthesizer (e.g. API surface changes, algorithm changes).",
+    ),
+});
+
+export type FileSummary = z.infer<typeof FileSummarySchema>;
+
+const BatchSummarySchema = z.object({
+  file_summaries: z
+    .array(FileSummarySchema)
+    .describe("One entry per file in this batch."),
+});
+
+export type BatchSummary = z.infer<typeof BatchSummarySchema>;
+
+// ─── Hunk validation ─────────────────────────────────────────────────────────
+
+/**
+ * Parses `@@ -a,b +c,d @@` hunk headers and returns the set of new-file line
+ * numbers that appear in the diff hunk (lines c through c+d-1 inclusive).
+ *
+ * Only lines whose patch representation starts with `+` (added) or ` ` (context)
+ * are counted — those are the lines that actually exist in the new file.
+ */
+export function validLinesInPatch(patch: string): Set<number> {
+  const valid = new Set<number>();
+  if (!patch) return valid;
+
+  const hunkHeaderRe = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
+  let currentLine = 0;
+
+  for (const rawLine of patch.split("\n")) {
+    const headerMatch = hunkHeaderRe.exec(rawLine);
+    if (headerMatch) {
+      currentLine = parseInt(headerMatch[1]!, 10);
+      continue;
+    }
+
+    if (rawLine.startsWith("-")) {
+      // Deleted line: exists in old file only, no new-file line number to advance.
+      continue;
+    }
+
+    if (rawLine.startsWith("+") || rawLine.startsWith(" ") || rawLine === "") {
+      // Added or context line: exists in new file.
+      valid.add(currentLine);
+      currentLine++;
+    }
+  }
+
+  return valid;
+}
+
+// ─── Pass-1 helpers ──────────────────────────────────────────────────────────
+
+function buildBatchUserMessage(
+  batch: FileDiff[],
+  intentSection: string,
+): string {
+  const parts: string[] = [
+    intentSection,
+    "",
+    "## Files in this batch",
+  ];
+
+  for (const file of batch) {
+    parts.push("");
+    parts.push(
+      `### ${file.path} (${file.status}, +${file.additions} / -${file.deletions})`,
+    );
+    if (file.previous_path) {
+      parts.push(`Renamed from: ${file.previous_path}`);
+    }
+    parts.push("```diff");
+    parts.push(file.patch || "// no patch available");
+    parts.push("```");
+  }
+
+  return parts.join("\n");
+}
+
+const BATCH_SYSTEM_PROMPT = `You are review-me, an intent-aware pull-request reviewer performing the first pass of a two-pass review.
+
+Your job for this pass: summarize each file's key changes, risks, suspected bugs, and missing test coverage. Be precise and terse. Do not produce a final verdict — that comes in pass two.
+
+Rules:
+- Output only the fields defined by the schema. No preamble.
+- Every file in the batch must have an entry in file_summaries.
+- risks: security, correctness, data-integrity concerns you actually see in the patch.
+- suspected_bugs: concrete logic errors, off-by-ones, wrong error handling.
+- missing_tests: only call out paths that are genuinely untested (not general "add more tests").
+- notable_changes: API surface changes, algorithm swaps, schema changes — things the synthesizer needs to know for cross-file reasoning.
+- Keep each list item to one sentence.`;
+
+// ─── Pass-2 helpers ──────────────────────────────────────────────────────────
+
+function buildSynthesisUserMessage(
+  intentSection: string,
+  batchSummaries: BatchSummary[],
+): string {
+  const parts: string[] = [
+    intentSection,
+    "",
+    "## File-by-file summaries (from pass 1)",
+  ];
+
+  for (const summary of batchSummaries) {
+    for (const fs of summary.file_summaries) {
+      parts.push("");
+      parts.push(`### ${fs.path}`);
+      if (fs.notable_changes.length > 0) {
+        parts.push("**Notable changes:**");
+        for (const c of fs.notable_changes) parts.push(`- ${c}`);
+      }
+      if (fs.risks.length > 0) {
+        parts.push("**Risks:**");
+        for (const r of fs.risks) parts.push(`- ${r}`);
+      }
+      if (fs.suspected_bugs.length > 0) {
+        parts.push("**Suspected bugs:**");
+        for (const b of fs.suspected_bugs) parts.push(`- ${b}`);
+      }
+      if (fs.missing_tests.length > 0) {
+        parts.push("**Missing tests:**");
+        for (const t of fs.missing_tests) parts.push(`- ${t}`);
+      }
+    }
+  }
+
+  parts.push("");
+  parts.push(
+    "Synthesize the above summaries into a final review verdict and line comments. " +
+      "Only emit line comments for lines that exist in the actual diff hunks you can reason about from the summaries.",
+  );
+
+  return parts.join("\n");
+}
+
+/** Extracts just the intent + PR header section from buildUserMessage output. */
+function buildIntentSection(input: RunReviewInput): string {
+  // We only need the intent + PR description blocks — not the diff section.
+  // buildUserMessage produces that naturally; we just strip the ## Diff block.
+  const full = buildUserMessage({
+    intent: input.intent,
+    diff: input.diff,
+  });
+  const diffIdx = full.indexOf("\n## Diff");
+  return diffIdx >= 0 ? full.slice(0, diffIdx) : full;
+}
+
+// ─── Concurrency helper ───────────────────────────────────────────────────────
+
+const BATCH_CONCURRENCY = 3;
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  fn: (item: T, index: number) => Promise<R>,
+  concurrency: number,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+
+  for (let i = 0; i < items.length; i += concurrency) {
+    const slice = items.slice(i, i + concurrency);
+    const sliceResults = await Promise.all(
+      slice.map((item, j) => fn(item, i + j)),
+    );
+    for (let j = 0; j < sliceResults.length; j++) {
+      results[i + j] = sliceResults[j]!;
+    }
+  }
+
+  return results;
+}
+
+// ─── Public entry point ───────────────────────────────────────────────────────
+
+/**
+ * Two-pass chunked review for large PRs:
+ *   Pass 1 — summarize each batch of files in parallel (up to 3 concurrent).
+ *   Pass 2 — synthesize all summaries into a final `ReviewResult`.
+ *
+ * Fails the entire review (throws) if any pass-1 batch fails — partial
+ * synthesis would produce unreliable results. Pass-2 overflow is single-shot;
+ * we log a warning if it occurs.
+ */
+export async function runChunkedReview(
+  anthropic: Anthropic,
+  input: RunReviewInput,
+  options: RunReviewOptions = {},
+): Promise<RunReviewOutput> {
+  const model = options.model ?? DEFAULT_MODEL;
+  const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
+
+  // Apply the same diff filter as the single-pass path so we skip lockfiles etc.
+  const filterResult = filterDiff(input.diff.files, {
+    include: input.reviewConfig?.include_paths,
+    exclude: input.reviewConfig?.exclude_paths,
+  });
+
+  const omittedPaths = new Set(filterResult.omitted.map((o) => o.path));
+  const keptFiles = input.diff.files.filter(
+    (f) => !omittedPaths.has(f.filename),
+  );
+
+  const fileDiffs = toFileDiffs(keptFiles);
+  const plan = planReview(fileDiffs, DEFAULT_BATCH_BUDGET_CHARS);
+
+  log.info("[chunked-review] pass-1 starting", {
+    pr: `${input.diff.owner}/${input.diff.repo}#${input.diff.number}`,
+    batches: plan.batches.length,
+    files: fileDiffs.length,
+  });
+
+  const intentSection = buildIntentSection(input);
+
+  // ── Pass 1: summarize each batch ─────────────────────────────────────────
+
+  // Aggregate usage across all pass-1 calls.
+  let pass1InputTokens = 0;
+  let pass1OutputTokens = 0;
+  let pass1CacheCreation = 0;
+  let pass1CacheRead = 0;
+
+  const batchSummaries = await mapWithConcurrency(
+    plan.batches,
+    async (batch, batchIdx) => {
+      log.info("[chunked-review] pass-1 batch start", {
+        batchIdx,
+        files: batch.map((f) => f.path),
+      });
+
+      const userMessage = buildBatchUserMessage(batch, intentSection);
+
+      const response = await withRetry(() =>
+        anthropic.messages.parse({
+          model,
+          max_tokens: maxTokens,
+          system: [
+            {
+              type: "text",
+              text: BATCH_SYSTEM_PROMPT,
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+          messages: [{ role: "user", content: userMessage }],
+          output_config: {
+            format: zodOutputFormat(BatchSummarySchema),
+          },
+        }),
+      );
+
+      if (!response.parsed_output) {
+        throw new Error(
+          `[chunked-review] pass-1 batch ${batchIdx}: LLM returned a response that did not match the schema`,
+        );
+      }
+
+      pass1InputTokens += response.usage.input_tokens;
+      pass1OutputTokens += response.usage.output_tokens;
+      pass1CacheCreation += response.usage.cache_creation_input_tokens ?? 0;
+      pass1CacheRead += response.usage.cache_read_input_tokens ?? 0;
+
+      log.info("[chunked-review] pass-1 batch end", {
+        batchIdx,
+        files: batch.map((f) => f.path),
+      });
+
+      return response.parsed_output as BatchSummary;
+    },
+    BATCH_CONCURRENCY,
+  );
+
+  // Record pass-1 usage.
+  await recordUsage({
+    repo: `${input.diff.owner}/${input.diff.repo}`,
+    pr: input.diff.number,
+    headSha: input.diff.headSha,
+    model,
+    verdict: "chunked_pass_1",
+    inputTokens: pass1InputTokens,
+    outputTokens: pass1OutputTokens,
+    cacheCreationTokens: pass1CacheCreation,
+    cacheReadTokens: pass1CacheRead,
+    pass: 1,
+  });
+
+  log.info("[chunked-review] pass-1 complete", {
+    pr: `${input.diff.owner}/${input.diff.repo}#${input.diff.number}`,
+    inputTokens: pass1InputTokens,
+    outputTokens: pass1OutputTokens,
+  });
+
+  // ── Pass 2: synthesize ────────────────────────────────────────────────────
+
+  log.info("[chunked-review] pass-2 starting", {
+    pr: `${input.diff.owner}/${input.diff.repo}#${input.diff.number}`,
+  });
+
+  const synthesisMessage = buildSynthesisUserMessage(intentSection, batchSummaries);
+
+  const synthesisResponse = await withRetry(() =>
+    anthropic.messages.parse({
+      model,
+      max_tokens: maxTokens,
+      system: [
+        {
+          type: "text",
+          text: SYSTEM_PROMPT,
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+      messages: [{ role: "user", content: synthesisMessage }],
+      output_config: {
+        format: zodOutputFormat(ReviewResultSchema),
+      },
+    }),
+  );
+
+  if (!synthesisResponse.parsed_output) {
+    throw new Error(
+      "[chunked-review] pass-2: LLM returned a response that did not match the schema",
+    );
+  }
+
+  const rawResult = synthesisResponse.parsed_output;
+
+  // Record pass-2 usage.
+  await recordUsage({
+    repo: `${input.diff.owner}/${input.diff.repo}`,
+    pr: input.diff.number,
+    headSha: input.diff.headSha,
+    model,
+    verdict: rawResult.verdict,
+    inputTokens: synthesisResponse.usage.input_tokens,
+    outputTokens: synthesisResponse.usage.output_tokens,
+    cacheCreationTokens:
+      synthesisResponse.usage.cache_creation_input_tokens ?? undefined,
+    cacheReadTokens:
+      synthesisResponse.usage.cache_read_input_tokens ?? undefined,
+    pass: 2,
+  });
+
+  log.info("[chunked-review] pass-2 complete", {
+    pr: `${input.diff.owner}/${input.diff.repo}#${input.diff.number}`,
+    verdict: rawResult.verdict,
+    inputTokens: synthesisResponse.usage.input_tokens,
+    outputTokens: synthesisResponse.usage.output_tokens,
+  });
+
+  // ── Validate line comments against actual diff hunks ──────────────────────
+
+  // Build a map of path → valid new-file line numbers from real diff hunks.
+  const validLinesByPath = new Map<string, Set<number>>();
+  for (const fd of fileDiffs) {
+    validLinesByPath.set(fd.path, validLinesInPatch(fd.patch));
+  }
+
+  const warnings: string[] = [];
+  const validatedComments = rawResult.lineComments.filter((comment) => {
+    const validLines = validLinesByPath.get(comment.path);
+    if (!validLines || !validLines.has(comment.line)) {
+      const warn = `[chunked-review] dropping line comment on ${comment.path}:${comment.line} — not in any diff hunk`;
+      log.warn(warn, { path: comment.path, line: comment.line });
+      warnings.push(warn);
+      return false;
+    }
+    return true;
+  });
+
+  return {
+    result: {
+      ...rawResult,
+      lineComments: validatedComments,
+    },
+    warnings,
+    usage: {
+      inputTokens: pass1InputTokens + synthesisResponse.usage.input_tokens,
+      outputTokens: pass1OutputTokens + synthesisResponse.usage.output_tokens,
+      cacheCreationInputTokens:
+        pass1CacheCreation +
+        (synthesisResponse.usage.cache_creation_input_tokens ?? 0),
+      cacheReadInputTokens:
+        pass1CacheRead +
+        (synthesisResponse.usage.cache_read_input_tokens ?? 0),
+    },
+  };
+}
