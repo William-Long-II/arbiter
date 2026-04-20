@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { PullRequestDiff } from "../src/github";
 import type { Intent } from "../src/jira";
 import { buildUserMessage } from "../src/review/prompt";
+import { filterDiff, OMITTED_FILES_SENTINEL } from "../src/review/diff-filter";
 
 function makeDiff(overrides: Partial<PullRequestDiff> = {}): PullRequestDiff {
   return {
@@ -95,5 +96,60 @@ describe("buildUserMessage", () => {
     });
     const out = buildUserMessage({ intent: makeIntent(), diff });
     expect(out).toContain("Renamed from: src/old.ts");
+  });
+});
+
+// ─── Prompt golden tests: OMITTED_FILES block ────────────────────────────────
+
+describe("buildUserMessage — OMITTED_FILES golden", () => {
+  test("OMITTED_FILES block is present when filtering happened", () => {
+    const diff = makeDiff({
+      files: [
+        {
+          filename: "package-lock.json",
+          status: "modified",
+          additions: 100,
+          deletions: 100,
+          changes: 200,
+          patch: "@@ -1 +1 @@\n+lock\n",
+        },
+        {
+          filename: "src/factory.ts",
+          status: "added",
+          additions: 10,
+          deletions: 0,
+          changes: 10,
+          patch: "@@ -0,0 +1,10 @@\n+export function build() {}\n",
+        },
+      ],
+    });
+    const filterResult = filterDiff(diff.files);
+    const out = buildUserMessage({ intent: makeIntent(), diff, filterResult });
+
+    // Sentinel must be present
+    expect(out).toContain(OMITTED_FILES_SENTINEL);
+    // Exact format: "- <path> (<reason>)"
+    expect(out).toContain("- package-lock.json (lockfile)");
+    // Lockfile must not appear in the diff section
+    const diffSectionStart = out.indexOf("## Diff");
+    const omittedSectionStart = out.indexOf(OMITTED_FILES_SENTINEL);
+    // OMITTED_FILES block should appear before ## Diff
+    expect(omittedSectionStart).toBeLessThan(diffSectionStart);
+    // Kept file should still be in the diff
+    expect(out).toContain("src/factory.ts");
+  });
+
+  test("OMITTED_FILES block is absent when no files are filtered", () => {
+    const diff = makeDiff(); // default: only src/factory.ts
+    const filterResult = filterDiff(diff.files);
+    const out = buildUserMessage({ intent: makeIntent(), diff, filterResult });
+
+    expect(out).not.toContain(OMITTED_FILES_SENTINEL);
+    expect(out).toContain("src/factory.ts");
+  });
+
+  test("OMITTED_FILES block is absent when filterResult is not passed", () => {
+    const out = buildUserMessage({ intent: makeIntent(), diff: makeDiff() });
+    expect(out).not.toContain(OMITTED_FILES_SENTINEL);
   });
 });

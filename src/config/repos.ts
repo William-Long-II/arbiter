@@ -2,10 +2,18 @@ import { readFileSync } from "node:fs";
 import YAML from "yaml";
 import { z } from "zod";
 
+const RepoReviewConfigSchema = z.object({
+  include_paths: z.array(z.string()).optional(),
+  exclude_paths: z.array(z.string()).optional(),
+});
+
+export type RepoReviewConfig = z.infer<typeof RepoReviewConfigSchema>;
+
 const RepoEntrySchema = z.object({
   enabled: z.boolean().default(true),
   rereview: z.enum(["auto-on-sync", "label-or-mention"]).default("auto-on-sync"),
   rereview_label: z.string().default("re-review"),
+  review: RepoReviewConfigSchema.optional(),
 });
 
 export type RepoEntry = z.infer<typeof RepoEntrySchema>;
