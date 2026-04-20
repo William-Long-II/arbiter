@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type Anthropic from "@anthropic-ai/sdk";
@@ -450,6 +451,14 @@ export async function runChunkedReview(
     return true;
   });
 
+  // Compute prompt hash from the pass-2 synthesis message — that is the final
+  // user message actually sent to the LLM and is the most meaningful fingerprint
+  // for traceability purposes.
+  const promptHash = createHash("sha256")
+    .update(synthesisMessage)
+    .digest("hex")
+    .slice(0, 12);
+
   return {
     result: {
       ...rawResult,
@@ -465,6 +474,15 @@ export async function runChunkedReview(
       cacheReadInputTokens:
         pass1CacheRead +
         (synthesisResponse.usage.cache_read_input_tokens ?? 0),
+    },
+    traceMetadata: {
+      headSha: input.diff.headSha,
+      model,
+      mode: "chunked" as const,
+      intentSource: input.intent.source,
+      intentRef: input.intent.ticketKey ?? "",
+      promptHash,
+      ts: new Date().toISOString(),
     },
   };
 }
