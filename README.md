@@ -6,7 +6,7 @@ An intent-aware GitHub pull-request review bot. Listens for webhooks, waits unti
 
 1. GitHub sends `pull_request.*`, `check_suite.completed`, `issue_comment.created`, and `pull_request_review_comment.created` webhooks to `/webhook`.
 2. For allowlisted repos, the bot waits until the check suite's aggregate status is green.
-3. It fetches the PR diff (rename-aware; lockfiles, binaries, and `linguist-generated` files stripped), resolves the intent from a pluggable provider chain (Jira → GitHub Issues → Linear, falling back to PR description), ingests the target repo's own conventions (`CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `.cursorrules`), and runs a Claude Opus 4.7 review.
+3. It fetches the PR diff (rename-aware; lockfiles, binaries, and `linguist-generated` files stripped), resolves the intent from a pluggable provider chain (Jira → GitHub Issues → Linear, falling back to PR description), ingests the target repo's own conventions (`CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `.cursorrules`), computes a deterministic test-coverage delta (added source lines vs. added test lines, plus flagged untested symbols), and runs a Claude Opus 4.7 review.
 4. For large PRs the reviewer runs a two-pass summarize-then-synthesize pipeline so the bot still produces actionable feedback where it would previously have failed open.
 5. The review is posted as a GitHub review — `APPROVE` for clean PRs, `COMMENT` with inline feedback when there's something to call out. It never uses `REQUEST_CHANGES`.
 6. If a human replies to a bot line-comment, the bot replies once in-thread (capped at three replies per thread; `/stop` in a reply ends the thread permanently).
@@ -320,6 +320,10 @@ Webhook ingress is token-bucketed per `X-GitHub-Hook-Installation-Target-ID` at 
 
 Delivery IDs are cached for 10 minutes after a successful signature verify. A second webhook with the same ID returns `409` even if the signature is valid. Unknown `X-GitHub-Event` values are rejected with `400` before signature verification.
 
+### Circuit breaker
+
+Calls to Anthropic are gated by a three-state circuit breaker. When the failure ratio exceeds 50% over a rolling 60-second window with at least 20 samples, the breaker **opens** for 60 seconds and new review requests short-circuit with a `CircuitOpenError` rather than queuing more retries. After the open window elapses, a single probe request is admitted (**half-open**); success closes the breaker, failure reopens it for another 60 seconds. Current state is observable via `reviewme_breaker_state{dep}` (see [Metrics](#metrics)).
+
 ### Secret rotation
 
 **Zero-downtime procedure** (no dropped deliveries):
@@ -360,6 +364,8 @@ JSON to stdout — route via journald, Fluent Bit, Vector, etc. Every log payloa
 | `reviewme_shutdown_drain_seconds` | histogram | — |
 | `reviewme_config_reload_total` | counter | `result` |
 | `reviewme_draft_skipped_total` | counter | — |
+| `reviewme_breaker_state` | gauge (via counter) | `dep` — `0` closed / `1` open / `2` half-open |
+| `reviewme_coverage_signal_total` | counter | `bucket` — `no_new_src` / `has_tests` / `untested` |
 
 Example Prometheus scrape config:
 
@@ -416,6 +422,7 @@ src/
   review/    # pipeline: conventions, diff filter, prompt, LLM call, chunker+synthesize
   config/    # env + repos.yaml loader with org-level defaults and SIGHUP reload
   util/      # retry with jitter, log redaction
+  review/    # ...also hosts: breaker (circuit breaker), audit (prompt + response records), coverage-delta (test-coverage heuristic)
 scripts/     # send-webhook, usage-report, replay-dead-letter, smoke, bench
 tests/       # unit + integration + e2e, plus golden fixtures
 ```
