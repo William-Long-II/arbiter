@@ -4,9 +4,6 @@ Title: Add widget factory
 
 This PR adds a factory function for creating widgets.
 
-### Intent warnings
-- no jira ticket key found in PR title, branch, or body
-
 ## Pull Request acme/widget#7
 Title: Add widget factory
 Changed files: 2 (+15 / -2)
