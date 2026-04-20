@@ -29,18 +29,29 @@ cp .env.example .env
 
 ### Configure allowlisted repos
 
-Edit `repos.yaml`:
+Edit `repos.yaml`. You can allow individual repos, or use org-level defaults to avoid repeating settings across repos in the same GitHub org:
 
 ```yaml
+# Org-level defaults — applied to every repo under that org unless overridden.
+orgs:
+  acme:
+    enabled: true
+    rereview: auto-on-sync
+    review:
+      exclude_paths: ["docs/**"]
+
+# Per-repo entries override any org default for that field.
 repos:
+  acme/legacy-service:
+    # Inherits acme org defaults; only rereview is overridden here.
+    rereview: label-or-mention
+    rereview_label: re-review
   acme/widget:
     enabled: true
     rereview: auto-on-sync
-  acme/legacy-service:
-    enabled: true
-    rereview: label-or-mention
-    rereview_label: re-review
 ```
+
+All fields in both `orgs.<name>` and `repos.<owner/name>` are optional. Resolution order for each field: explicit repo entry → org default → built-in default (`enabled: true`, `rereview: auto-on-sync`, `rereview_label: re-review`). Absence of the `orgs:` block is fully backward-compatible.
 
 Restart the bot after editing (the file is loaded at boot).
 
@@ -153,7 +164,7 @@ Configure GitHub's webhook URL as `https://your-host/review-me/webhook` and set:
       metrics_path: /metrics
   ```
 - **Secret rotation**: update `GITHUB_PAT` / `ANTHROPIC_API_KEY` / `GITHUB_WEBHOOK_SECRET` in the env file and restart. Rotate the webhook secret in GitHub simultaneously (signature mismatches during the swap will 401 briefly).
-- **Allowlist changes**: edit `repos.yaml` then send `SIGHUP` to the process — no restart required. The bot re-reads and validates the file atomically; if the file is unreadable or contains invalid YAML the old allowlist is kept in memory and the error is logged. Events already in flight when the signal arrives continue with the snapshot they started with; only new events pick up the refreshed allowlist.
+- **Allowlist changes**: edit `repos.yaml` then send `SIGHUP` to the process — no restart required. The bot re-reads and validates the file atomically; if the file is unreadable or contains invalid YAML the old allowlist is kept in memory and the error is logged. Events already in flight when the signal arrives continue with the snapshot they started with; only new events pick up the refreshed allowlist. Both `repos:` entries and `orgs:` org-level defaults are refreshed.
   - systemd: `sudo systemctl kill --kill-who=main --signal=SIGHUP review-me`
   - Docker: `docker kill --signal=SIGHUP <container>`
   - bare process: `kill -HUP <pid>`
@@ -185,6 +196,8 @@ The workflow does not build a Docker image or publish artifacts; those steps are
 | `ANTHROPIC_API_KEY` | yes | — | For the Claude review pass |
 | `REPOS_PATH` | no | `./repos.yaml` | Path to the allowlist file |
 | `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` | no | — | Enable Jira intent lookup when all three are set |
+| `LINEAR_API_KEY` | no | — | Enable Linear intent lookup; silently skipped when unset |
+| `INTENT_PROVIDERS` | no | `jira,github-issue,linear` | Comma-separated list of intent providers in priority order. First matching provider wins. Providers whose credentials are absent are automatically skipped. Set to an empty string to disable all providers (PR-body fallback only). |
 | `METRICS_BIND_TOKEN` | no | — | If set, `GET /metrics` requires `Authorization: Bearer <token>` |
 | `RATELIMIT_RPM` | no | `60` | Steady-state webhook allow rate per installation (requests/minute) |
 | `RATELIMIT_BURST` | no | `120` | Token-bucket burst capacity per installation |

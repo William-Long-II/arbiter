@@ -1,5 +1,6 @@
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type Anthropic from "@anthropic-ai/sdk";
+import type { Octokit } from "../github/client";
 import type { PullRequestDiff } from "../github";
 import type { Intent } from "../jira";
 import type { RepoReviewConfig } from "../config/repos";
@@ -7,6 +8,7 @@ import { buildUserMessage, SYSTEM_PROMPT } from "./prompt";
 import { ReviewResultSchema, type ReviewResult } from "./schema";
 import { filterDiff } from "./diff-filter";
 import { withRetry } from "../util/retry";
+import { fetchConventions } from "./conventions";
 
 export const DEFAULT_MODEL = "claude-opus-4-7";
 export const DEFAULT_MAX_TOKENS = 16_000;
@@ -15,6 +17,8 @@ export const DEFAULT_MAX_DIFF_CHARS = 150_000;
 export type RunReviewInput = {
   intent: Intent;
   diff: PullRequestDiff;
+  /** When provided, conventions are fetched from this repo before building the prompt. */
+  octokit?: Octokit;
   /** Per-repo filter config from `repos.yaml`. When absent, only built-in
    *  rules (lockfiles, binaries, etc.) are applied. */
   reviewConfig?: RepoReviewConfig;
@@ -66,6 +70,17 @@ export async function runReview(
     0,
   );
 
+  // Fetch repo conventions before building the user message.
+  // fetchConventions never throws; absent octokit → empty result.
+  const conventions = input.octokit
+    ? await fetchConventions({
+        octokit: input.octokit,
+        owner: input.diff.owner,
+        repo: input.diff.repo,
+        ref: input.diff.headSha,
+      })
+    : { sections: [], totalBytes: 0 };
+
   if (diffSize > maxDiffChars) {
     return {
       result: {
@@ -83,7 +98,7 @@ export async function runReview(
     };
   }
 
-  const userMessage = buildUserMessage({ ...input, filterResult });
+  const userMessage = buildUserMessage({ ...input, conventions, filterResult });
 
   const response = await withRetry(() =>
     anthropic.messages.parse({
@@ -123,6 +138,13 @@ export async function runReview(
 }
 
 export { buildUserMessage, SYSTEM_PROMPT } from "./prompt";
+export {
+  fetchConventions,
+  conventionsCache,
+  type ConventionsResult,
+  type ConventionSection,
+  type FetchConventionsInput,
+} from "./conventions";
 export { ReviewResultSchema, type ReviewResult, type LineComment } from "./schema";
 export { createAnthropic } from "./client";
 export { filterDiff, OMITTED_FILES_SENTINEL } from "./diff-filter";
