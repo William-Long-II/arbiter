@@ -339,6 +339,24 @@ registry.registerCounter(
   "Total review result cache lookups, by result (hit/miss).",
 );
 
+// --- Prompt-cache token counters ---
+
+/** Tokens served from Anthropic's prompt cache (cache hits). */
+export const promptCacheReadTokensTotal =
+  "reviewme_prompt_cache_read_tokens_total";
+registry.registerCounter(
+  promptCacheReadTokensTotal,
+  "Total Anthropic prompt-cache read tokens (cache hits) across all review passes.",
+);
+
+/** Tokens written to Anthropic's prompt cache (cache misses that seed the cache). */
+export const promptCacheCreationTokensTotal =
+  "reviewme_prompt_cache_creation_tokens_total";
+registry.registerCounter(
+  promptCacheCreationTokensTotal,
+  "Total Anthropic prompt-cache creation tokens (cache seeding) across all review passes.",
+);
+
 // --- Replay-protection counters ---
 
 /** Webhook deliveries rejected as replays (duplicate delivery ID). */
@@ -461,6 +479,14 @@ export function incSlashCommand(
   command: "help" | "skip" | "resume" | "re-review" | "unknown",
 ): void {
   registry.incrementCounter(slashCommandTotal, { command });
+}
+
+export function incPromptCacheRead(amount: number): void {
+  registry.incrementCounter(promptCacheReadTokensTotal, {}, amount);
+}
+
+export function incPromptCacheCreation(amount: number): void {
+  registry.incrementCounter(promptCacheCreationTokensTotal, {}, amount);
 }
 
 // ---------------------------------------------------------------------------

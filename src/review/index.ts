@@ -11,6 +11,7 @@ import { fetchConventions } from "./conventions";
 import { computeCoverageDelta } from "./coverage-delta";
 import { applicableHeuristics } from "./heuristics/index";
 import { incBudgetExhausted, incCoverageSignal, incReviewCache } from "../server/metrics";
+import { recordCacheTelemetry } from "./cache-telemetry";
 import { writeAuditRecord } from "./audit";
 import { resultCache } from "./result-cache";
 import { getWeeklyTokenSum } from "./budget";
@@ -257,6 +258,14 @@ export async function runReview(
     cacheReadInputTokens:
       response.usage.cache_read_input_tokens ?? undefined,
   };
+
+  recordCacheTelemetry({
+    repo: repoFull,
+    pr: input.diff.number,
+    headSha,
+    usage: response.usage,
+    mode: "single",
+  });
 
   await writeAuditRecord({
     repo: `${input.diff.owner}/${input.diff.repo}`,

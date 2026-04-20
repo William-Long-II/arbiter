@@ -6,6 +6,8 @@ import { runReview, type ReviewResult } from "../src/review";
 import { resultCache } from "../src/review/result-cache";
 import * as synthesizeModule from "../src/review/synthesize";
 import * as usageModule from "../src/review/usage";
+import * as loggerModule from "../src/server/logger";
+import * as metricsModule from "../src/server/metrics";
 
 function makeDiff(patchChars: number): PullRequestDiff {
   return {
@@ -57,6 +59,27 @@ function stubAnthropicReturning(result: ReviewResult) {
     },
   } as unknown as Anthropic;
   return { stub, calls };
+}
+
+function stubAnthropicWithCache(
+  result: ReviewResult,
+  cacheRead: number,
+  cacheCreation: number,
+) {
+  const stub = {
+    messages: {
+      parse: async () => ({
+        parsed_output: result,
+        usage: {
+          input_tokens: 100,
+          output_tokens: 50,
+          cache_read_input_tokens: cacheRead,
+          cache_creation_input_tokens: cacheCreation,
+        },
+      }),
+    },
+  } as unknown as Anthropic;
+  return stub;
 }
 
 describe("runReview — REVIEW_MODE routing", () => {
@@ -244,5 +267,80 @@ describe("runReview — single-pass behavior", () => {
     await expect(
       runReview(stub, { intent, diff: makeDiff(10) }),
     ).rejects.toThrow(/did not match the schema/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Prompt-cache telemetry integration
+// ---------------------------------------------------------------------------
+
+describe("runReview — prompt-cache telemetry", () => {
+  let originalMode: string | undefined;
+  let recordUsageSpy: ReturnType<typeof spyOn<typeof usageModule, "recordUsage">>;
+  let infoSpy: ReturnType<typeof spyOn>;
+  let readSpy: ReturnType<typeof spyOn>;
+  let creationSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    originalMode = process.env["REVIEW_MODE"];
+    process.env["REVIEW_MODE"] = "single";
+    resultCache.clear();
+    recordUsageSpy = spyOn(usageModule, "recordUsage").mockResolvedValue(undefined);
+    infoSpy = spyOn(loggerModule.log, "info").mockImplementation(() => {});
+    readSpy = spyOn(metricsModule, "incPromptCacheRead").mockImplementation(() => {});
+    creationSpy = spyOn(metricsModule, "incPromptCacheCreation").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    if (originalMode === undefined) {
+      delete process.env["REVIEW_MODE"];
+    } else {
+      process.env["REVIEW_MODE"] = originalMode;
+    }
+    recordUsageSpy.mockRestore();
+    infoSpy.mockRestore();
+    readSpy.mockRestore();
+    creationSpy.mockRestore();
+  });
+
+  test("single runReview call with cache hits → one prompt.cache log + counter bumped", async () => {
+    const stub = stubAnthropicWithCache(
+      { verdict: "approve", summary: "lgtm", lineComments: [] },
+      900,
+      0,
+    );
+
+    await runReview(stub, { intent, diff: makeDiff(100) });
+
+    const cacheLogs = infoSpy.mock.calls.filter(
+      (call: unknown[]) => (call[1] as Record<string, unknown>)?.evt === "prompt.cache",
+    );
+    expect(cacheLogs).toHaveLength(1);
+
+    const fields = cacheLogs[0]?.[1] as Record<string, unknown>;
+    expect(fields.cache_read_tokens).toBe(900);
+    expect(fields.cache_creation_tokens).toBe(0);
+    expect(fields.input_tokens).toBe(100);
+    expect(typeof fields.hit_ratio).toBe("number");
+
+    expect(readSpy).toHaveBeenCalledWith(900);
+    expect(creationSpy).toHaveBeenCalledWith(0);
+  });
+
+  test("single runReview call with zero cache tokens → no prompt.cache log", async () => {
+    const stub = stubAnthropicReturning({
+      verdict: "approve",
+      summary: "lgtm",
+      lineComments: [],
+    });
+
+    await runReview(stub.stub, { intent, diff: makeDiff(100) });
+
+    const cacheLogs = infoSpy.mock.calls.filter(
+      (call: unknown[]) => (call[1] as Record<string, unknown>)?.evt === "prompt.cache",
+    );
+    expect(cacheLogs).toHaveLength(0);
+    expect(readSpy).not.toHaveBeenCalled();
+    expect(creationSpy).not.toHaveBeenCalled();
   });
 });
