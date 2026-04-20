@@ -1,3 +1,4 @@
+import type { Octokit } from "../github/client";
 import type { PullRequestDiff } from "../github";
 import type { Intent } from "../jira";
 import type { RepoReviewConfig } from "../config/repos";
@@ -10,6 +11,8 @@ export const DEFAULT_MAX_DIFF_CHARS = 150_000;
 export type RunReviewInput = {
   intent: Intent;
   diff: PullRequestDiff;
+  /** When provided, conventions are fetched from this repo before building the prompt. */
+  octokit?: Octokit;
   /** Per-repo filter config from `repos.yaml`. When absent, only built-in
    *  rules (lockfiles, binaries, etc.) are applied. */
   reviewConfig?: RepoReviewConfig;

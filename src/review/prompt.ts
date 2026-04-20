@@ -1,5 +1,6 @@
 import type { PullRequestDiff } from "../github";
 import type { Intent } from "../jira";
+import type { ConventionsResult } from "./conventions";
 import type { FilterDiffResult } from "./diff-filter";
 import { OMITTED_FILES_SENTINEL } from "./diff-filter";
 
@@ -26,6 +27,7 @@ Rules:
 export type ReviewPromptInput = {
   intent: Intent;
   diff: PullRequestDiff;
+  conventions?: ConventionsResult;
   /** When provided, omitted files are surfaced in the prompt so the LLM knows
    *  not to comment on them. Pass the result from `filterDiff`. */
   filterResult?: FilterDiffResult;
@@ -43,8 +45,27 @@ const PATCH_PLACEHOLDER =
  * comment on them; only files remaining in `filterResult`'s kept set (i.e.,
  * those not in `omitted`) are rendered in full.
  */
-export function buildUserMessage({ intent, diff, filterResult }: ReviewPromptInput): string {
+export function buildUserMessage({
+  intent,
+  diff,
+  conventions,
+  filterResult,
+}: ReviewPromptInput): string {
   const parts: string[] = [];
+
+  // Inject repo conventions first so the LLM reads them before the diff.
+  if (conventions && conventions.sections.length > 0) {
+    parts.push("## Repo conventions");
+    parts.push(
+      "The target repo ships these contributor docs. Calibrate your review to them where relevant.",
+    );
+    for (const section of conventions.sections) {
+      parts.push("");
+      parts.push(`### ${section.path}`);
+      parts.push(section.content);
+    }
+    parts.push("");
+  }
 
   parts.push("## Intent");
   parts.push(`Source: ${intent.source}`);
