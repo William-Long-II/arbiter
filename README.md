@@ -139,9 +139,11 @@ Configure GitHub's webhook URL as `https://your-host/review-me/webhook` and set:
 
 ## Operations
 
-- **Health checks**: `GET /health`, `GET /ready` → `200 ok`.
+- **Health checks**: `GET /health`, `GET /ready` → `200 ok` during normal operation. Both return `503 draining` once a `SIGTERM` is received, so reverse proxies (nginx, HAProxy, Traefik) depool the instance before new requests arrive.
+- **Graceful shutdown**: On `SIGTERM` the bot stops accepting new webhooks (responds `429 shutting down`), waits up to `SHUTDOWN_DRAIN_SECONDS` (default `60`) for any in-flight reviews to complete, then calls `server.stop()` and exits. `SIGINT` is intentionally kept as a fast-kill for local dev.
+- **Rate limiting**: Incoming webhooks are rate-limited per GitHub installation (`X-GitHub-Hook-Installation-Target-ID` header). The steady-state allow rate defaults to `RATELIMIT_RPM` (default `60`) requests/minute; the burst bucket holds up to `RATELIMIT_BURST` (default `120`) tokens. Over-limit requests receive `429` with a `Retry-After` header. Requests that arrive without the installation header share a `(no-installation)` bucket.
 - **Logs**: JSON to stdout — route via journald, Fluent Bit, Vector, etc.
-- **Metrics**: `GET /metrics` returns Prometheus text-format counters and histograms covering webhook throughput (`reviewme_webhook_received_total`), review outcomes (`reviewme_reviews_total{repo,verdict}`), pipeline failures (`reviewme_review_failures_total{stage,reason}`), Anthropic token consumption (`reviewme_anthropic_tokens_total{kind}`), end-to-end review latency (`reviewme_review_duration_seconds`), and CI wait time (`reviewme_ci_wait_seconds`). Set `METRICS_BIND_TOKEN` to a secret string and the endpoint will require `Authorization: Bearer <token>`; omit it for unauthenticated scraping behind a trusted network. Example Prometheus scrape config:
+- **Metrics**: `GET /metrics` returns Prometheus text-format counters and histograms covering webhook throughput (`reviewme_webhook_received_total`), rate-limit rejections (`reviewme_ratelimit_rejected_total{installation}`), shutdown drain time (`reviewme_shutdown_drain_seconds`), review outcomes (`reviewme_reviews_total{repo,verdict}`), pipeline failures (`reviewme_review_failures_total{stage,reason}`), Anthropic token consumption (`reviewme_anthropic_tokens_total{kind}`), end-to-end review latency (`reviewme_review_duration_seconds`), and CI wait time (`reviewme_ci_wait_seconds`). Set `METRICS_BIND_TOKEN` to a secret string and the endpoint will require `Authorization: Bearer <token>`; omit it for unauthenticated scraping behind a trusted network. Example Prometheus scrape config:
   ```yaml
   scrape_configs:
     - job_name: review-me
@@ -184,6 +186,9 @@ The workflow does not build a Docker image or publish artifacts; those steps are
 | `REPOS_PATH` | no | `./repos.yaml` | Path to the allowlist file |
 | `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` | no | — | Enable Jira intent lookup when all three are set |
 | `METRICS_BIND_TOKEN` | no | — | If set, `GET /metrics` requires `Authorization: Bearer <token>` |
+| `RATELIMIT_RPM` | no | `60` | Steady-state webhook allow rate per installation (requests/minute) |
+| `RATELIMIT_BURST` | no | `120` | Token-bucket burst capacity per installation |
+| `SHUTDOWN_DRAIN_SECONDS` | no | `60` | Maximum seconds to wait for in-flight reviews to finish on `SIGTERM` |
 
 ## Development notes
 
