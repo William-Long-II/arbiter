@@ -3,6 +3,7 @@ import { getAllowlist, loadAllowlist, loadConfig, reload } from "../config";
 import { createOctokit, fetchAuthenticatedLogin } from "../github";
 import { createAnthropic } from "../review";
 import { sweepDeadLetters, writeDeadLetter } from "./dead-letter";
+import { replayRecentDeadLetters } from "./dead-letter-replay";
 import { sweepAudit } from "../review/audit";
 import { log } from "./logger";
 import {
@@ -195,6 +196,28 @@ sweepDeadLetters().catch((err: unknown) => {
     error: err instanceof Error ? err.message : String(err),
   });
 });
+
+// Auto-replay recent dead letters after sweep (fire-and-forget; never blocks boot).
+// WHY after sweep: sweep removes whole date-dirs older than retention; replay only
+// touches recent files — running after sweep avoids reading dirs that are about
+// to be deleted anyway.
+if (config.deadLetterAutoReplay === "enabled") {
+  const replayDir = process.env.DEAD_LETTER_DIR ?? "var/dead-letter";
+  // Use a bypass secret so we can re-sign without needing the original webhook
+  // secret available at replay time (same pattern as the manual script).
+  const REPLAY_BYPASS_SECRET = "__auto_replay_bypass__";
+  replayRecentDeadLetters({
+    dir: replayDir,
+    maxAgeMinutes: config.deadLetterReplayMaxAgeMinutes,
+    maxCount: config.deadLetterReplayMaxCount,
+    webhooks: createWebhooks(REPLAY_BYPASS_SECRET, webhooksDeps),
+    replaySecret: REPLAY_BYPASS_SECRET,
+  }).catch((err: unknown) => {
+    log.error("dead letter auto-replay failed at startup", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+}
 
 // Prune old audit dirs at startup (non-fatal).
 sweepAudit().catch((err: unknown) => {

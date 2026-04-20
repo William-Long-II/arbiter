@@ -15,6 +15,12 @@ const EnvSchema = z.object({
   JIRA_API_TOKEN: z.string().optional(),
   REPOS_PATH: z.string().default("./repos.yaml"),
   GITHUB_MACHINE_USER_LOGIN: z.string().optional(),
+  /** Auto-replay dead letters on boot: "enabled" (default) or "disabled". */
+  DEAD_LETTER_AUTO_REPLAY: z.enum(["enabled", "disabled"]).default("enabled"),
+  /** Maximum age of dead-letter files to auto-replay (minutes). Default 60. */
+  DEAD_LETTER_REPLAY_MAX_AGE_MINUTES: z.coerce.number().int().positive().default(60),
+  /** Maximum number of dead-letter files to auto-replay per boot. Default 50. */
+  DEAD_LETTER_REPLAY_MAX_COUNT: z.coerce.number().int().positive().default(50),
 });
 
 export type Config = {
@@ -32,6 +38,9 @@ export type Config = {
     email: string;
     apiToken: string;
   };
+  deadLetterAutoReplay: "enabled" | "disabled";
+  deadLetterReplayMaxAgeMinutes: number;
+  deadLetterReplayMaxCount: number;
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -56,6 +65,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     reposPath: parsed.REPOS_PATH,
     machineUserLogin: parsed.GITHUB_MACHINE_USER_LOGIN,
     jira,
+    deadLetterAutoReplay: parsed.DEAD_LETTER_AUTO_REPLAY,
+    deadLetterReplayMaxAgeMinutes: parsed.DEAD_LETTER_REPLAY_MAX_AGE_MINUTES,
+    deadLetterReplayMaxCount: parsed.DEAD_LETTER_REPLAY_MAX_COUNT,
   };
 }
 
