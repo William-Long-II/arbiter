@@ -9,6 +9,9 @@ export { fetchPullRequestDiff, type PullRequestDiff, type PullRequestFile } from
 export {
   postReview,
   hasExistingReview,
+  hasAnyPriorReview,
+  pullRequestHasLabel,
+  removeLabelIfPresent,
   fetchAuthenticatedLogin,
   type PostReviewInput,
   type PostReviewOutcome,

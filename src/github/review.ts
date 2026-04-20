@@ -40,6 +40,70 @@ export async function hasExistingReview(
   return false;
 }
 
+/**
+ * Has the machine-user reviewed this PR on any prior commit? Used to decide
+ * whether a new CI-green event is a "first review" or a "re-review" for
+ * purposes of the label-or-mention gate.
+ */
+export async function hasAnyPriorReview(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  selfLogin: string,
+): Promise<boolean> {
+  for await (const page of octokit.paginate.iterator(
+    octokit.pulls.listReviews,
+    { owner, repo, pull_number: pullNumber, per_page: 100 },
+  )) {
+    for (const r of page.data) {
+      if (r.user?.login === selfLogin) return true;
+    }
+  }
+  return false;
+}
+
+export async function pullRequestHasLabel(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  labelName: string,
+): Promise<boolean> {
+  const res = await octokit.issues.listLabelsOnIssue({
+    owner,
+    repo,
+    issue_number: pullNumber,
+    per_page: 100,
+  });
+  return res.data.some((l) => l.name === labelName);
+}
+
+/**
+ * Remove a label from a PR. No-ops silently if the label is not on the PR
+ * (GitHub returns 404 in that case, which we ignore).
+ */
+export async function removeLabelIfPresent(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  labelName: string,
+): Promise<void> {
+  try {
+    await octokit.issues.removeLabel({
+      owner,
+      repo,
+      issue_number: pullNumber,
+      name: labelName,
+    });
+  } catch (err) {
+    const status = (err as { status?: number } | undefined)?.status;
+    if (status === 404) return;
+    throw err;
+  }
+}
+
 function toApiComments(
   comments: LineComment[],
 ): Array<{ path: string; line: number; side: "RIGHT"; body: string }> {
@@ -90,8 +154,6 @@ export async function postReview(
     const msg = err instanceof Error ? err.message : String(err);
     if (review.lineComments.length === 0) throw err;
 
-    // Retry with summary only. Appending a marker to the body so reviewers
-    // understand why the inline anchors didn't land.
     const bodyWithNote =
       `${review.summary}\n\n` +
       `_Note: inline comments were generated but could not be anchored to the diff (${msg}). ` +
