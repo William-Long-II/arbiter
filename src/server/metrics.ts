@@ -323,6 +323,13 @@ registry.registerCounter(
   "Total webhook deliveries verified successfully, by secret slot (primary/secondary).",
 );
 
+/** Budget-exhausted reviews, labelled by repo slug. */
+export const budgetExhaustedTotal = "reviewme_budget_exhausted_total";
+registry.registerCounter(
+  budgetExhaustedTotal,
+  "Total reviews skipped because the repo's weekly token budget was exhausted.",
+);
+
 // --- Result cache counters ---
 
 /** Review result cache hits and misses, labelled by result (hit/miss). */
@@ -440,6 +447,10 @@ export function setBreakerState(dep: string, value: number): void {
 
 export function incDraftSkipped(): void {
   registry.incrementCounter(draftSkippedTotal);
+}
+
+export function incBudgetExhausted(repo: string): void {
+  registry.incrementCounter(budgetExhaustedTotal, { repo });
 }
 
 export function incReviewCache(result: "hit" | "miss"): void {
