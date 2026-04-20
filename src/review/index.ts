@@ -1,5 +1,6 @@
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type Anthropic from "@anthropic-ai/sdk";
+import { fetchGitattributes } from "../github/gitattributes";
 import { buildUserMessage, SYSTEM_PROMPT } from "./prompt";
 import { ReviewResultSchema } from "./schema";
 import { filterDiff } from "./diff-filter";
@@ -50,11 +51,32 @@ export async function runReview(
   const maxDiffChars = options.maxDiffChars ?? DEFAULT_MAX_DIFF_CHARS;
   const mode = getReviewMode();
 
+  // Fetch conventions and .gitattributes in parallel — both are GitHub reads
+  // with no ordering dependency. Errors inside each helper are already
+  // handled (silent on 404, warn-log on 5xx), so Promise.all never rejects.
+  const [conventions, gitattributes] = input.octokit
+    ? await Promise.all([
+        fetchConventions({
+          octokit: input.octokit,
+          owner: input.diff.owner,
+          repo: input.diff.repo,
+          ref: input.diff.headSha,
+        }),
+        fetchGitattributes({
+          octokit: input.octokit,
+          owner: input.diff.owner,
+          repo: input.diff.repo,
+          ref: input.diff.headSha,
+        }),
+      ])
+    : [{ sections: [], totalBytes: 0 }, null];
+
   // Filter out lockfiles, binaries, and generated files before measuring size
   // or building the prompt.  Per-repo glob overrides come from repos.yaml.
   const filterResult = filterDiff(input.diff.files, {
     include: input.reviewConfig?.include_paths,
     exclude: input.reviewConfig?.exclude_paths,
+    gitattributes: gitattributes ?? undefined,
   });
 
   // Measure diff size against the kept files only — use a Set for O(n) lookup.
@@ -90,17 +112,6 @@ export async function runReview(
       ],
     };
   }
-
-  // Fetch repo conventions before building the user message.
-  // fetchConventions never throws; absent octokit → empty result.
-  const conventions = input.octokit
-    ? await fetchConventions({
-        octokit: input.octokit,
-        owner: input.diff.owner,
-        repo: input.diff.repo,
-        ref: input.diff.headSha,
-      })
-    : { sections: [], totalBytes: 0 };
 
   const userMessage = buildUserMessage({ ...input, conventions, filterResult });
 
