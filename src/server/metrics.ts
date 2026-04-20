@@ -200,6 +200,13 @@ export const registry = new Registry();
 
 // --- Counters ---
 
+/** Config reload attempts, labelled by result (success/failure). */
+export const configReloadTotal = "reviewme_config_reload_total";
+registry.registerCounter(
+  configReloadTotal,
+  "Total number of SIGHUP-triggered config reloads, by result (success/failure).",
+);
+
 /** Total webhooks received, labelled by GitHub event name. */
 export const webhookReceived = "reviewme_webhook_received_total";
 registry.registerCounter(
@@ -294,6 +301,10 @@ export function incWebhookReplay(): void {
 
 export function incWebhookUnknownEvent(event: string): void {
   registry.incrementCounter(webhookUnknownEventTotal, { event });
+}
+
+export function incConfigReload(result: "success" | "failure"): void {
+  registry.incrementCounter(configReloadTotal, { result });
 }
 
 // ---------------------------------------------------------------------------

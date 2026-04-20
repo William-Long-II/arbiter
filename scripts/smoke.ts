@@ -24,7 +24,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeFileSync, unlinkSync, readFileSync } from "node:fs";
-import { loadAllowlist } from "../src/config";
+import { getAllowlist, loadAllowlist } from "../src/config";
 import { createOctokit } from "../src/github";
 import { createAnthropic } from "../src/review/client";
 import { createWebhooks } from "../src/server/webhooks";
@@ -472,11 +472,12 @@ export async function runSmoke(): Promise<void> {
       };
     };
 
-    const allowlist = loadAllowlist(reposPath);
+    // loadAllowlist seeds the mutable holder; getAllowlist() returns the current snapshot.
+    loadAllowlist(reposPath);
     const octokit = createOctokit("ghp_smoke_test_token_not_real");
 
     const webhooks = createWebhooks(WEBHOOK_SECRET, {
-      allowlist,
+      getAllowlist,
       octokit,
       anthropic,
       selfLogin: "review-me-bot",

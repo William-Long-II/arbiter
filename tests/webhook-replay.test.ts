@@ -43,8 +43,9 @@ type ServerHandle = {
 
 function buildTestServer(cacheOpts: ConstructorParameters<typeof ReplayCache>[0] = {}): ServerHandle {
   const cache = new ReplayCache(cacheOpts);
+  const allowlist = buildAllowlist({});
   const webhooks = createWebhooks(SECRET, {
-    allowlist: buildAllowlist({}),
+    getAllowlist: () => allowlist,
     octokit: {} as Octokit,
     anthropic: {} as Anthropic,
     selfLogin: "review-me-bot",
