@@ -12,7 +12,7 @@ import {
   type Octokit,
 } from "../github";
 import { resolveIntent, type JiraCredentials } from "../jira";
-import { runReview } from "../review";
+import { runReview, DEFAULT_MODEL } from "../review";
 import {
   isReviewError,
   logReviewError,
@@ -21,7 +21,14 @@ import {
   wrapLlmReviewError,
   wrapPostReviewError,
 } from "../review/errors";
+import { recordUsage } from "../review/usage";
 import { log } from "./logger";
+import {
+  incAnthropicTokens,
+  incReviewFailures,
+  incReviewsTotal,
+  observeReviewDuration,
+} from "./metrics";
 import { decideFromCheckSuite, mentionsReviewCommand } from "./triggers";
 
 export type WebhookDeps = {
@@ -369,6 +376,7 @@ async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
   }
 
   log.info("starting review", logFields);
+  const pipelineStart = Date.now();
 
   // Stage: diff-fetch
   let diff: Awaited<ReturnType<typeof fetchPullRequestDiff>>;
@@ -380,6 +388,7 @@ async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
       ref.pullNumber,
     );
   } catch (err) {
+    incReviewFailures("fetch-diff", err instanceof Error ? err.message : "unknown");
     const reviewErr = wrapDiffFetchError(err);
     logReviewError(reviewErr, errorCtx, { deliveryId: deps.deliveryId });
     throw reviewErr;
@@ -395,6 +404,7 @@ async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
       creds: deps.jiraCreds,
     });
   } catch (err) {
+    incReviewFailures("resolve-intent", err instanceof Error ? err.message : "unknown");
     // resolveIntent is fail-open by design; an error here is unexpected
     // (e.g. a programming error). We wrap it with a placeholder ticket key.
     const reviewErr = wrapIntentResolveError(err, "(unknown)");
@@ -412,10 +422,55 @@ async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
       diff,
     }));
   } catch (err) {
+    incReviewFailures("llm-review", err instanceof Error ? err.message : "unknown");
     const reviewErr = wrapLlmReviewError(err);
     logReviewError(reviewErr, errorCtx, { deliveryId: deps.deliveryId });
     throw reviewErr;
   }
+
+  // Record token usage for metrics and the per-review usage log.
+  if (usage) {
+    const u = usage as Record<string, unknown>;
+    const pairs: Array<[string, unknown]> = [
+      ["input", u["input_tokens"]],
+      ["output", u["output_tokens"]],
+      ["cache_read", u["cache_read_input_tokens"]],
+      ["cache_write", u["cache_creation_input_tokens"]],
+    ];
+    for (const [kind, count] of pairs) {
+      if (typeof count === "number" && count > 0) {
+        incAnthropicTokens(kind, count);
+      }
+    }
+  }
+
+  const isTooLarge = warnings.some((w) => w.includes("diff exceeded review threshold"));
+  const usageVerdict = isTooLarge ? "too_large" : result.verdict;
+
+  await recordUsage({
+    repo: repoFull,
+    pr: ref.pullNumber,
+    headSha: ref.headSha,
+    model: DEFAULT_MODEL,
+    verdict: usageVerdict,
+    inputTokens: usage?.inputTokens ?? 0,
+    outputTokens: usage?.outputTokens ?? 0,
+    cacheReadTokens: usage?.cacheReadInputTokens,
+    cacheCreationTokens: usage?.cacheCreationInputTokens,
+  });
+
+  log.info("review.usage", {
+    repo: repoFull,
+    pr: ref.pullNumber,
+    headSha: ref.headSha,
+    model: DEFAULT_MODEL,
+    verdict: usageVerdict,
+    inputTokens: usage?.inputTokens ?? 0,
+    outputTokens: usage?.outputTokens ?? 0,
+    cacheReadTokens: usage?.cacheReadInputTokens ?? 0,
+    cacheCreationTokens: usage?.cacheCreationInputTokens ?? 0,
+    evt: "review.usage",
+  });
 
   log.info("review produced", {
     ...logFields,
@@ -439,10 +494,15 @@ async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
       review: result,
     });
   } catch (err) {
+    incReviewFailures("post-review", err instanceof Error ? err.message : "unknown");
     const reviewErr = wrapPostReviewError(err);
     logReviewError(reviewErr, errorCtx, { deliveryId: deps.deliveryId });
     throw reviewErr;
   }
+
+  const durationSeconds = (Date.now() - pipelineStart) / 1_000;
+  observeReviewDuration(durationSeconds);
+  incReviewsTotal(repoFull, result.verdict);
 
   log.info("review posted", { ...logFields, outcome });
 }
