@@ -1,6 +1,7 @@
 import { loadAllowlist, loadConfig } from "../config";
 import { createOctokit, fetchAuthenticatedLogin } from "../github";
 import { createAnthropic } from "../review";
+import { sweepDeadLetters, writeDeadLetter } from "./dead-letter";
 import { log } from "./logger";
 import { buildMetricsHandler, incWebhookReceived } from "./metrics";
 import { createWebhooks } from "./webhooks";
@@ -52,6 +53,13 @@ log.info("server started", {
   jiraConfigured: Boolean(config.jira),
 });
 
+// Prune old dead-letter dirs at startup (non-fatal).
+sweepDeadLetters().catch((err: unknown) => {
+  log.error("dead letter sweep failed at startup", {
+    error: err instanceof Error ? err.message : String(err),
+  });
+});
+
 async function handleWebhook(
   req: Request,
   webhooks: ReturnType<typeof createWebhooks>,
@@ -86,6 +94,22 @@ async function handleWebhook(
       return new Response("invalid signature", { status: 401 });
     }
     log.error("webhook processing error", { deliveryId: id, error: message });
+
+    // Collect all request headers into a plain object for the dead-letter record.
+    const headersMap: Record<string, string> = {};
+    req.headers.forEach((value, key) => {
+      headersMap[key] = value;
+    });
+
+    await writeDeadLetter({
+      delivery_id: id,
+      event: name,
+      headers: headersMap,
+      payload,
+      error: err,
+      attempts: 1,
+    });
+
     return new Response("processing error", { status: 500 });
   }
 
