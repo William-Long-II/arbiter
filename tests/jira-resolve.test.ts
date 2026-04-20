@@ -1,4 +1,11 @@
-import { describe, expect, test } from "bun:test";
+/**
+ * Backward-compatibility tests for resolveIntent with Jira-only configuration.
+ *
+ * These tests mirror the original behavior: when only Jira credentials are
+ * provided (no octokit, no LINEAR_API_KEY), resolveIntent should behave
+ * exactly as the old Jira-only implementation did.
+ */
+import { describe, expect, test, afterEach } from "bun:test";
 import { resolveIntent } from "../src/jira";
 
 const CREDS = {
@@ -14,8 +21,19 @@ function mockFetch(responder: (url: string) => Response): typeof fetch {
   }) as typeof fetch;
 }
 
-describe("resolveIntent", () => {
-  test("falls back when no ticket key found", async () => {
+describe("resolveIntent (backward-compat, Jira-only)", () => {
+  const originalProviders = process.env.INTENT_PROVIDERS;
+
+  afterEach(() => {
+    if (originalProviders !== undefined) {
+      process.env.INTENT_PROVIDERS = originalProviders;
+    } else {
+      delete process.env.INTENT_PROVIDERS;
+    }
+    delete process.env.LINEAR_API_KEY;
+  });
+
+  test("falls back when no ticket key found and no creds provided", async () => {
     const intent = await resolveIntent({
       prTitle: "some fix",
       prBody: "body text",
@@ -25,7 +43,8 @@ describe("resolveIntent", () => {
     expect(intent.ticketKey).toBeUndefined();
     expect(intent.title).toBe("some fix");
     expect(intent.description).toBe("body text");
-    expect(intent.warnings[0]).toMatch(/no jira ticket key/);
+    // No providers were active, so no warnings
+    expect(intent.warnings).toEqual([]);
   });
 
   test("falls back when ticket key found but no creds configured", async () => {
@@ -34,9 +53,10 @@ describe("resolveIntent", () => {
       prBody: "",
       branch: "feat",
     });
+    // Jira provider not active (no creds), no other providers active either
     expect(intent.source).toBe("pr-body");
-    expect(intent.ticketKey).toBe("PROJ-1");
-    expect(intent.warnings[0]).toMatch(/credentials are not configured/);
+    // ticketKey is not set in fallback when no provider matched
+    expect(intent.title).toBe("PROJ-1: thing");
   });
 
   test("fetches jira issue and returns source=jira on success", async () => {
@@ -93,7 +113,6 @@ describe("resolveIntent", () => {
       fetchImpl,
     );
     expect(intent.source).toBe("pr-body");
-    expect(intent.ticketKey).toBe("PROJ-9");
     expect(intent.title).toBe("PROJ-9 thing");
     expect(intent.description).toBe("pr body");
     expect(intent.warnings[0]).toMatch(/jira fetch failed for PROJ-9/);

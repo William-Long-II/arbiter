@@ -1,6 +1,6 @@
 import { Webhooks } from "@octokit/webhooks";
 import type Anthropic from "@anthropic-ai/sdk";
-import type { RepoAllowlist, RepoEntry } from "../config";
+import type { RepoAllowlist, ResolvedRepoConfig } from "../config";
 import {
   evaluateHeadSha,
   fetchPullRequestDiff,
@@ -63,7 +63,8 @@ type PipelineDeps = {
   jiraCreds?: JiraCredentials;
   deliveryId: string;
   source: TriggerSource;
-  entry: RepoEntry;
+  /** Fully-merged per-repo config (repo > org > built-in defaults). */
+  entry: ResolvedRepoConfig;
 };
 
 export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
@@ -111,7 +112,7 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
 
   webhooks.on("check_suite.completed", async ({ id, payload }) => {
     const repoFull = payload.repository.full_name;
-    const entry = getAllowlist().get(repoFull);
+    const entry = getAllowlist().getEffectiveConfig(repoFull);
     if (!entry?.enabled) {
       log.debug("skip: repo not allowlisted", { deliveryId: id, repo: repoFull });
       return;
@@ -230,7 +231,7 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
 
   webhooks.on("pull_request.labeled", async ({ id, payload }) => {
     const repoFull = payload.repository.full_name;
-    const entry = getAllowlist().get(repoFull);
+    const entry = getAllowlist().getEffectiveConfig(repoFull);
     if (!entry?.enabled) return;
     if (entry.rereview !== "label-or-mention") return;
     if (payload.label?.name !== entry.rereview_label) return;
@@ -277,7 +278,7 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
     if (!payload.issue.pull_request) return;
 
     const repoFull = payload.repository.full_name;
-    const entry = getAllowlist().get(repoFull);
+    const entry = getAllowlist().getEffectiveConfig(repoFull);
     if (!entry?.enabled) return;
 
     if (!mentionsReviewCommand(payload.comment.body)) return;

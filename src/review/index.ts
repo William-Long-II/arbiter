@@ -1,6 +1,7 @@
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type Anthropic from "@anthropic-ai/sdk";
-import type { Octokit, PullRequestDiff } from "../github";
+import type { Octokit } from "../github/client";
+import type { PullRequestDiff } from "../github";
 import { fetchGitattributes } from "../github/gitattributes";
 import type { Intent } from "../jira";
 import type { RepoReviewConfig } from "../config/repos";
@@ -8,6 +9,7 @@ import { buildUserMessage, SYSTEM_PROMPT } from "./prompt";
 import { ReviewResultSchema, type ReviewResult } from "./schema";
 import { filterDiff } from "./diff-filter";
 import { withRetry } from "../util/retry";
+import { fetchConventions } from "./conventions";
 
 export const DEFAULT_MODEL = "claude-opus-4-7";
 export const DEFAULT_MAX_TOKENS = 16_000;
@@ -16,15 +18,16 @@ export const DEFAULT_MAX_DIFF_CHARS = 150_000;
 export type RunReviewInput = {
   intent: Intent;
   diff: PullRequestDiff;
+  /**
+   * When provided, `runReview` will fetch repo conventions (CLAUDE.md etc.)
+   * and `.gitattributes` from the target repo at the PR head ref. Conventions
+   * are injected into the prompt; `.gitattributes` is passed to `filterDiff` so
+   * files marked `linguist-generated=true` / `linguist-vendored=true` are omitted.
+   */
+  octokit?: Octokit;
   /** Per-repo filter config from `repos.yaml`. When absent, only built-in
    *  rules (lockfiles, binaries, etc.) are applied. */
   reviewConfig?: RepoReviewConfig;
-  /**
-   * When provided, `runReview` will fetch `.gitattributes` from the target
-   * repo at the PR head ref and pass it to `filterDiff` so that files marked
-   * `linguist-generated=true` / `linguist-vendored=true` are omitted.
-   */
-  octokit?: Octokit;
 };
 
 export type RunReviewOptions = {
@@ -58,17 +61,25 @@ export async function runReview(
   const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
   const maxDiffChars = options.maxDiffChars ?? DEFAULT_MAX_DIFF_CHARS;
 
-  // Fetch .gitattributes from the target repo when an Octokit client is
-  // available. Errors are handled inside fetchGitattributes (404 → null,
-  // other errors → warn + null), so this call never throws.
-  const gitattributes = input.octokit
-    ? await fetchGitattributes({
-        octokit: input.octokit,
-        owner: input.diff.owner,
-        repo: input.diff.repo,
-        ref: input.diff.headSha,
-      })
-    : null;
+  // Fetch conventions and .gitattributes in parallel — both are GitHub reads
+  // with no ordering dependency. Errors inside each helper are already
+  // handled (silent on 404, warn-log on 5xx), so Promise.all never rejects.
+  const [conventions, gitattributes] = input.octokit
+    ? await Promise.all([
+        fetchConventions({
+          octokit: input.octokit,
+          owner: input.diff.owner,
+          repo: input.diff.repo,
+          ref: input.diff.headSha,
+        }),
+        fetchGitattributes({
+          octokit: input.octokit,
+          owner: input.diff.owner,
+          repo: input.diff.repo,
+          ref: input.diff.headSha,
+        }),
+      ])
+    : [{ sections: [], totalBytes: 0 }, null];
 
   // Filter out lockfiles, binaries, and generated files before measuring size
   // or building the prompt.  Per-repo glob overrides come from repos.yaml.
@@ -103,7 +114,7 @@ export async function runReview(
     };
   }
 
-  const userMessage = buildUserMessage({ ...input, filterResult });
+  const userMessage = buildUserMessage({ ...input, conventions, filterResult });
 
   const response = await withRetry(() =>
     anthropic.messages.parse({
@@ -143,6 +154,13 @@ export async function runReview(
 }
 
 export { buildUserMessage, SYSTEM_PROMPT } from "./prompt";
+export {
+  fetchConventions,
+  conventionsCache,
+  type ConventionsResult,
+  type ConventionSection,
+  type FetchConventionsInput,
+} from "./conventions";
 export { ReviewResultSchema, type ReviewResult, type LineComment } from "./schema";
 export { createAnthropic } from "./client";
 export { filterDiff, OMITTED_FILES_SENTINEL } from "./diff-filter";
