@@ -29,18 +29,29 @@ cp .env.example .env
 
 ### Configure allowlisted repos
 
-Edit `repos.yaml`:
+Edit `repos.yaml`. You can allow individual repos, or use org-level defaults to avoid repeating settings across repos in the same GitHub org:
 
 ```yaml
+# Org-level defaults — applied to every repo under that org unless overridden.
+orgs:
+  acme:
+    enabled: true
+    rereview: auto-on-sync
+    review:
+      exclude_paths: ["docs/**"]
+
+# Per-repo entries override any org default for that field.
 repos:
+  acme/legacy-service:
+    # Inherits acme org defaults; only rereview is overridden here.
+    rereview: label-or-mention
+    rereview_label: re-review
   acme/widget:
     enabled: true
     rereview: auto-on-sync
-  acme/legacy-service:
-    enabled: true
-    rereview: label-or-mention
-    rereview_label: re-review
 ```
+
+All fields in both `orgs.<name>` and `repos.<owner/name>` are optional. Resolution order for each field: explicit repo entry → org default → built-in default (`enabled: true`, `rereview: auto-on-sync`, `rereview_label: re-review`). Absence of the `orgs:` block is fully backward-compatible.
 
 Restart the bot after editing (the file is loaded at boot).
 
@@ -151,7 +162,7 @@ Configure GitHub's webhook URL as `https://your-host/review-me/webhook` and set:
       metrics_path: /metrics
   ```
 - **Secret rotation**: update `GITHUB_PAT` / `ANTHROPIC_API_KEY` / `GITHUB_WEBHOOK_SECRET` in the env file and restart. Rotate the webhook secret in GitHub simultaneously (signature mismatches during the swap will 401 briefly).
-- **Allowlist changes**: edit `repos.yaml` and restart. It is read once at boot; there is no hot-reload.
+- **Allowlist changes**: edit `repos.yaml` and restart. The file is read once at boot; the `createAllowlistHolder` returned by `loadAllowlist` supports a `reload()` call for future SIGHUP-triggered hot-reload.
 
 ## CI
 

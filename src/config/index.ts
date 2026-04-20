@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { loadReposFile, type RepoAllowlist } from "./repos";
+import {
+  createAllowlistHolder,
+  type RepoAllowlist,
+  type RepoAllowlistHolder,
+} from "./repos";
 
 const EnvSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
@@ -53,8 +57,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   };
 }
 
-export function loadAllowlist(path: string): RepoAllowlist {
-  return loadReposFile(path);
+export function loadAllowlist(path: string): RepoAllowlistHolder {
+  return createAllowlistHolder(path);
 }
 
-export type { RepoAllowlist, RepoEntry } from "./repos";
+export type {
+  RepoAllowlist,
+  RepoAllowlistHolder,
+  RepoEntry,
+  OrgDefaults,
+  ResolvedRepoConfig,
+  ReviewConfig,
+} from "./repos";
