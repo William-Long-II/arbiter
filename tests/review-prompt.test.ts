@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PullRequestDiff } from "../src/github";
 import type { Intent } from "../src/jira";
+import type { ConventionsResult } from "../src/review/conventions";
 import { buildUserMessage } from "../src/review/prompt";
 
 function makeDiff(overrides: Partial<PullRequestDiff> = {}): PullRequestDiff {
@@ -77,6 +78,37 @@ describe("buildUserMessage", () => {
     const out = buildUserMessage({ intent: makeIntent(), diff });
     expect(out).toContain("logo.png");
     expect(out).toContain("patch omitted");
+  });
+
+  test("REPO_CONVENTIONS section included verbatim when conventions are present", () => {
+    const conventions: ConventionsResult = {
+      sections: [
+        { path: "CLAUDE.md", content: "Use TypeScript strict mode.", truncated: false },
+        { path: "CONTRIBUTING.md", content: "Run bun test before committing.", truncated: false },
+      ],
+      totalBytes: 60,
+    };
+    const out = buildUserMessage({ intent: makeIntent(), diff: makeDiff(), conventions });
+    expect(out).toContain("## Repo conventions");
+    expect(out).toContain(
+      "The target repo ships these contributor docs. Calibrate your review to them where relevant.",
+    );
+    expect(out).toContain("### CLAUDE.md");
+    expect(out).toContain("Use TypeScript strict mode.");
+    expect(out).toContain("### CONTRIBUTING.md");
+    expect(out).toContain("Run bun test before committing.");
+  });
+
+  test("REPO_CONVENTIONS section omitted cleanly when sections is empty", () => {
+    const conventions: ConventionsResult = { sections: [], totalBytes: 0 };
+    const out = buildUserMessage({ intent: makeIntent(), diff: makeDiff(), conventions });
+    expect(out).not.toContain("## Repo conventions");
+    expect(out).not.toContain("Calibrate your review");
+  });
+
+  test("REPO_CONVENTIONS section omitted when conventions parameter is absent", () => {
+    const out = buildUserMessage({ intent: makeIntent(), diff: makeDiff() });
+    expect(out).not.toContain("## Repo conventions");
   });
 
   test("notes renamed files", () => {

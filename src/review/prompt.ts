@@ -1,5 +1,6 @@
 import type { PullRequestDiff } from "../github";
 import type { Intent } from "../jira";
+import type { ConventionsResult } from "./conventions";
 
 export const SYSTEM_PROMPT = `You are review-me, an intent-aware pull-request reviewer.
 
@@ -24,6 +25,7 @@ Rules:
 export type ReviewPromptInput = {
   intent: Intent;
   diff: PullRequestDiff;
+  conventions?: ConventionsResult;
 };
 
 const PATCH_PLACEHOLDER =
@@ -33,8 +35,26 @@ const PATCH_PLACEHOLDER =
  * Build the per-PR user message. Kept as a pure string builder so tests can
  * assert on its shape without invoking the LLM.
  */
-export function buildUserMessage({ intent, diff }: ReviewPromptInput): string {
+export function buildUserMessage({
+  intent,
+  diff,
+  conventions,
+}: ReviewPromptInput): string {
   const parts: string[] = [];
+
+  // Inject repo conventions first so the LLM reads them before the diff.
+  if (conventions && conventions.sections.length > 0) {
+    parts.push("## Repo conventions");
+    parts.push(
+      "The target repo ships these contributor docs. Calibrate your review to them where relevant.",
+    );
+    for (const section of conventions.sections) {
+      parts.push("");
+      parts.push(`### ${section.path}`);
+      parts.push(section.content);
+    }
+    parts.push("");
+  }
 
   parts.push("## Intent");
   parts.push(`Source: ${intent.source}`);
