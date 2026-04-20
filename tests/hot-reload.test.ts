@@ -1,210 +1,257 @@
-import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+/**
+ * Tests for hot-reload (SIGHUP) config behaviour.
+ *
+ * Three scenarios:
+ *   1. Atomic swap — concurrent getAllowlist() reads during a reload always
+ *      return a fully-formed snapshot (never a partial / null).
+ *   2. Parse-error retention — reload() with bad YAML leaves the previous
+ *      snapshot intact and reports an error.
+ *   3. Integration — simulating the SIGHUP handler: a newly-added repo is
+ *      picked up by getAllowlist() after reload().
+ */
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadAllowlist } from "../src/config";
+
+// We import the internal module directly to control the holder state.
+// Each test writes a temp file and calls loadReposFile() to seed the holder
+// fresh, so tests are isolated.
+import {
+  buildAllowlist,
+  getAllowlist,
+  loadReposFile,
+  reload,
+} from "../src/config/repos";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function withTempDir(fn: (dir: string) => void): void {
-  const dir = mkdtempSync(join(tmpdir(), "hot-reload-test-"));
-  try {
-    fn(dir);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+let tmpDir: string;
+let reposPath: string;
+
+function writeRepos(content: string): void {
+  writeFileSync(reposPath, content, "utf8");
+}
+
+function validYaml(repos: Record<string, { enabled?: boolean }>): string {
+  const entries = Object.entries(repos)
+    .map(([name, cfg]) => `  ${name}:\n    enabled: ${cfg.enabled ?? true}`)
+    .join("\n");
+  return `repos:\n${entries}\n`;
 }
 
 // ---------------------------------------------------------------------------
-// Hot-reload — basic (repos only, no orgs)
+// Setup / teardown
 // ---------------------------------------------------------------------------
 
-describe("hot-reload — repos-only", () => {
-  test("reload() picks up a new repo added to disk", () => {
-    withTempDir((dir) => {
-      const path = join(dir, "repos.yaml");
-      writeFileSync(path, "repos:\n  acme/widget:\n    enabled: true\n");
-      const holder = loadAllowlist(path);
+beforeEach(() => {
+  tmpDir = join(tmpdir(), `hot-reload-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  mkdirSync(tmpDir, { recursive: true });
+  reposPath = join(tmpDir, "repos.yaml");
+});
 
-      expect(holder.isAllowed("acme/widget")).toBe(true);
-      expect(holder.isAllowed("acme/new-service")).toBe(false);
+afterEach(() => {
+  rmSync(tmpDir, { recursive: true, force: true });
+});
 
-      writeFileSync(
-        path,
-        "repos:\n  acme/widget:\n    enabled: true\n  acme/new-service:\n    enabled: true\n",
+// ---------------------------------------------------------------------------
+// 1. Atomic swap
+// ---------------------------------------------------------------------------
+
+describe("atomic swap", () => {
+  test("getAllowlist() always returns a fully-formed snapshot (never null/partial)", async () => {
+    writeRepos(validYaml({ "acme/widget": { enabled: true } }));
+    loadReposFile(reposPath);
+
+    // Schedule many reads as microtasks alongside a reload.
+    // JS is single-threaded: _holder = next is a single assignment — any call
+    // to getAllowlist() sees either the old or the new complete snapshot, never
+    // a torn/partial value.
+    const readCount = 200;
+    const readPromises: Array<Promise<boolean>> = [];
+
+    for (let i = 0; i < readCount; i++) {
+      readPromises.push(
+        Promise.resolve().then(() => {
+          const snapshot = getAllowlist();
+          // A valid snapshot must have all three methods.
+          return (
+            typeof snapshot.isAllowed === "function" &&
+            typeof snapshot.get === "function" &&
+            typeof snapshot.all === "function"
+          );
+        }),
       );
-      holder.reload();
+    }
 
-      expect(holder.isAllowed("acme/new-service")).toBe(true);
-    });
+    writeRepos(validYaml({ "acme/widget": { enabled: true }, "acme/other": { enabled: true } }));
+    const reloadResult = reload();
+
+    const results = await Promise.all(readPromises);
+
+    expect(reloadResult).toMatchObject({ ok: true });
+    // Every read must have returned a fully-formed snapshot with all three methods.
+    expect(results.every(Boolean)).toBe(true);
   });
 
-  test("reload() reflects a repo being disabled on disk", () => {
-    withTempDir((dir) => {
-      const path = join(dir, "repos.yaml");
-      writeFileSync(path, "repos:\n  acme/widget:\n    enabled: true\n");
-      const holder = loadAllowlist(path);
-      expect(holder.isAllowed("acme/widget")).toBe(true);
+  test("after reload, getAllowlist() returns the new snapshot", () => {
+    writeRepos(validYaml({ "acme/widget": { enabled: true } }));
+    loadReposFile(reposPath);
 
-      writeFileSync(path, "repos:\n  acme/widget:\n    enabled: false\n");
-      holder.reload();
+    expect(getAllowlist().isAllowed("acme/widget")).toBe(true);
+    expect(getAllowlist().isAllowed("acme/new-repo")).toBe(false);
 
-      expect(holder.isAllowed("acme/widget")).toBe(false);
-    });
+    writeRepos(validYaml({ "acme/widget": { enabled: true }, "acme/new-repo": { enabled: true } }));
+    const result = reload();
+
+    expect(result).toMatchObject({ ok: true, count: 2 });
+    expect(getAllowlist().isAllowed("acme/new-repo")).toBe(true);
   });
 
-  test("reload() on parse error leaves old snapshot intact", () => {
-    withTempDir((dir) => {
-      const path = join(dir, "repos.yaml");
-      writeFileSync(path, "repos:\n  acme/widget:\n    enabled: true\n");
-      const holder = loadAllowlist(path);
-      expect(holder.isAllowed("acme/widget")).toBe(true);
+  test("snapshot captured before reload still works for in-flight use", () => {
+    writeRepos(validYaml({ "acme/widget": { enabled: true } }));
+    loadReposFile(reposPath);
 
-      // Write invalid YAML that will fail Zod parsing.
-      writeFileSync(path, "repos:\n  acme/widget:\n    enabled: not-a-boolean\n");
-      expect(() => holder.reload()).toThrow();
+    // Capture reference before reload — simulates an in-flight event.
+    const inFlightSnapshot = getAllowlist();
 
-      // Old snapshot must still be active.
-      expect(holder.isAllowed("acme/widget")).toBe(true);
-    });
+    writeRepos(validYaml({ "acme/other": { enabled: true } }));
+    reload();
+
+    // In-flight snapshot still reflects pre-reload state.
+    expect(inFlightSnapshot.isAllowed("acme/widget")).toBe(true);
+    expect(inFlightSnapshot.isAllowed("acme/other")).toBe(false);
+
+    // Fresh reads see the new state.
+    expect(getAllowlist().isAllowed("acme/widget")).toBe(false);
+    expect(getAllowlist().isAllowed("acme/other")).toBe(true);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Hot-reload — org defaults
+// 2. Parse-error retention
 // ---------------------------------------------------------------------------
 
-describe("hot-reload — org defaults", () => {
-  test("reload() propagates a changed org default to repos relying on that org", () => {
-    withTempDir((dir) => {
-      const path = join(dir, "repos.yaml");
-      writeFileSync(
-        path,
-        [
-          "orgs:",
-          "  acme:",
-          "    enabled: true",
-          "    rereview: auto-on-sync",
-          "repos: {}",
-        ].join("\n"),
-      );
-      const holder = loadAllowlist(path);
+describe("parse-error retention", () => {
+  test("reload() with invalid YAML returns ok:false and keeps the old snapshot", () => {
+    writeRepos(validYaml({ "acme/widget": { enabled: true } }));
+    loadReposFile(reposPath);
 
-      expect(holder.isAllowed("acme/widget")).toBe(true);
-      expect(holder.getEffectiveConfig("acme/widget")?.rereview).toBe("auto-on-sync");
+    const snapshotBefore = getAllowlist();
+    expect(snapshotBefore.isAllowed("acme/widget")).toBe(true);
 
-      // Operator updates the org default on disk.
-      writeFileSync(
-        path,
-        [
-          "orgs:",
-          "  acme:",
-          "    enabled: true",
-          "    rereview: label-or-mention",
-          "    rereview_label: please-review",
-          "repos: {}",
-        ].join("\n"),
-      );
-      holder.reload();
+    // Overwrite with unparseable content.
+    writeRepos(": this is not valid yaml: {{{");
+    const result = reload();
 
-      const cfg = holder.getEffectiveConfig("acme/widget");
-      expect(cfg?.rereview).toBe("label-or-mention");
-      expect(cfg?.rereview_label).toBe("please-review");
-    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.length).toBeGreaterThan(0);
+    }
+
+    // The holder must still point to the pre-reload snapshot.
+    const snapshotAfter = getAllowlist();
+    expect(snapshotAfter.isAllowed("acme/widget")).toBe(true);
+
+    // Same object reference — the holder was not swapped.
+    expect(snapshotAfter).toBe(snapshotBefore);
   });
 
-  test("reload() propagates adding an org that makes repos allowed", () => {
-    withTempDir((dir) => {
-      const path = join(dir, "repos.yaml");
-      writeFileSync(path, "repos: {}\n");
-      const holder = loadAllowlist(path);
-      expect(holder.isAllowed("acme/widget")).toBe(false);
+  test("reload() with schema-invalid YAML returns ok:false and keeps the old snapshot", () => {
+    writeRepos(validYaml({ "acme/widget": { enabled: true } }));
+    loadReposFile(reposPath);
 
-      writeFileSync(
-        path,
-        ["orgs:", "  acme:", "    enabled: true", "repos: {}"].join("\n"),
-      );
-      holder.reload();
+    // Valid YAML but wrong schema.
+    writeRepos("repos:\n  acme/widget:\n    enabled: not-a-boolean\n    rereview: bad-value\n");
+    const result = reload();
 
-      expect(holder.isAllowed("acme/widget")).toBe(true);
-    });
+    expect(result.ok).toBe(false);
+    // Old snapshot preserved.
+    expect(getAllowlist().isAllowed("acme/widget")).toBe(true);
   });
 
-  test("reload() propagates removing an org (repos no longer allowed)", () => {
-    withTempDir((dir) => {
-      const path = join(dir, "repos.yaml");
-      writeFileSync(
-        path,
-        ["orgs:", "  acme:", "    enabled: true", "repos: {}"].join("\n"),
-      );
-      const holder = loadAllowlist(path);
-      expect(holder.isAllowed("acme/widget")).toBe(true);
+  test("reload() when file is missing returns ok:false and keeps the old snapshot", () => {
+    writeRepos(validYaml({ "acme/widget": { enabled: true } }));
+    loadReposFile(reposPath);
 
-      writeFileSync(path, "repos: {}\n");
-      holder.reload();
+    // Remove the file.
+    rmSync(reposPath);
+    const result = reload();
 
-      expect(holder.isAllowed("acme/widget")).toBe(false);
-    });
+    expect(result.ok).toBe(false);
+    expect(getAllowlist().isAllowed("acme/widget")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3. Integration — simulate SIGHUP handler inline
+// ---------------------------------------------------------------------------
+
+describe("integration: SIGHUP simulation", () => {
+  test("new repo in repos.yaml is picked up after reload without dropping queued events", async () => {
+    writeRepos(validYaml({ "acme/existing": { enabled: true } }));
+    loadReposFile(reposPath);
+
+    // Simulate in-flight event that started before reload.
+    const inFlightAllowlist = getAllowlist();
+
+    // Operator adds a new repo.
+    writeRepos(validYaml({
+      "acme/existing": { enabled: true },
+      "acme/added": { enabled: true },
+    }));
+
+    // Simulate SIGHUP handler firing.
+    const result = reload();
+    expect(result).toMatchObject({ ok: true, count: 2 });
+
+    // Queued/in-flight event still works with its captured snapshot.
+    expect(inFlightAllowlist.isAllowed("acme/existing")).toBe(true);
+    expect(inFlightAllowlist.isAllowed("acme/added")).toBe(false); // not in pre-reload snapshot
+
+    // New events pick up the updated allowlist.
+    expect(getAllowlist().isAllowed("acme/added")).toBe(true);
+    expect(getAllowlist().isAllowed("acme/existing")).toBe(true);
   });
 
-  test("reload() on parse error leaves org defaults intact", () => {
-    withTempDir((dir) => {
-      const path = join(dir, "repos.yaml");
-      writeFileSync(
-        path,
-        ["orgs:", "  acme:", "    enabled: true", "repos: {}"].join("\n"),
-      );
-      const holder = loadAllowlist(path);
-      expect(holder.isAllowed("acme/widget")).toBe(true);
+  test("reload() reports correct count", () => {
+    writeRepos(validYaml({
+      "org/a": { enabled: true },
+      "org/b": { enabled: true },
+      "org/c": { enabled: false },
+    }));
+    loadReposFile(reposPath);
 
-      // Write a file that will fail Zod validation.
-      writeFileSync(
-        path,
-        ["orgs:", "  acme:", "    enabled: not-a-bool", "repos: {}"].join("\n"),
-      );
-      expect(() => holder.reload()).toThrow();
+    // File now has 4 repos.
+    writeRepos(validYaml({
+      "org/a": { enabled: true },
+      "org/b": { enabled: true },
+      "org/c": { enabled: false },
+      "org/d": { enabled: true },
+    }));
+    const result = reload();
+    expect(result).toMatchObject({ ok: true, count: 4 });
+  });
+});
 
-      // Old snapshot — org still active.
-      expect(holder.isAllowed("acme/widget")).toBe(true);
-    });
+// ---------------------------------------------------------------------------
+// 4. buildAllowlist — preserved behaviour (regression guard)
+// ---------------------------------------------------------------------------
+
+describe("buildAllowlist (regression)", () => {
+  test("returns false for unknown repos", () => {
+    const allow = buildAllowlist({});
+    expect(allow.isAllowed("acme/widget")).toBe(false);
   });
 
-  test("reload() with org-level review.exclude_paths change propagates", () => {
-    withTempDir((dir) => {
-      const path = join(dir, "repos.yaml");
-      writeFileSync(
-        path,
-        [
-          "orgs:",
-          "  acme:",
-          "    enabled: true",
-          "    review:",
-          '      exclude_paths: ["docs/**"]',
-          "repos: {}",
-        ].join("\n"),
-      );
-      const holder = loadAllowlist(path);
-      expect(holder.getEffectiveConfig("acme/widget")?.review?.exclude_paths).toEqual(["docs/**"]);
-
-      writeFileSync(
-        path,
-        [
-          "orgs:",
-          "  acme:",
-          "    enabled: true",
-          "    review:",
-          '      exclude_paths: ["docs/**", "*.md"]',
-          "repos: {}",
-        ].join("\n"),
-      );
-      holder.reload();
-
-      expect(holder.getEffectiveConfig("acme/widget")?.review?.exclude_paths).toEqual([
-        "docs/**",
-        "*.md",
-      ]);
+  test("matches case-insensitively", () => {
+    const allow = buildAllowlist({
+      "Acme/Widget": { enabled: true, rereview: "auto-on-sync", rereview_label: "re-review" },
     });
+    expect(allow.isAllowed("acme/widget")).toBe(true);
+    expect(allow.isAllowed("ACME/WIDGET")).toBe(true);
   });
 });

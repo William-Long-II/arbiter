@@ -162,7 +162,12 @@ Configure GitHub's webhook URL as `https://your-host/review-me/webhook` and set:
       metrics_path: /metrics
   ```
 - **Secret rotation**: update `GITHUB_PAT` / `ANTHROPIC_API_KEY` / `GITHUB_WEBHOOK_SECRET` in the env file and restart. Rotate the webhook secret in GitHub simultaneously (signature mismatches during the swap will 401 briefly).
-- **Allowlist changes**: edit `repos.yaml` and restart. The file is read once at boot; the `createAllowlistHolder` returned by `loadAllowlist` supports a `reload()` call for future SIGHUP-triggered hot-reload.
+- **Allowlist changes**: edit `repos.yaml` then send `SIGHUP` to the process — no restart required. The bot re-reads and validates the file atomically; if the file is unreadable or contains invalid YAML the old allowlist is kept in memory and the error is logged. Events already in flight when the signal arrives continue with the snapshot they started with; only new events pick up the refreshed allowlist. Both `repos:` entries and `orgs:` org-level defaults are refreshed.
+  - systemd: `sudo systemctl kill --kill-who=main --signal=SIGHUP review-me`
+  - Docker: `docker kill --signal=SIGHUP <container>`
+  - bare process: `kill -HUP <pid>`
+  
+  The metric `reviewme_config_reload_total{result="success"|"failure"}` tracks every reload attempt. Note: on Windows, SIGHUP is not a real signal; the handler is registered but never fired — a restart is required there.
 
 ## CI
 

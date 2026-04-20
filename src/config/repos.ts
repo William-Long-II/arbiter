@@ -6,12 +6,12 @@ import { z } from "zod";
 // Schema definitions
 // ---------------------------------------------------------------------------
 
-const ReviewConfigSchema = z.object({
+const RepoReviewConfigSchema = z.object({
   include_paths: z.array(z.string()).optional(),
   exclude_paths: z.array(z.string()).optional(),
 });
 
-export type ReviewConfig = z.infer<typeof ReviewConfigSchema>;
+export type RepoReviewConfig = z.infer<typeof RepoReviewConfigSchema>;
 
 /**
  * Full per-repo entry as it appears in the `repos:` block of repos.yaml.
@@ -22,21 +22,21 @@ const RepoEntrySchema = z.object({
   enabled: z.boolean().default(true),
   rereview: z.enum(["auto-on-sync", "label-or-mention"]).default("auto-on-sync"),
   rereview_label: z.string().default("re-review"),
-  review: ReviewConfigSchema.optional(),
+  review: RepoReviewConfigSchema.optional(),
 });
 
 export type RepoEntry = z.infer<typeof RepoEntrySchema>;
 
 /**
  * Org-level defaults. Every field is fully optional — an org entry may supply
- * any subset. An org entry with `enabled: true` (or the default `true`) makes
- * repos under that org allowed even without an explicit `repos:` entry.
+ * any subset. An org entry with `enabled: true` (default) makes repos under
+ * that org allowed even without an explicit `repos:` entry.
  */
 const OrgDefaultsSchema = z.object({
   enabled: z.boolean().default(true),
   rereview: z.enum(["auto-on-sync", "label-or-mention"]).optional(),
   rereview_label: z.string().optional(),
-  review: ReviewConfigSchema.optional(),
+  review: RepoReviewConfigSchema.optional(),
 });
 
 export type OrgDefaults = z.infer<typeof OrgDefaultsSchema>;
@@ -47,35 +47,34 @@ const ReposFileSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// Built-in defaults (layer 3 — the bottom of the resolution stack)
+// Built-in defaults (layer 3 — bottom of the resolution stack)
 // ---------------------------------------------------------------------------
 
 const BUILTIN_DEFAULTS = {
   enabled: true,
   rereview: "auto-on-sync" as const,
   rereview_label: "re-review",
-  review: undefined as ReviewConfig | undefined,
+  review: undefined as RepoReviewConfig | undefined,
 };
 
 // ---------------------------------------------------------------------------
-// ResolvedRepoConfig — the fully-materialized per-repo settings
+// ResolvedRepoConfig — fully-materialized per-repo settings
 // ---------------------------------------------------------------------------
 
 /**
  * The result of merging explicit repo entry → org defaults → built-in defaults.
- * Every field is always present. Callers that need merged settings (rereview
- * mode, rereview_label, review filter) should use `getEffectiveConfig` rather
- * than the raw `get` accessor.
+ * Callers that need merged settings (rereview mode, rereview_label, review
+ * filter) use `getEffectiveConfig` rather than the raw `get` accessor.
  */
 export type ResolvedRepoConfig = {
   enabled: boolean;
   rereview: "auto-on-sync" | "label-or-mention";
   rereview_label: string;
-  review?: ReviewConfig;
+  review?: RepoReviewConfig;
 };
 
 // ---------------------------------------------------------------------------
-// Allowlist holder
+// Allowlist snapshot
 // ---------------------------------------------------------------------------
 
 export type RepoAllowlist = {
@@ -97,52 +96,6 @@ export type RepoAllowlist = {
   getEffectiveConfig: (fullName: string) => ResolvedRepoConfig | null;
 };
 
-// ---------------------------------------------------------------------------
-// Construction helpers
-// ---------------------------------------------------------------------------
-
-export function loadReposFile(path: string): RepoAllowlist {
-  const raw = readFileSync(path, "utf8");
-  const parsed = YAML.parse(raw);
-  const data = ReposFileSchema.parse(parsed ?? { repos: {} });
-  return buildAllowlist(data.repos ?? {}, data.orgs ?? {});
-}
-
-// ---------------------------------------------------------------------------
-// Mutable holder — used by the server for hot-reload via SIGHUP
-// ---------------------------------------------------------------------------
-
-/**
- * A reloadable wrapper around `RepoAllowlist`. The holder delegates all reads
- * to its internal snapshot; `reload()` atomically swaps the snapshot by
- * re-reading `path` from disk.
- *
- * Why a holder rather than re-exporting a plain reference: the server wires up
- * `allowlist` once at startup and passes it into `createWebhooks`. If we just
- * re-assigned a module-level variable the webhook handlers would still hold a
- * stale closure. The holder lets every call-site close over the holder object
- * and always read through the current snapshot.
- */
-export type RepoAllowlistHolder = RepoAllowlist & {
-  /** Re-reads `path` and atomically swaps the internal snapshot. */
-  reload: () => void;
-};
-
-export function createAllowlistHolder(path: string): RepoAllowlistHolder {
-  let current = loadReposFile(path);
-
-  return {
-    isAllowed: (fullName) => current.isAllowed(fullName),
-    get: (fullName) => current.get(fullName),
-    all: () => current.all(),
-    getEffectiveConfig: (fullName) => current.getEffectiveConfig(fullName),
-    reload: () => {
-      // Throws on parse error — callers should catch and keep old snapshot.
-      current = loadReposFile(path);
-    },
-  };
-}
-
 export function buildAllowlist(
   repos: Record<string, RepoEntry>,
   orgs: Record<string, OrgDefaults> = {},
@@ -161,8 +114,7 @@ export function buildAllowlist(
   function getEffectiveConfig(fullName: string): ResolvedRepoConfig | null {
     const key = fullName.toLowerCase();
 
-    // Split into owner / name. An input without exactly one slash is
-    // malformed — return null defensively rather than throwing.
+    // An input without exactly one slash is malformed — return null defensively.
     const slashIdx = key.indexOf("/");
     if (slashIdx <= 0 || slashIdx === key.length - 1) return null;
     const owner = key.slice(0, slashIdx);
@@ -170,20 +122,17 @@ export function buildAllowlist(
     const repoEntry = normalizedRepos[key];
     const orgEntry = normalizedOrgs[owner];
 
-    // A repo is allowed when it has an explicit entry OR when there is an org
-    // entry with enabled true (or defaulted true).
     const hasExplicitRepo = repoEntry !== undefined;
     const orgEnabled = orgEntry?.enabled ?? false;
 
     if (!hasExplicitRepo && !orgEnabled) return null;
 
-    // Merge: explicit repo > org defaults > built-in defaults.
     const enabled = repoEntry?.enabled ?? orgEntry?.enabled ?? BUILTIN_DEFAULTS.enabled;
     const rereview = repoEntry?.rereview ?? orgEntry?.rereview ?? BUILTIN_DEFAULTS.rereview;
     const rereview_label = repoEntry?.rereview_label ?? orgEntry?.rereview_label ?? BUILTIN_DEFAULTS.rereview_label;
 
-    // For review config, merge at the object level (either layer wins entirely;
-    // no deep-field merging between repo and org layers to keep it predictable).
+    // Review config merges at the object level — either layer wins entirely;
+    // no deep-field merging to keep it predictable.
     const review = repoEntry?.review ?? orgEntry?.review ?? BUILTIN_DEFAULTS.review;
 
     return { enabled, rereview, rereview_label, review };
@@ -198,4 +147,90 @@ export function buildAllowlist(
     all: () => ({ ...normalizedRepos }),
     getEffectiveConfig,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Mutable holder — module-level singleton swapped atomically on reload.
+// ---------------------------------------------------------------------------
+
+/** The current live allowlist snapshot. Replaced on every successful reload. */
+let _holder: RepoAllowlist | null = null;
+
+/** Path used at boot; stored so reload() can re-read the same file. */
+let _reposPath: string | null = null;
+
+/**
+ * Returns the current allowlist snapshot.
+ *
+ * Must be called after loadReposFile() / loadAllowlist() has seeded the holder.
+ */
+export function getAllowlist(): RepoAllowlist {
+  if (_holder === null) {
+    throw new Error("getAllowlist() called before loadReposFile() seeded the holder");
+  }
+  // Snapshot the reference once so every caller in the same event-loop turn
+  // sees the same object, even if a concurrent reload swaps _holder.
+  return _holder;
+}
+
+/**
+ * Re-reads the repos file from disk and atomically swaps the holder.
+ *
+ * On any IO or parse error the old snapshot is preserved and the error is
+ * returned as a structured value — the holder is never replaced with a broken one.
+ */
+export function reload(): { ok: true; count: number } | { ok: false; error: string } {
+  if (_reposPath === null) {
+    return { ok: false, error: "reload() called before loadReposFile() set the path" };
+  }
+
+  let raw: string;
+  try {
+    raw = readFileSync(_reposPath, "utf8");
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = YAML.parse(raw);
+  } catch (err) {
+    return {
+      ok: false,
+      error: `YAML parse error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  let data: z.infer<typeof ReposFileSchema>;
+  try {
+    data = ReposFileSchema.parse(parsed ?? { repos: {} });
+  } catch (err) {
+    return {
+      ok: false,
+      error: `Schema validation error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  const next = buildAllowlist(data.repos, data.orgs ?? {});
+  _holder = next;
+
+  return { ok: true, count: Object.keys(data.repos).length };
+}
+
+/**
+ * Parses `path` and seeds the mutable holder. Call once at boot.
+ *
+ * Subsequent changes to the file on disk take effect via `reload()`.
+ */
+export function loadReposFile(path: string): RepoAllowlist {
+  _reposPath = path;
+  const raw = readFileSync(path, "utf8");
+  const parsed = YAML.parse(raw);
+  const data = ReposFileSchema.parse(parsed ?? { repos: {} });
+  const allowlist = buildAllowlist(data.repos, data.orgs ?? {});
+  _holder = allowlist;
+  return allowlist;
 }

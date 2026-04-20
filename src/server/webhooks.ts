@@ -33,7 +33,14 @@ import { enqueueOrThrow } from "./queue";
 import { decideFromCheckSuite, mentionsReviewCommand } from "./triggers";
 
 export type WebhookDeps = {
-  allowlist: RepoAllowlist;
+  /**
+   * Getter returning the current allowlist snapshot.
+   *
+   * Called at the start of each event handler so that new events pick up any
+   * allowlist reloaded via SIGHUP. In-flight events that already captured a
+   * snapshot reference before a reload are unaffected.
+   */
+  getAllowlist: () => RepoAllowlist;
   octokit: Octokit;
   anthropic: Anthropic;
   selfLogin: string;
@@ -62,10 +69,11 @@ type PipelineDeps = {
 
 export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
   const webhooks = new Webhooks({ secret });
-  const { allowlist, octokit, anthropic, selfLogin, jiraCreds } = deps;
+  const { getAllowlist, octokit, anthropic, selfLogin, jiraCreds } = deps;
 
   webhooks.on("pull_request.opened", async ({ id, payload }) => {
     const repo = payload.repository.full_name;
+    const allowlist = getAllowlist();
     if (!allowlist.isAllowed(repo)) {
       log.debug("skip: repo not allowlisted", { deliveryId: id, repo });
       return;
@@ -80,6 +88,7 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
 
   webhooks.on("pull_request.synchronize", async ({ id, payload }) => {
     const repo = payload.repository.full_name;
+    const allowlist = getAllowlist();
     if (!allowlist.isAllowed(repo)) return;
     log.info("pull_request.synchronize", {
       deliveryId: id,
@@ -92,6 +101,7 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
 
   webhooks.on("pull_request.reopened", async ({ id, payload }) => {
     const repo = payload.repository.full_name;
+    const allowlist = getAllowlist();
     if (!allowlist.isAllowed(repo)) return;
     log.info("pull_request.reopened", {
       deliveryId: id,
@@ -102,7 +112,7 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
 
   webhooks.on("check_suite.completed", async ({ id, payload }) => {
     const repoFull = payload.repository.full_name;
-    const entry = allowlist.getEffectiveConfig(repoFull);
+    const entry = getAllowlist().getEffectiveConfig(repoFull);
     if (!entry?.enabled) {
       log.debug("skip: repo not allowlisted", { deliveryId: id, repo: repoFull });
       return;
@@ -221,7 +231,7 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
 
   webhooks.on("pull_request.labeled", async ({ id, payload }) => {
     const repoFull = payload.repository.full_name;
-    const entry = allowlist.getEffectiveConfig(repoFull);
+    const entry = getAllowlist().getEffectiveConfig(repoFull);
     if (!entry?.enabled) return;
     if (entry.rereview !== "label-or-mention") return;
     if (payload.label?.name !== entry.rereview_label) return;
@@ -268,7 +278,7 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
     if (!payload.issue.pull_request) return;
 
     const repoFull = payload.repository.full_name;
-    const entry = allowlist.getEffectiveConfig(repoFull);
+    const entry = getAllowlist().getEffectiveConfig(repoFull);
     if (!entry?.enabled) return;
 
     if (!mentionsReviewCommand(payload.comment.body)) return;
