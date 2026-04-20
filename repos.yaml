@@ -1,12 +1,30 @@
 # Allowlist of repositories the review-me bot will act on.
 # Keys are "owner/name" (case-insensitive).
 #
-# Fields:
+# Two layers are supported: org-level defaults (applied to every repo under
+# that owner) and per-repo entries (which override the org defaults field by
+# field). A repo is allowed if it has an explicit enabled entry OR if its
+# owner has an enabled `orgs:` entry.
+#
+# Hot-reload this file with SIGHUP — no restart needed. See README > Operations.
+#
+# Fields (both `orgs.<name>` and `repos.<owner/name>` accept the same set):
 #   enabled        - if false, webhooks from this repo are acknowledged but ignored
 #   rereview       - how re-reviews are triggered on new commits:
 #                      auto-on-sync      (default) review again on every push
 #                      label-or-mention  wait for a label or /review-me comment
 #   rereview_label - label name that triggers a re-review when rereview=label-or-mention
+#   review:
+#     include_paths: [glob, ...]   only review files matching these globs
+#     exclude_paths: [glob, ...]   omit files matching these globs
+
+# orgs:
+#   acme:
+#     enabled: true
+#     rereview: auto-on-sync
+#     review:
+#       exclude_paths: ["docs/**", "*.generated.*"]
+
 repos: {}
 #   acme/widget:
 #     enabled: true
