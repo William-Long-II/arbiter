@@ -17,6 +17,7 @@ import { getWeeklyTokenSum } from "./budget";
 import { recordUsage } from "./usage";
 import { log } from "../server/logger";
 import { createHash } from "node:crypto";
+import { resolveAnthropicClient } from "./client";
 import {
   DEFAULT_MODEL,
   DEFAULT_MAX_TOKENS,
@@ -200,8 +201,13 @@ export async function runReview(
   const isLarge = diffSize > maxDiffChars;
   const useChunked = mode === "chunked" || (mode === "auto" && isLarge);
 
+  // Resolve a per-repo Anthropic client if the repo config names one.
+  // A single resolution covers both the single-pass call below and the
+  // runChunkedReview delegation, keeping client construction to one instance.
+  const effectiveClient = resolveAnthropicClient(input.reviewConfig, anthropic);
+
   if (useChunked) {
-    const chunkedResult = await runChunkedReview(anthropic, input, options);
+    const chunkedResult = await runChunkedReview(effectiveClient, input, options);
     // Only cache chunked results that are complete.  A pass-2 overflow warning
     // indicates the synthesized output may be truncated — safer to re-run if
     // the same SHA is requested again rather than serving a partial review.
@@ -258,7 +264,7 @@ export async function runReview(
   // the retry loop entirely rather than burning quota on repeated attempts.
   const response = await withBreaker("anthropic", () =>
     withRetry(() =>
-      anthropic.messages.parse({
+      effectiveClient.messages.parse({
         model,
         max_tokens: maxTokens,
         thinking: { type: "adaptive" },
@@ -330,7 +336,7 @@ export {
   type FetchConventionsInput,
 } from "./conventions";
 export { ReviewResultSchema, type ReviewResult, type LineComment } from "./schema";
-export { createAnthropic } from "./client";
+export { createAnthropic, resolveAnthropicClient } from "./client";
 export { filterDiff, OMITTED_FILES_SENTINEL } from "./diff-filter";
 export type { FilterDiffOptions, FilterDiffResult, OmittedFile } from "./diff-filter";
 export {

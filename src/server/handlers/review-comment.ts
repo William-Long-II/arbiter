@@ -14,9 +14,10 @@ import type { Octokit } from "../../github";
 import { resolveIntent, type JiraCredentials } from "../../jira";
 import { withRetry } from "../../util/retry";
 import { log } from "../logger";
-import { incThreadRateLimited, incThreadReply } from "../metrics";
+import { incThreadRateLimited, incThreadReply, incThreadResolvedSkip } from "../metrics";
 import { DEFAULT_MODEL } from "../../review";
 import { threadTracker } from "./thread-tracker";
+import { isThreadResolved } from "./thread-resolution";
 
 export type ReviewCommentDeps = {
   octokit: Octokit;
@@ -124,7 +125,29 @@ export async function handleReviewCommentCreated(
     return;
   }
 
-  // 7. Fetch PR title/body for intent resolution; also check draft status.
+  // 7. Skip if the GitHub review thread has already been resolved by a human.
+  //    REST does not expose `isResolved`; GraphQL does. We check here — after
+  //    the rate-limit guard — so we don't burn a GraphQL round-trip on threads
+  //    we would have suppressed anyway. This does NOT count against the reply cap.
+  const resolved = await isThreadResolved({
+    octokit,
+    owner,
+    name: repo,
+    prNumber: pullNumber,
+    commentId: inReplyToId,
+  });
+  if (resolved) {
+    incThreadResolvedSkip();
+    log.info("thread reply skipped: thread resolved by human", {
+      evt: "thread.resolved_skip",
+      repo: repoFull,
+      pr: pullNumber,
+      thread_id: inReplyToId,
+    });
+    return;
+  }
+
+  // 8. Fetch PR title/body for intent resolution; also check draft status.
   let prTitle = "";
   let prBody = "";
   try {
@@ -160,7 +183,7 @@ export async function handleReviewCommentCreated(
     creds: jiraCreds,
   });
 
-  // 8. Build a focused prompt. Keep total context small (~2 KB max):
+  // 9. Build a focused prompt. Keep total context small (~2 KB max):
   //    - original hunk from the parent bot comment (may be stale if PR was
   //      force-pushed after the original review, but it is the best context
   //      available without fetching the full diff again)
@@ -182,7 +205,7 @@ export async function handleReviewCommentCreated(
     `Your previous comment: ${parentBody}\n\n` +
     `Developer reply: ${replyBody}`;
 
-  // 9. Call Anthropic for the follow-up reply.
+  // 10. Call Anthropic for the follow-up reply.
   let replyText: string;
   try {
     const response = await withRetry(() =>
@@ -209,7 +232,7 @@ export async function handleReviewCommentCreated(
     return;
   }
 
-  // 10. Post the reply on GitHub.
+  // 11. Post the reply on GitHub.
   try {
     await withRetry(() =>
       octokit.pulls.createReplyForReviewComment({
@@ -232,7 +255,7 @@ export async function handleReviewCommentCreated(
     return;
   }
 
-  // 11. Increment reply counter and record metric on success.
+  // 12. Increment reply counter and record metric on success.
   state.replies += 1;
   incThreadReply("sent");
   log.info("thread reply sent", {
