@@ -11,6 +11,7 @@ An intent-aware GitHub pull-request review bot. Listens for webhooks, waits unti
 5. The review is posted as a GitHub review — `APPROVE` for clean PRs, `COMMENT` with inline feedback when there's something to call out. It never uses `REQUEST_CHANGES`.
 6. If a human replies to a bot line-comment, the bot replies once in-thread (capped at three replies per thread; `/stop` in a reply ends the thread permanently).
 7. Per-repo config (with org-level defaults) decides whether re-reviews trigger automatically on every push (`auto-on-sync`) or only when a reviewer applies a label or mentions `/review-me` in a comment (`label-or-mention`).
+8. Draft PRs are skipped entirely — the bot does not review them until the author marks the PR as ready for review, at which point the normal CI-gate flow runs.
 
 ---
 
@@ -148,7 +149,8 @@ Open a pull request on a repo in your allowlist. Once CI goes green, within ~60 
 | `PORT` | no | `3000` | HTTP listen port |
 | `HOSTNAME` | no | `127.0.0.1` | Bind address |
 | `GITHUB_PAT` | **yes** | — | Machine-user fine-grained PAT |
-| `GITHUB_WEBHOOK_SECRET` | **yes** | — | Shared secret for HMAC signature verification |
+| `GITHUB_WEBHOOK_SECRET` | **yes** | — | Primary shared secret for HMAC signature verification |
+| `GITHUB_WEBHOOK_SECRET_SECONDARY` | no | — | Secondary webhook secret accepted during rotation; remove once rotation is complete |
 | `GITHUB_MACHINE_USER_LOGIN` | no | — | Skip the `GET /user` lookup at boot. Use for local dev with placeholder PATs; leave unset in prod. |
 | `ANTHROPIC_API_KEY` | **yes** | — | For the Claude review pass |
 | `REPOS_PATH` | no | `./repos.yaml` | Path to the allowlist file |
@@ -163,6 +165,8 @@ Open a pull request on a repo in your allowlist. Once CI goes green, within ~60 
 | `USAGE_LOG_DIR` | no | `./var/usage` | Directory for JSONL per-review token-usage records |
 | `DEAD_LETTER_DIR` | no | `./var/dead-letter` | Directory for events that exhaust the handler |
 | `DEAD_LETTER_RETENTION_DAYS` | no | `30` | Retention for dead-letter date-dirs |
+| `AUDIT_LOG_DIR` | no | `./var/audit` | Directory for prompt + LLM-response audit records; set to `disabled` to suppress writes |
+| `AUDIT_RETENTION_DAYS` | no | `7` | Retention for audit date-dirs |
 | `METRICS_BIND_TOKEN` | no | — | If set, `GET /metrics` requires `Authorization: Bearer <token>` |
 
 ### `repos.yaml` schema
@@ -318,7 +322,20 @@ Delivery IDs are cached for 10 minutes after a successful signature verify. A se
 
 ### Secret rotation
 
-Update `GITHUB_PAT` / `ANTHROPIC_API_KEY` / `GITHUB_WEBHOOK_SECRET` in the env file and restart. Rotate the webhook secret in GitHub simultaneously — signature mismatches during the swap will `401` briefly. Log redaction scrubs PATs, Anthropic keys, JWTs, and `Bearer` tokens from any accidentally-logged payloads.
+**Zero-downtime procedure** (no dropped deliveries):
+
+1. **Set the secondary secret and deploy.**
+   Add `GITHUB_WEBHOOK_SECRET_SECONDARY=<new-secret>` to `.env` (keep `GITHUB_WEBHOOK_SECRET=<old-secret>` unchanged). Restart the bot. It now accepts both secrets. Boot log confirms: `"webhookSecondarySecret":true`.
+
+2. **Update GitHub's webhook to the new secret.**
+   In GitHub → repo/org Settings → Webhooks, change the Secret field to `<new-secret>`. GitHub immediately starts signing deliveries with the new secret. Watch the bot logs for `"evt":"webhook.secret_secondary_used"` — each occurrence confirms a delivery verified via the secondary. Once you stop seeing the secondary-used log, all in-flight deliveries have transitioned.
+
+3. **Promote and remove the secondary secret, then deploy.**
+   Set `GITHUB_WEBHOOK_SECRET=<new-secret>` and remove `GITHUB_WEBHOOK_SECRET_SECONDARY`. Restart. The rotation is complete.
+
+> **Reminder**: complete step 3. Leaving `GITHUB_WEBHOOK_SECRET_SECONDARY` set indefinitely means both secrets remain valid indefinitely, which widens the attack surface. The secondary-used metric (`reviewme_webhook_secret_used_total{slot="secondary"}`) dropping to zero is the signal that step 3 is safe.
+
+For non-webhook secrets (`GITHUB_PAT`, `ANTHROPIC_API_KEY`): update in the env file and restart. Log redaction scrubs PATs, Anthropic keys, JWTs, and `Bearer` tokens from any accidentally-logged payloads.
 
 ### Logs
 
@@ -329,6 +346,7 @@ JSON to stdout — route via journald, Fluent Bit, Vector, etc. Every log payloa
 | Metric | Kind | Labels |
 |---|---|---|
 | `reviewme_webhook_received_total` | counter | `event` |
+| `reviewme_webhook_secret_used_total` | counter | `slot` (`primary`/`secondary`) |
 | `reviewme_webhook_replay_total` | counter | — |
 | `reviewme_webhook_unknown_event_total` | counter | `event` |
 | `reviewme_reviews_total` | counter | `repo`, `verdict` |
@@ -341,6 +359,7 @@ JSON to stdout — route via journald, Fluent Bit, Vector, etc. Every log payloa
 | `reviewme_ratelimit_rejected_total` | counter | `installation` |
 | `reviewme_shutdown_drain_seconds` | histogram | — |
 | `reviewme_config_reload_total` | counter | `result` |
+| `reviewme_draft_skipped_total` | counter | — |
 
 Example Prometheus scrape config:
 
@@ -357,6 +376,7 @@ scrape_configs:
 
 - Per-review token usage is appended to `var/usage/YYYY-MM.jsonl` (set `USAGE_LOG_DIR` to relocate). Summarize with `bun run scripts/usage-report.ts --since 7d`.
 - Events that escape the handler land in `var/dead-letter/YYYY-MM-DD/<delivery-id>.json`. Replay with `bun run scripts/replay-dead-letter.ts <file>`.
+- Prompt audit records (system prompt, user prompt, raw LLM response) land in `var/audit/YYYY-MM-DD/<owner>__<repo>_<pr>_<headSha>_<mode>.json` (set `AUDIT_LOG_DIR` to relocate, or `disabled` to turn off). Retained for `AUDIT_RETENTION_DAYS` (default 7) days; locate a specific review by repo slug, PR number, and head SHA.
 
 ---
 

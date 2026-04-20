@@ -5,10 +5,12 @@ import { buildUserMessage, SYSTEM_PROMPT } from "./prompt";
 import { ReviewResultSchema } from "./schema";
 import { filterDiff } from "./diff-filter";
 import { withRetry } from "../util/retry";
+import { withBreaker } from "./breaker";
 import { runChunkedReview } from "./synthesize";
 import { fetchConventions } from "./conventions";
 import { computeCoverageDelta } from "./coverage-delta";
 import { incCoverageSignal } from "../server/metrics";
+import { writeAuditRecord } from "./audit";
 import {
   DEFAULT_MODEL,
   DEFAULT_MAX_TOKENS,
@@ -138,40 +140,59 @@ export async function runReview(
     coverageDelta,
   });
 
-  const response = await withRetry(() =>
-    anthropic.messages.parse({
-      model,
-      max_tokens: maxTokens,
-      thinking: { type: "adaptive" },
-      system: [
-        {
-          type: "text",
-          text: SYSTEM_PROMPT,
-          cache_control: { type: "ephemeral" },
+  // withBreaker gates BEFORE withRetry so a tripped breaker short-circuits
+  // the retry loop entirely rather than burning quota on repeated attempts.
+  const response = await withBreaker("anthropic", () =>
+    withRetry(() =>
+      anthropic.messages.parse({
+        model,
+        max_tokens: maxTokens,
+        thinking: { type: "adaptive" },
+        system: [
+          {
+            type: "text",
+            text: SYSTEM_PROMPT,
+            cache_control: { type: "ephemeral" },
+          },
+        ],
+        messages: [{ role: "user", content: userMessage }],
+        output_config: {
+          format: zodOutputFormat(ReviewResultSchema),
         },
-      ],
-      messages: [{ role: "user", content: userMessage }],
-      output_config: {
-        format: zodOutputFormat(ReviewResultSchema),
-      },
-    }),
+      }),
+    ),
   );
 
   if (!response.parsed_output) {
     throw new Error("LLM returned a response that did not match the schema");
   }
 
+  const usageOut = {
+    inputTokens: response.usage.input_tokens,
+    outputTokens: response.usage.output_tokens,
+    cacheCreationInputTokens:
+      response.usage.cache_creation_input_tokens ?? undefined,
+    cacheReadInputTokens:
+      response.usage.cache_read_input_tokens ?? undefined,
+  };
+
+  await writeAuditRecord({
+    repo: `${input.diff.owner}/${input.diff.repo}`,
+    pr: input.diff.number,
+    headSha: input.diff.headSha,
+    mode: "single",
+    promptSystem: SYSTEM_PROMPT,
+    promptUser: userMessage,
+    responseRaw: response.parsed_output,
+    usage: usageOut,
+    verdict: response.parsed_output.verdict,
+    warnings: [],
+  });
+
   return {
     result: response.parsed_output,
     warnings: [],
-    usage: {
-      inputTokens: response.usage.input_tokens,
-      outputTokens: response.usage.output_tokens,
-      cacheCreationInputTokens:
-        response.usage.cache_creation_input_tokens ?? undefined,
-      cacheReadInputTokens:
-        response.usage.cache_read_input_tokens ?? undefined,
-    },
+    usage: usageOut,
   };
 }
 
@@ -196,6 +217,7 @@ export {
   makeJiraNotFoundError,
   makeAnthropicRateLimitedError,
   makeAnthropicInvalidOutputError,
+  makeAnthropicCircuitOpenError,
   makePostReviewForbiddenError,
   wrapDiffFetchError,
   wrapIntentResolveError,
@@ -210,3 +232,12 @@ export {
   type PostReviewError,
   type ReviewErrorContext,
 } from "./errors";
+export {
+  CircuitBreaker,
+  CircuitOpenError,
+  getBreaker,
+  withBreaker,
+  type BreakerState,
+  type BreakerOptions,
+  type CheckResult,
+} from "./breaker";

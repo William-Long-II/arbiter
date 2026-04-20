@@ -29,11 +29,12 @@ describe("ReviewErrorCode stability", () => {
       ANTHROPIC_INVALID_TOOL_OUTPUT: "ANTHROPIC_INVALID_TOOL_OUTPUT",
       POST_REVIEW_FORBIDDEN: "POST_REVIEW_FORBIDDEN",
       DIFF_TOO_LARGE: "DIFF_TOO_LARGE",
+      ANTHROPIC_CIRCUIT_OPEN: "ANTHROPIC_CIRCUIT_OPEN",
     });
   });
 
-  test("enum has exactly 6 codes", () => {
-    expect(Object.keys(ReviewErrorCode)).toHaveLength(6);
+  test("enum has exactly 7 codes", () => {
+    expect(Object.keys(ReviewErrorCode)).toHaveLength(7);
   });
 
   test("every code value equals its key (self-documenting)", () => {

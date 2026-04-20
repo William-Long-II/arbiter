@@ -256,6 +256,13 @@ registry.registerCounter(
   "Total thread replies suppressed by the per-thread rate limit.",
 );
 
+/** PRs skipped because they were in draft state. */
+export const draftSkippedTotal = "reviewme_draft_skipped_total";
+registry.registerCounter(
+  draftSkippedTotal,
+  "Total PR events skipped because the pull request was in draft state.",
+);
+
 // --- Histograms ---
 
 /** Seconds spent draining in-flight tasks on SIGTERM before process.exit(). */
@@ -293,6 +300,20 @@ export const coverageSignalTotal = "reviewme_coverage_signal_total";
 registry.registerCounter(
   coverageSignalTotal,
   "Total PR reviews by test-coverage signal bucket (no_new_src/has_tests/untested).",
+);
+
+/** Circuit breaker state gauge (0=closed, 1=open, 2=half-open), labelled by dep. */
+export const breakerState = "reviewme_breaker_state";
+registry.registerCounter(
+  breakerState,
+  "Current circuit breaker state by dependency (0=closed, 1=open, 2=half-open).",
+);
+
+/** Webhook deliveries that verified successfully, labelled by secret slot (primary/secondary). */
+export const webhookSecretUsedTotal = "reviewme_webhook_secret_used_total";
+registry.registerCounter(
+  webhookSecretUsedTotal,
+  "Total webhook deliveries verified successfully, by secret slot (primary/secondary).",
 );
 
 // --- Replay-protection counters ---
@@ -345,6 +366,10 @@ export function incCoverageSignal(
   registry.incrementCounter(coverageSignalTotal, { bucket });
 }
 
+export function incWebhookSecretUsed(slot: "primary" | "secondary"): void {
+  registry.incrementCounter(webhookSecretUsedTotal, { slot });
+}
+
 export function incWebhookReplay(): void {
   registry.incrementCounter(webhookReplayTotal, {});
 }
@@ -371,6 +396,34 @@ export function incThreadReply(outcome: "sent" | "error"): void {
 
 export function incThreadRateLimited(): void {
   registry.incrementCounter(threadRateLimitedTotal);
+}
+
+/**
+ * Record the current circuit-breaker state for `dep`.
+ *
+ * The metrics registry only has Counter (monotonic). We simulate a gauge by
+ * directly setting the counter value — valid here because breaker state is a
+ * small bounded enum value (0, 1, or 2), not a rate, and the semantics of
+ * "latest wins" match what operators need for alerting on open breakers.
+ */
+export function setBreakerState(dep: string, value: number): void {
+  const entry = (
+    registry as unknown as {
+      counters: Map<string, { series: Map<string, { value: number }> }>;
+    }
+  ).counters.get(breakerState);
+  if (!entry) return;
+  const key = `dep="${dep}"`;
+  let state = entry.series.get(key);
+  if (!state) {
+    state = { value: 0 };
+    entry.series.set(key, state);
+  }
+  state.value = value;
+}
+
+export function incDraftSkipped(): void {
+  registry.incrementCounter(draftSkippedTotal);
 }
 
 // ---------------------------------------------------------------------------
