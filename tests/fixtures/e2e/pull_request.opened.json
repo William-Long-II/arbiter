@@ -1,0 +1,26 @@
+{
+  "action": "opened",
+  "number": 7,
+  "pull_request": {
+    "number": 7,
+    "title": "Add widget factory",
+    "body": "This PR adds a factory function for creating widgets.",
+    "head": {
+      "ref": "feature/widget-factory",
+      "sha": "aabbccddee0011223344556677889900aabbccdd"
+    },
+    "base": {
+      "ref": "main",
+      "sha": "1111111111111111111111111111111111111111"
+    },
+    "user": { "login": "octocat", "id": 1 }
+  },
+  "repository": {
+    "id": 42,
+    "full_name": "acme/widget",
+    "owner": { "login": "acme", "id": 10 },
+    "name": "widget",
+    "private": false
+  },
+  "sender": { "login": "octocat", "id": 1 }
+}

@@ -1,6 +1,6 @@
 import { Webhooks } from "@octokit/webhooks";
 import type Anthropic from "@anthropic-ai/sdk";
-import type { RepoAllowlist, RepoEntry } from "../config";
+import type { RepoAllowlist, ResolvedRepoConfig } from "../config";
 import {
   evaluateHeadSha,
   fetchPullRequestDiff,
@@ -13,18 +13,36 @@ import {
 } from "../github";
 import { resolveIntent, type JiraCredentials } from "../jira";
 import { runReview, DEFAULT_MODEL } from "../review";
+import {
+  isReviewError,
+  logReviewError,
+  wrapDiffFetchError,
+  wrapIntentResolveError,
+  wrapLlmReviewError,
+  wrapPostReviewError,
+} from "../review/errors";
 import { recordUsage } from "../review/usage";
 import { log } from "./logger";
 import {
   incAnthropicTokens,
   incReviewFailures,
   incReviewsTotal,
+  incThreadReply,
   observeReviewDuration,
 } from "./metrics";
+import { enqueueOrThrow } from "./queue";
 import { decideFromCheckSuite, mentionsReviewCommand } from "./triggers";
+import { handleReviewCommentCreated } from "./handlers/review-comment";
 
 export type WebhookDeps = {
-  allowlist: RepoAllowlist;
+  /**
+   * Getter returning the current allowlist snapshot.
+   *
+   * Called at the start of each event handler so that new events pick up any
+   * allowlist reloaded via SIGHUP. In-flight events that already captured a
+   * snapshot reference before a reload are unaffected.
+   */
+  getAllowlist: () => RepoAllowlist;
   octokit: Octokit;
   anthropic: Anthropic;
   selfLogin: string;
@@ -47,15 +65,17 @@ type PipelineDeps = {
   jiraCreds?: JiraCredentials;
   deliveryId: string;
   source: TriggerSource;
-  entry: RepoEntry;
+  /** Fully-merged per-repo config (repo > org > built-in defaults). */
+  entry: ResolvedRepoConfig;
 };
 
 export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
   const webhooks = new Webhooks({ secret });
-  const { allowlist, octokit, anthropic, selfLogin, jiraCreds } = deps;
+  const { getAllowlist, octokit, anthropic, selfLogin, jiraCreds } = deps;
 
   webhooks.on("pull_request.opened", async ({ id, payload }) => {
     const repo = payload.repository.full_name;
+    const allowlist = getAllowlist();
     if (!allowlist.isAllowed(repo)) {
       log.debug("skip: repo not allowlisted", { deliveryId: id, repo });
       return;
@@ -70,6 +90,7 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
 
   webhooks.on("pull_request.synchronize", async ({ id, payload }) => {
     const repo = payload.repository.full_name;
+    const allowlist = getAllowlist();
     if (!allowlist.isAllowed(repo)) return;
     log.info("pull_request.synchronize", {
       deliveryId: id,
@@ -82,6 +103,7 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
 
   webhooks.on("pull_request.reopened", async ({ id, payload }) => {
     const repo = payload.repository.full_name;
+    const allowlist = getAllowlist();
     if (!allowlist.isAllowed(repo)) return;
     log.info("pull_request.reopened", {
       deliveryId: id,
@@ -92,7 +114,7 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
 
   webhooks.on("check_suite.completed", async ({ id, payload }) => {
     const repoFull = payload.repository.full_name;
-    const entry = allowlist.get(repoFull);
+    const entry = getAllowlist().getEffectiveConfig(repoFull);
     if (!entry?.enabled) {
       log.debug("skip: repo not allowlisted", { deliveryId: id, repo: repoFull });
       return;
@@ -166,15 +188,19 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
           continue;
         }
 
-        await runPipeline(ref, {
-          octokit,
-          anthropic,
-          selfLogin,
-          jiraCreds,
-          deliveryId: id,
-          source: "check-suite",
-          entry,
-        });
+        enqueueOrThrow(
+          () =>
+            runPipeline(ref, {
+              octokit,
+              anthropic,
+              selfLogin,
+              jiraCreds,
+              deliveryId: id,
+              source: "check-suite",
+              entry,
+            }),
+          { deliveryId: id, repo: repoFull, pr: ref.pullNumber },
+        );
 
         // If a label triggered the gate, clear it so subsequent pushes need
         // re-confirmation. Mentions don't need clearing.
@@ -188,20 +214,26 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
           );
         }
       } catch (err) {
-        log.error("review pipeline failed", {
-          deliveryId: id,
-          repo: repoFull,
-          pr: ref.pullNumber,
-          headSha,
-          error: err instanceof Error ? err.message : String(err),
-        });
+        // ReviewErrors are already logged inside runPipeline with the structured
+        // `review.error` event. Only log the outer context for non-ReviewErrors
+        // (e.g. mode-gate checks, label removal) or for unexpected errors that
+        // slipped through without wrapping.
+        if (!isReviewError(err)) {
+          log.error("review pipeline failed", {
+            deliveryId: id,
+            repo: repoFull,
+            pr: ref.pullNumber,
+            headSha,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     }
   });
 
   webhooks.on("pull_request.labeled", async ({ id, payload }) => {
     const repoFull = payload.repository.full_name;
-    const entry = allowlist.get(repoFull);
+    const entry = getAllowlist().getEffectiveConfig(repoFull);
     if (!entry?.enabled) return;
     if (entry.rereview !== "label-or-mention") return;
     if (payload.label?.name !== entry.rereview_label) return;
@@ -248,7 +280,7 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
     if (!payload.issue.pull_request) return;
 
     const repoFull = payload.repository.full_name;
-    const entry = allowlist.get(repoFull);
+    const entry = getAllowlist().getEffectiveConfig(repoFull);
     if (!entry?.enabled) return;
 
     if (!mentionsReviewCommand(payload.comment.body)) return;
@@ -290,6 +322,27 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
     });
   });
 
+  webhooks.on(
+    "pull_request_review_comment.created",
+    async ({ id, payload }) => {
+      try {
+        await handleReviewCommentCreated(payload, {
+          octokit,
+          anthropic,
+          selfLogin,
+          jiraCreds,
+        });
+      } catch (err) {
+        incThreadReply("error");
+        log.error("review comment handler error", {
+          evt: "thread.handler_error",
+          deliveryId: id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+
   return webhooks;
 }
 
@@ -325,12 +378,17 @@ async function triggerExplicit(
       return;
     }
 
-    await runPipeline(ref, deps);
+    enqueueOrThrow(
+      () => runPipeline(ref, deps),
+      { deliveryId: deps.deliveryId, repo: repoFull, pr: ref.pullNumber },
+    );
   } catch (err) {
-    log.error("explicit trigger failed", {
-      ...logFields,
-      error: err instanceof Error ? err.message : String(err),
-    });
+    if (!isReviewError(err)) {
+      log.error("explicit trigger failed", {
+        ...logFields,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 }
 
@@ -343,6 +401,7 @@ async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
     headSha: ref.headSha,
     source: deps.source,
   };
+  const errorCtx = { repo: repoFull, pr: ref.pullNumber };
 
   if (
     await hasExistingReview(
@@ -361,6 +420,7 @@ async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
   log.info("starting review", logFields);
   const pipelineStart = Date.now();
 
+  // Stage: diff-fetch
   let diff: Awaited<ReturnType<typeof fetchPullRequestDiff>>;
   try {
     diff = await fetchPullRequestDiff(
@@ -371,9 +431,12 @@ async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
     );
   } catch (err) {
     incReviewFailures("fetch-diff", err instanceof Error ? err.message : "unknown");
-    throw err;
+    const reviewErr = wrapDiffFetchError(err);
+    logReviewError(reviewErr, errorCtx, { deliveryId: deps.deliveryId });
+    throw reviewErr;
   }
 
+  // Stage: intent-resolve
   let intent: Awaited<ReturnType<typeof resolveIntent>>;
   try {
     intent = await resolveIntent({
@@ -384,20 +447,31 @@ async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
     });
   } catch (err) {
     incReviewFailures("resolve-intent", err instanceof Error ? err.message : "unknown");
-    throw err;
+    // resolveIntent is fail-open by design; an error here is unexpected
+    // (e.g. a programming error). We wrap it with a placeholder ticket key.
+    const reviewErr = wrapIntentResolveError(err, "(unknown)");
+    logReviewError(reviewErr, errorCtx, { deliveryId: deps.deliveryId });
+    throw reviewErr;
   }
 
-  let reviewResult: Awaited<ReturnType<typeof runReview>>;
+  // Stage: llm-review
+  let result: Awaited<ReturnType<typeof runReview>>["result"];
+  let warnings: string[];
+  let usage: Awaited<ReturnType<typeof runReview>>["usage"];
   try {
-    reviewResult = await runReview(deps.anthropic, { intent, diff });
+    ({ result, warnings, usage } = await runReview(deps.anthropic, {
+      intent,
+      diff,
+      octokit: deps.octokit,
+    }));
   } catch (err) {
     incReviewFailures("llm-review", err instanceof Error ? err.message : "unknown");
-    throw err;
+    const reviewErr = wrapLlmReviewError(err);
+    logReviewError(reviewErr, errorCtx, { deliveryId: deps.deliveryId });
+    throw reviewErr;
   }
 
-  const { result, warnings, usage } = reviewResult;
-
-  // Record token usage.
+  // Record token usage for metrics and the per-review usage log.
   if (usage) {
     const u = usage as Record<string, unknown>;
     const pairs: Array<[string, unknown]> = [
@@ -451,6 +525,7 @@ async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
     usage,
   });
 
+  // Stage: post-review
   let outcome: Awaited<ReturnType<typeof postReview>>;
   try {
     outcome = await postReview(deps.octokit, {
@@ -463,7 +538,9 @@ async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
     });
   } catch (err) {
     incReviewFailures("post-review", err instanceof Error ? err.message : "unknown");
-    throw err;
+    const reviewErr = wrapPostReviewError(err);
+    logReviewError(reviewErr, errorCtx, { deliveryId: deps.deliveryId });
+    throw reviewErr;
   }
 
   const durationSeconds = (Date.now() - pipelineStart) / 1_000;

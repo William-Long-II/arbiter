@@ -1,14 +1,12 @@
+import { redact } from "../util/redact";
+
 type LogLevel = "debug" | "info" | "warn" | "error";
 
 type Fields = Record<string, unknown>;
 
 function emit(level: LogLevel, msg: string, fields: Fields = {}) {
-  const line = JSON.stringify({
-    ts: new Date().toISOString(),
-    level,
-    msg,
-    ...fields,
-  });
+  const payload = redact({ ts: new Date().toISOString(), level, msg, ...fields });
+  const line = JSON.stringify(payload);
   if (level === "error" || level === "warn") {
     console.error(line);
   } else {

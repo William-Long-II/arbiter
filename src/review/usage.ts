@@ -12,6 +12,8 @@ export type UsageRecord = {
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
+  /** Which pass in a chunked review this record belongs to; null for single-pass reviews. */
+  pass?: 1 | 2 | null;
 };
 
 export type RecordUsageInput = {
@@ -24,6 +26,8 @@ export type RecordUsageInput = {
   outputTokens: number;
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
+  /** Which pass in a chunked review this record belongs to; null for single-pass reviews. */
+  pass?: 1 | 2 | null;
 };
 
 // Pricing per million tokens (as of model release; update when Anthropic publishes new rates)
@@ -56,6 +60,7 @@ export async function recordUsage(input: RecordUsageInput): Promise<void> {
     outputTokens: input.outputTokens,
     cacheReadTokens: input.cacheReadTokens ?? 0,
     cacheCreationTokens: input.cacheCreationTokens ?? 0,
+    ...(input.pass !== undefined ? { pass: input.pass } : {}),
   };
 
   const logDir = getUsageLogDir();

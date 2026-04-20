@@ -320,8 +320,9 @@ describe("metrics integration: webhook counter", () => {
     const { buildAllowlist } = await import("../src/config/repos");
     const { registry, webhookReceived } = await import("../src/server/metrics");
 
+    const emptyAllowlist = buildAllowlist({});
     const webhooks = createWebhooks(SECRET, {
-      allowlist: buildAllowlist({}),
+      getAllowlist: () => emptyAllowlist,
       octokit: {} as Octokit,
       anthropic: {} as Anthropic,
       selfLogin: "review-me-bot",

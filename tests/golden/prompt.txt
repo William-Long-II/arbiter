@@ -1,0 +1,40 @@
+## Intent
+Source: pr-body
+Title: Add widget factory
+
+This PR adds a factory function for creating widgets.
+
+## Pull Request acme/widget#7
+Title: Add widget factory
+Changed files: 2 (+15 / -2)
+
+### PR description
+This PR adds a factory function for creating widgets.
+
+## Diff
+
+### src/factory.ts (added, +12 / -0)
+```diff
+@@ -0,0 +1,12 @@
++export type Widget = {
++  id: string;
++  name: string;
++};
++
++export function createWidget(name: string): Widget {
++  return {
++    id: Math.random().toString(36).slice(2),
++    name,
++  };
++}
+
+```
+
+### src/index.ts (modified, +3 / -2)
+```diff
+@@ -1,3 +1,4 @@
+-// placeholder
++export { createWidget, type Widget } from './factory';
++export { run } from './runner';
+
+```

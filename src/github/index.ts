@@ -7,6 +7,10 @@ export {
 } from "./checks";
 export { fetchPullRequestDiff, type PullRequestDiff, type PullRequestFile } from "./diff";
 export {
+  fetchGitattributes,
+  type FetchGitattributesInput,
+} from "./gitattributes";
+export {
   postReview,
   hasExistingReview,
   hasAnyPriorReview,

@@ -200,6 +200,13 @@ export const registry = new Registry();
 
 // --- Counters ---
 
+/** Config reload attempts, labelled by result (success/failure). */
+export const configReloadTotal = "reviewme_config_reload_total";
+registry.registerCounter(
+  configReloadTotal,
+  "Total number of SIGHUP-triggered config reloads, by result (success/failure).",
+);
+
 /** Total webhooks received, labelled by GitHub event name. */
 export const webhookReceived = "reviewme_webhook_received_total";
 registry.registerCounter(
@@ -228,7 +235,35 @@ registry.registerCounter(
   "Total Anthropic API tokens consumed, by kind (input/output/cache_read/cache_write).",
 );
 
+/** Webhook requests rejected by the per-installation rate limiter. */
+export const ratelimitRejected = "reviewme_ratelimit_rejected_total";
+registry.registerCounter(
+  ratelimitRejected,
+  "Total webhook requests rejected by the per-installation rate limiter.",
+);
+
+/** Thread replies posted (or errored), labelled by outcome (sent/error). */
+export const threadReplyTotal = "reviewme_thread_reply_total";
+registry.registerCounter(
+  threadReplyTotal,
+  "Total thread reply attempts, by outcome (sent/error).",
+);
+
+/** Threads rate-limited (exceeded per-thread reply cap). */
+export const threadRateLimitedTotal = "reviewme_thread_rate_limited_total";
+registry.registerCounter(
+  threadRateLimitedTotal,
+  "Total thread replies suppressed by the per-thread rate limit.",
+);
+
 // --- Histograms ---
+
+/** Seconds spent draining in-flight tasks on SIGTERM before process.exit(). */
+export const shutdownDrainSeconds = "reviewme_shutdown_drain_seconds";
+registry.registerHistogram(
+  shutdownDrainSeconds,
+  "Seconds elapsed draining in-flight tasks during graceful shutdown.",
+);
 
 /** End-to-end review duration in seconds. */
 export const reviewDuration = "reviewme_review_duration_seconds";
@@ -242,6 +277,22 @@ export const ciWaitSeconds = "reviewme_ci_wait_seconds";
 registry.registerHistogram(
   ciWaitSeconds,
   "Seconds elapsed waiting for CI gate to pass.",
+);
+
+// --- Replay-protection counters ---
+
+/** Webhook deliveries rejected as replays (duplicate delivery ID). */
+export const webhookReplayTotal = "reviewme_webhook_replay_total";
+registry.registerCounter(
+  webhookReplayTotal,
+  "Total webhook deliveries rejected as replays (duplicate delivery ID within TTL).",
+);
+
+/** Webhook deliveries rejected because the event name is not recognised. */
+export const webhookUnknownEventTotal = "reviewme_webhook_unknown_event_total";
+registry.registerCounter(
+  webhookUnknownEventTotal,
+  "Total webhook deliveries rejected because the X-GitHub-Event is not handled.",
 );
 
 // ---------------------------------------------------------------------------
@@ -270,6 +321,34 @@ export function observeReviewDuration(seconds: number): void {
 
 export function observeCiWaitSeconds(seconds: number): void {
   registry.observeHistogram(ciWaitSeconds, seconds);
+}
+
+export function incWebhookReplay(): void {
+  registry.incrementCounter(webhookReplayTotal, {});
+}
+
+export function incWebhookUnknownEvent(event: string): void {
+  registry.incrementCounter(webhookUnknownEventTotal, { event });
+}
+
+export function incConfigReload(result: "success" | "failure"): void {
+  registry.incrementCounter(configReloadTotal, { result });
+}
+
+export function incRatelimitRejected(installation: string): void {
+  registry.incrementCounter(ratelimitRejected, { installation });
+}
+
+export function observeShutdownDrain(seconds: number): void {
+  registry.observeHistogram(shutdownDrainSeconds, seconds);
+}
+
+export function incThreadReply(outcome: "sent" | "error"): void {
+  registry.incrementCounter(threadReplyTotal, { outcome });
+}
+
+export function incThreadRateLimited(): void {
+  registry.incrementCounter(threadRateLimitedTotal);
 }
 
 // ---------------------------------------------------------------------------
