@@ -14,8 +14,9 @@ function sign(payload: string, secret = SECRET): string {
 type ServerHandle = { server: ReturnType<typeof Bun.serve>; url: string };
 
 async function startTestServer(): Promise<ServerHandle> {
+  const allowlist = buildAllowlist({});
   const webhooks = createWebhooks(SECRET, {
-    allowlist: buildAllowlist({}),
+    getAllowlist: () => allowlist,
     octokit: {} as Octokit,
     anthropic: {} as Anthropic,
     selfLogin: "review-me-bot",
