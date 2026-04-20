@@ -323,6 +323,15 @@ registry.registerCounter(
   "Total webhook deliveries verified successfully, by secret slot (primary/secondary).",
 );
 
+// --- Result cache counters ---
+
+/** Review result cache hits and misses, labelled by result (hit/miss). */
+export const reviewCacheTotal = "reviewme_review_cache_total";
+registry.registerCounter(
+  reviewCacheTotal,
+  "Total review result cache lookups, by result (hit/miss).",
+);
+
 // --- Replay-protection counters ---
 
 /** Webhook deliveries rejected as replays (duplicate delivery ID). */
@@ -431,6 +440,10 @@ export function setBreakerState(dep: string, value: number): void {
 
 export function incDraftSkipped(): void {
   registry.incrementCounter(draftSkippedTotal);
+}
+
+export function incReviewCache(result: "hit" | "miss"): void {
+  registry.incrementCounter(reviewCacheTotal, { result });
 }
 
 export function incSlashCommand(

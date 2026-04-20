@@ -10,8 +10,10 @@ import { runChunkedReview } from "./synthesize";
 import { fetchConventions } from "./conventions";
 import { computeCoverageDelta } from "./coverage-delta";
 import { applicableHeuristics } from "./heuristics/index";
-import { incCoverageSignal } from "../server/metrics";
+import { incCoverageSignal, incReviewCache } from "../server/metrics";
 import { writeAuditRecord } from "./audit";
+import { resultCache } from "./result-cache";
+import { log } from "../server/logger";
 import {
   DEFAULT_MODEL,
   DEFAULT_MAX_TOKENS,
@@ -55,6 +57,23 @@ export async function runReview(
   const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
   const maxDiffChars = options.maxDiffChars ?? DEFAULT_MAX_DIFF_CHARS;
   const mode = getReviewMode();
+
+  // ---------------------------------------------------------------------------
+  // Result cache check — avoids redundant LLM calls when a CI provider fires
+  // check_suite.completed multiple times on the same head SHA (retries, branch
+  // protection re-evaluations, etc.).
+  // ---------------------------------------------------------------------------
+  const repoFull = `${input.diff.owner}/${input.diff.repo}`;
+  const headSha = input.diff.headSha;
+  const cacheKey = `${repoFull}@${headSha}`;
+
+  const cached = resultCache.get(cacheKey);
+  if (cached) {
+    log.info("review.cache_hit", { repo: repoFull, headSha });
+    incReviewCache("hit");
+    return cached;
+  }
+  incReviewCache("miss");
 
   // Fetch conventions and .gitattributes in parallel — both are GitHub reads
   // with no ordering dependency. Errors inside each helper are already
@@ -113,13 +132,23 @@ export async function runReview(
   const useChunked = mode === "chunked" || (mode === "auto" && isLarge);
 
   if (useChunked) {
-    return runChunkedReview(anthropic, input, options);
+    const chunkedResult = await runChunkedReview(anthropic, input, options);
+    // Only cache chunked results that are complete.  A pass-2 overflow warning
+    // indicates the synthesized output may be truncated — safer to re-run if
+    // the same SHA is requested again rather than serving a partial review.
+    const hasOverflow = chunkedResult.warnings.some((w) =>
+      w.includes("pass-2 overflow"),
+    );
+    if (!hasOverflow) {
+      resultCache.set(cacheKey, chunkedResult);
+    }
+    return chunkedResult;
   }
 
   // Single-pass path (mode === "single" or auto + small diff).
   if (mode === "single" && isLarge) {
     // Operator explicitly opted into single-pass despite size — fail open.
-    return {
+    const failOpenResult: RunReviewOutput = {
       result: {
         verdict: "comment",
         summary:
@@ -133,6 +162,8 @@ export async function runReview(
         `diff exceeded review threshold (${diffSize} > ${maxDiffChars}); fail-open`,
       ],
     };
+    resultCache.set(cacheKey, failOpenResult);
+    return failOpenResult;
   }
 
   const userMessage = buildUserMessage({
@@ -192,11 +223,13 @@ export async function runReview(
     warnings: [],
   });
 
-  return {
+  const singlePassResult: RunReviewOutput = {
     result: response.parsed_output,
     warnings: [],
     usage: usageOut,
   };
+  resultCache.set(cacheKey, singlePassResult);
+  return singlePassResult;
 }
 
 export { buildUserMessage, SYSTEM_PROMPT } from "./prompt";

@@ -3,6 +3,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { PullRequestDiff } from "../src/github";
 import type { Intent } from "../src/jira";
 import { runReview, type ReviewResult } from "../src/review";
+import { resultCache } from "../src/review/result-cache";
 import * as synthesizeModule from "../src/review/synthesize";
 import * as usageModule from "../src/review/usage";
 
@@ -65,6 +66,7 @@ describe("runReview — REVIEW_MODE routing", () => {
   beforeEach(() => {
     originalMode = process.env["REVIEW_MODE"];
     recordUsageSpy = spyOn(usageModule, "recordUsage").mockResolvedValue(undefined);
+    resultCache.clear();
   });
 
   afterEach(() => {
@@ -169,6 +171,7 @@ describe("runReview — single-pass behavior", () => {
     originalMode = process.env["REVIEW_MODE"];
     // Pin to single-pass for these tests so auto-routing doesn't interfere.
     process.env["REVIEW_MODE"] = "single";
+    resultCache.clear();
   });
 
   afterEach(() => {
