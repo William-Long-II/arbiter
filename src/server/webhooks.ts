@@ -12,8 +12,15 @@ import {
   type Octokit,
 } from "../github";
 import { resolveIntent, type JiraCredentials } from "../jira";
-import { runReview } from "../review";
+import { runReview, DEFAULT_MODEL } from "../review";
+import { recordUsage } from "../review/usage";
 import { log } from "./logger";
+import {
+  incAnthropicTokens,
+  incReviewFailures,
+  incReviewsTotal,
+  observeReviewDuration,
+} from "./metrics";
 import { enqueueOrThrow } from "./queue";
 import { decideFromCheckSuite, mentionsReviewCommand } from "./triggers";
 
@@ -360,24 +367,86 @@ async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
   }
 
   log.info("starting review", logFields);
+  const pipelineStart = Date.now();
 
-  const diff = await fetchPullRequestDiff(
-    deps.octokit,
-    ref.owner,
-    ref.repo,
-    ref.pullNumber,
-  );
+  let diff: Awaited<ReturnType<typeof fetchPullRequestDiff>>;
+  try {
+    diff = await fetchPullRequestDiff(
+      deps.octokit,
+      ref.owner,
+      ref.repo,
+      ref.pullNumber,
+    );
+  } catch (err) {
+    incReviewFailures("fetch-diff", err instanceof Error ? err.message : "unknown");
+    throw err;
+  }
 
-  const intent = await resolveIntent({
-    prTitle: diff.title,
-    prBody: diff.body,
-    branch: "",
-    creds: deps.jiraCreds,
+  let intent: Awaited<ReturnType<typeof resolveIntent>>;
+  try {
+    intent = await resolveIntent({
+      prTitle: diff.title,
+      prBody: diff.body,
+      branch: "",
+      creds: deps.jiraCreds,
+    });
+  } catch (err) {
+    incReviewFailures("resolve-intent", err instanceof Error ? err.message : "unknown");
+    throw err;
+  }
+
+  let reviewResult: Awaited<ReturnType<typeof runReview>>;
+  try {
+    reviewResult = await runReview(deps.anthropic, { intent, diff });
+  } catch (err) {
+    incReviewFailures("llm-review", err instanceof Error ? err.message : "unknown");
+    throw err;
+  }
+
+  const { result, warnings, usage } = reviewResult;
+
+  // Record token usage.
+  if (usage) {
+    const u = usage as Record<string, unknown>;
+    const pairs: Array<[string, unknown]> = [
+      ["input", u["input_tokens"]],
+      ["output", u["output_tokens"]],
+      ["cache_read", u["cache_read_input_tokens"]],
+      ["cache_write", u["cache_creation_input_tokens"]],
+    ];
+    for (const [kind, count] of pairs) {
+      if (typeof count === "number" && count > 0) {
+        incAnthropicTokens(kind, count);
+      }
+    }
+  }
+
+  const isTooLarge = warnings.some((w) => w.includes("diff exceeded review threshold"));
+  const usageVerdict = isTooLarge ? "too_large" : result.verdict;
+
+  await recordUsage({
+    repo: repoFull,
+    pr: ref.pullNumber,
+    headSha: ref.headSha,
+    model: DEFAULT_MODEL,
+    verdict: usageVerdict,
+    inputTokens: usage?.inputTokens ?? 0,
+    outputTokens: usage?.outputTokens ?? 0,
+    cacheReadTokens: usage?.cacheReadInputTokens,
+    cacheCreationTokens: usage?.cacheCreationInputTokens,
   });
 
-  const { result, warnings, usage } = await runReview(deps.anthropic, {
-    intent,
-    diff,
+  log.info("review.usage", {
+    repo: repoFull,
+    pr: ref.pullNumber,
+    headSha: ref.headSha,
+    model: DEFAULT_MODEL,
+    verdict: usageVerdict,
+    inputTokens: usage?.inputTokens ?? 0,
+    outputTokens: usage?.outputTokens ?? 0,
+    cacheReadTokens: usage?.cacheReadInputTokens ?? 0,
+    cacheCreationTokens: usage?.cacheCreationInputTokens ?? 0,
+    evt: "review.usage",
   });
 
   log.info("review produced", {
@@ -390,14 +459,24 @@ async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
     usage,
   });
 
-  const outcome = await postReview(deps.octokit, {
-    owner: ref.owner,
-    repo: ref.repo,
-    pullNumber: ref.pullNumber,
-    headSha: ref.headSha,
-    selfLogin: deps.selfLogin,
-    review: result,
-  });
+  let outcome: Awaited<ReturnType<typeof postReview>>;
+  try {
+    outcome = await postReview(deps.octokit, {
+      owner: ref.owner,
+      repo: ref.repo,
+      pullNumber: ref.pullNumber,
+      headSha: ref.headSha,
+      selfLogin: deps.selfLogin,
+      review: result,
+    });
+  } catch (err) {
+    incReviewFailures("post-review", err instanceof Error ? err.message : "unknown");
+    throw err;
+  }
+
+  const durationSeconds = (Date.now() - pipelineStart) / 1_000;
+  observeReviewDuration(durationSeconds);
+  incReviewsTotal(repoFull, result.verdict);
 
   log.info("review posted", { ...logFields, outcome });
 }
