@@ -256,6 +256,13 @@ registry.registerCounter(
   "Total thread replies suppressed by the per-thread rate limit.",
 );
 
+/** Threads skipped because a human already resolved them on GitHub. */
+export const threadResolvedSkipTotal = "reviewme_thread_resolved_skip_total";
+registry.registerCounter(
+  threadResolvedSkipTotal,
+  "Total thread replies skipped because the GitHub review thread was already resolved by a human.",
+);
+
 /** PRs skipped because they were in draft state. */
 export const draftSkippedTotal = "reviewme_draft_skipped_total";
 registry.registerCounter(
@@ -419,6 +426,10 @@ export function incThreadReply(outcome: "sent" | "error"): void {
 
 export function incThreadRateLimited(): void {
   registry.incrementCounter(threadRateLimitedTotal);
+}
+
+export function incThreadResolvedSkip(): void {
+  registry.incrementCounter(threadResolvedSkipTotal);
 }
 
 /**
