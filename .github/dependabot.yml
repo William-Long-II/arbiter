@@ -1,0 +1,48 @@
+# Dependabot configuration for review-me
+# Docs: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+version: 2
+
+updates:
+  # ── npm / Bun ──────────────────────────────────────────────────────────────
+  - package-ecosystem: "npm"
+    # Bun uses the same package.json / node_modules layout that Dependabot's
+    # npm backend understands, so "npm" is the correct ecosystem value here.
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      # 08:00 UTC — early in the London working day so PRs land before most
+      # contributors start their day; avoids weekend noise.
+      time: "08:00"
+      timezone: "UTC"
+    # Cap open PRs at 5 so the queue stays manageable if the bot goes a few
+    # weeks unattended. Dependabot stops opening new PRs once this limit is
+    # reached and resumes when older ones are merged or closed.
+    open-pull-requests-limit: 5
+    # Apply these labels to every Dependabot PR for easy triage and
+    # auto-close automation hooks.
+    labels:
+      - "deps"
+      - "auto-dependabot"
+    rebase-strategy: "auto"
+    groups:
+      # Combine all patch and minor bumps into one PR per week.
+      # Rationale: patch/minor updates are low risk; batching them reduces
+      # review noise without hiding major-version breaking changes.
+      patch-and-minor:
+        update-types:
+          - "minor"
+          - "patch"
+    # Major-version bumps are intentionally NOT grouped — each gets its own
+    # PR so reviewers can evaluate the breaking-change surface individually.
+
+  # ── GitHub Actions ─────────────────────────────────────────────────────────
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      # Monthly cadence is sufficient for action pinning: action releases are
+      # infrequent and the security surface is lower than runtime deps.
+      interval: "monthly"
+    labels:
+      - "deps"
+      - "auto-dependabot"

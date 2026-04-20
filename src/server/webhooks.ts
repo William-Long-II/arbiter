@@ -28,11 +28,13 @@ import {
   incDraftSkipped,
   incReviewFailures,
   incReviewsTotal,
+  incSlashCommand,
   incThreadReply,
   observeReviewDuration,
 } from "./metrics";
 import { enqueueOrThrow } from "./queue";
-import { decideFromCheckSuite, mentionsReviewCommand } from "./triggers";
+import { decideFromCheckSuite, parseSlashCommand } from "./triggers";
+import { skipKey, skipRegistry } from "./skip-registry";
 import { handleReviewCommentCreated } from "./handlers/review-comment";
 
 export type WebhookDeps = {
@@ -353,24 +355,147 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
     const entry = getAllowlist().getEffectiveConfig(repoFull);
     if (!entry?.enabled) return;
 
-    if (!mentionsReviewCommand(payload.comment.body)) return;
-    // Don't trigger on the bot's own comments.
+    const parsed = parseSlashCommand(payload.comment.body);
+    if (!parsed) return;
+
+    // Don't react to the bot's own comments (e.g. ack messages that happen to
+    // contain a /review-me reference).
     if (payload.comment.user?.login === selfLogin) return;
 
     const [owner, name] = repoFull.split("/");
     if (!owner || !name) return;
 
+    const prNumber = payload.issue.number;
+    const commenter = payload.comment.user?.login ?? "(unknown)";
+    const key = skipKey(repoFull, prNumber);
+
+    log.info("slash command received", {
+      deliveryId: id,
+      repo: repoFull,
+      pr: prNumber,
+      commenter,
+      command: parsed.command,
+      raw: parsed.raw,
+    });
+
+    incSlashCommand(parsed.command);
+
+    // Help and ack-only commands don't need the head SHA; only re-review does.
+    switch (parsed.command) {
+      case "help": {
+        const helpBody = [
+          "**review-me slash commands**",
+          "",
+          "| Command | Description |",
+          "| --- | --- |",
+          "| `/review-me` | Trigger a re-review of this PR immediately. |",
+          "| `/review-me re-review` | Same as bare `/review-me`. |",
+          "| `/review-me skip` | Stop auto-reviewing this PR (expires after 7 days). |",
+          "| `/review-me resume` | Resume auto-reviewing this PR after a skip. |",
+          "| `/review-me help` | Show this help message. |",
+        ].join("\n");
+        try {
+          await octokit.issues.createComment({
+            owner,
+            repo: name,
+            issue_number: prNumber,
+            body: helpBody,
+          });
+        } catch (err) {
+          // Comment post failures are logged but must not crash the handler.
+          log.error("slash command: failed to post help comment", {
+            deliveryId: id,
+            repo: repoFull,
+            pr: prNumber,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+        return;
+      }
+
+      case "skip": {
+        skipRegistry.setSkipped(key);
+        try {
+          await octokit.issues.createComment({
+            owner,
+            repo: name,
+            issue_number: prNumber,
+            body: "Got it — I'll stop auto-reviewing this PR. Use `/review-me resume` to re-enable reviews.",
+          });
+        } catch (err) {
+          log.error("slash command: failed to post skip ack", {
+            deliveryId: id,
+            repo: repoFull,
+            pr: prNumber,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+        return;
+      }
+
+      case "resume": {
+        skipRegistry.clearSkipped(key);
+        try {
+          await octokit.issues.createComment({
+            owner,
+            repo: name,
+            issue_number: prNumber,
+            body: "Done — auto-reviews are re-enabled for this PR.",
+          });
+        } catch (err) {
+          log.error("slash command: failed to post resume ack", {
+            deliveryId: id,
+            repo: repoFull,
+            pr: prNumber,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+        return;
+      }
+
+      case "unknown": {
+        try {
+          await octokit.issues.createComment({
+            owner,
+            repo: name,
+            issue_number: prNumber,
+            body: `Unknown command \`${parsed.raw}\`. Try \`/review-me help\` to see available commands.`,
+          });
+        } catch (err) {
+          log.error("slash command: failed to post unknown-command ack", {
+            deliveryId: id,
+            repo: repoFull,
+            pr: prNumber,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+        return;
+      }
+
+      case "re-review":
+        // Fall through to the existing re-review / mention flow below.
+        break;
+
+      default:
+        // Exhaustiveness guard — should never be reached with the current
+        // command union type.
+        parsed.command satisfies never;
+        return;
+    }
+
+    // --- re-review path (unchanged logic) ---
+
     // issue_comment doesn't include head SHA; fetch the PR.
     const prData = await octokit.pulls.get({
       owner,
       repo: name,
-      pull_number: payload.issue.number,
+      pull_number: prNumber,
     });
 
     const ref: PrRef = {
       owner,
       repo: name,
-      pullNumber: payload.issue.number,
+      pullNumber: prNumber,
       headSha: prData.data.head.sha,
     };
 
@@ -378,7 +503,7 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
       deliveryId: id,
       repo: repoFull,
       pr: ref.pullNumber,
-      commenter: payload.comment.user?.login,
+      commenter,
     });
 
     await triggerExplicit(ref, repoFull, {
@@ -472,6 +597,15 @@ async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
     source: deps.source,
   };
   const errorCtx = { repo: repoFull, pr: ref.pullNumber };
+
+  // Early return when a /review-me skip command has been issued for this PR.
+  if (skipRegistry.isSkipped(skipKey(repoFull, ref.pullNumber))) {
+    log.info("skip.user_requested", {
+      ...logFields,
+      evt: "skip.user_requested",
+    });
+    return;
+  }
 
   if (
     await hasExistingReview(

@@ -4,6 +4,7 @@ import type { ConventionsResult } from "./conventions";
 import type { FilterDiffResult } from "./diff-filter";
 import { OMITTED_FILES_SENTINEL } from "./diff-filter";
 import type { CoverageDelta } from "./coverage-delta";
+import type { Heuristic } from "./heuristics/index";
 
 export const SYSTEM_PROMPT = `You are review-me, an intent-aware pull-request reviewer.
 
@@ -40,6 +41,13 @@ export type ReviewPromptInput = {
    * when the diff contains no source additions.
    */
   coverageDelta?: CoverageDelta;
+  /**
+   * Language-specific review hints computed by `applicableHeuristics`.
+   * When non-empty, a `## Language hints` section is injected before `## Diff`
+   * so the LLM looks for language-specific footguns present in the diff.
+   * Omit (or pass `[]`) when the diff touches only unsupported languages.
+   */
+  heuristics?: Heuristic[];
 };
 
 const PATCH_PLACEHOLDER =
@@ -60,6 +68,7 @@ export function buildUserMessage({
   conventions,
   filterResult,
   coverageDelta,
+  heuristics,
 }: ReviewPromptInput): string {
   const parts: string[] = [];
 
@@ -135,6 +144,20 @@ export function buildUserMessage({
     parts.push(
       "note: symbol list is regex-derived and may miss dynamic exports or destructured assignments.",
     );
+  }
+
+  // Inject language hints before the diff so the LLM reads them as context
+  // before encountering individual hunks. Only included when the diff contains
+  // at least one file in a supported language; no-ops for all-other diffs.
+  if (heuristics && heuristics.length > 0) {
+    parts.push("");
+    parts.push("## Language hints");
+    parts.push(
+      "Look for these language-specific patterns in the diff. Do not comment if they are not present.",
+    );
+    for (const h of heuristics) {
+      parts.push(`- **${h.summary}**: ${h.hint}`);
+    }
   }
 
   parts.push("");

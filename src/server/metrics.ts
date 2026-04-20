@@ -286,6 +286,13 @@ registry.registerHistogram(
   "Seconds elapsed waiting for CI gate to pass.",
 );
 
+/** Slash commands processed, labelled by command name. */
+export const slashCommandTotal = "reviewme_slash_command_total";
+registry.registerCounter(
+  slashCommandTotal,
+  "Total slash commands processed, by command name (help/skip/resume/re-review/unknown).",
+);
+
 // --- Coverage signal counter ---
 
 /**
@@ -321,6 +328,15 @@ export const budgetExhaustedTotal = "reviewme_budget_exhausted_total";
 registry.registerCounter(
   budgetExhaustedTotal,
   "Total reviews skipped because the repo's weekly token budget was exhausted.",
+);
+
+// --- Result cache counters ---
+
+/** Review result cache hits and misses, labelled by result (hit/miss). */
+export const reviewCacheTotal = "reviewme_review_cache_total";
+registry.registerCounter(
+  reviewCacheTotal,
+  "Total review result cache lookups, by result (hit/miss).",
 );
 
 // --- Replay-protection counters ---
@@ -435,6 +451,16 @@ export function incDraftSkipped(): void {
 
 export function incBudgetExhausted(repo: string): void {
   registry.incrementCounter(budgetExhaustedTotal, { repo });
+}
+
+export function incReviewCache(result: "hit" | "miss"): void {
+  registry.incrementCounter(reviewCacheTotal, { result });
+}
+
+export function incSlashCommand(
+  command: "help" | "skip" | "resume" | "re-review" | "unknown",
+): void {
+  registry.incrementCounter(slashCommandTotal, { command });
 }
 
 // ---------------------------------------------------------------------------

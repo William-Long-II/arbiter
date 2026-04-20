@@ -13,6 +13,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { PullRequestDiff } from "../src/github";
 import type { Intent } from "../src/jira";
 import { runReview } from "../src/review";
+import { resultCache } from "../src/review/result-cache";
 import * as usageModule from "../src/review/usage";
 import * as budgetModule from "../src/review/budget";
 import { registry, budgetExhaustedTotal } from "../src/server/metrics";
@@ -128,6 +129,7 @@ beforeEach(async () => {
   process.env["USAGE_LOG_DIR"] = tmpDir;
   process.env["REVIEW_MODE"] = "single";
   budgetModule._clearCache();
+  resultCache.clear();
 });
 
 afterEach(async () => {

@@ -9,8 +9,10 @@ import { withBreaker } from "./breaker";
 import { runChunkedReview } from "./synthesize";
 import { fetchConventions } from "./conventions";
 import { computeCoverageDelta } from "./coverage-delta";
-import { incCoverageSignal, incBudgetExhausted } from "../server/metrics";
+import { applicableHeuristics } from "./heuristics/index";
+import { incBudgetExhausted, incCoverageSignal, incReviewCache } from "../server/metrics";
 import { writeAuditRecord } from "./audit";
+import { resultCache } from "./result-cache";
 import { getWeeklyTokenSum } from "./budget";
 import { recordUsage } from "./usage";
 import { log } from "../server/logger";
@@ -103,6 +105,24 @@ export async function runReview(
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Result cache check — avoids redundant LLM calls when a CI provider fires
+  // check_suite.completed multiple times on the same head SHA (retries, branch
+  // protection re-evaluations, etc.). Budget-exhausted results are intentionally
+  // NOT cached above so the block lifts immediately when the window rolls.
+  // ---------------------------------------------------------------------------
+  const repoFull = `${input.diff.owner}/${input.diff.repo}`;
+  const headSha = input.diff.headSha;
+  const cacheKey = `${repoFull}@${headSha}`;
+
+  const cached = resultCache.get(cacheKey);
+  if (cached) {
+    log.info("review.cache_hit", { repo: repoFull, headSha });
+    incReviewCache("hit");
+    return cached;
+  }
+  incReviewCache("miss");
+
   // Fetch conventions and .gitattributes in parallel — both are GitHub reads
   // with no ordering dependency. Errors inside each helper are already
   // handled (silent on 404, warn-log on 5xx), so Promise.all never rejects.
@@ -138,6 +158,7 @@ export async function runReview(
     (f) => !omittedPathSet.has(f.filename),
   );
   const coverageDelta = computeCoverageDelta(keptFiles);
+  const heuristics = applicableHeuristics(keptFiles);
 
   // Emit metric — one bump per review, not per file, to avoid cardinality issues.
   if (coverageDelta.addedSrcLines === 0) {
@@ -159,13 +180,23 @@ export async function runReview(
   const useChunked = mode === "chunked" || (mode === "auto" && isLarge);
 
   if (useChunked) {
-    return runChunkedReview(anthropic, input, options);
+    const chunkedResult = await runChunkedReview(anthropic, input, options);
+    // Only cache chunked results that are complete.  A pass-2 overflow warning
+    // indicates the synthesized output may be truncated — safer to re-run if
+    // the same SHA is requested again rather than serving a partial review.
+    const hasOverflow = chunkedResult.warnings.some((w) =>
+      w.includes("pass-2 overflow"),
+    );
+    if (!hasOverflow) {
+      resultCache.set(cacheKey, chunkedResult);
+    }
+    return chunkedResult;
   }
 
   // Single-pass path (mode === "single" or auto + small diff).
   if (mode === "single" && isLarge) {
     // Operator explicitly opted into single-pass despite size — fail open.
-    return {
+    const failOpenResult: RunReviewOutput = {
       result: {
         verdict: "comment",
         summary:
@@ -179,6 +210,8 @@ export async function runReview(
         `diff exceeded review threshold (${diffSize} > ${maxDiffChars}); fail-open`,
       ],
     };
+    resultCache.set(cacheKey, failOpenResult);
+    return failOpenResult;
   }
 
   const userMessage = buildUserMessage({
@@ -186,6 +219,7 @@ export async function runReview(
     conventions,
     filterResult,
     coverageDelta,
+    heuristics,
   });
 
   // withBreaker gates BEFORE withRetry so a tripped breaker short-circuits
@@ -237,11 +271,13 @@ export async function runReview(
     warnings: [],
   });
 
-  return {
+  const singlePassResult: RunReviewOutput = {
     result: response.parsed_output,
     warnings: [],
     usage: usageOut,
   };
+  resultCache.set(cacheKey, singlePassResult);
+  return singlePassResult;
 }
 
 export { buildUserMessage, SYSTEM_PROMPT } from "./prompt";
