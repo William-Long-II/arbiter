@@ -205,6 +205,7 @@ The workflow does not build a Docker image or publish artifacts; those steps are
 
 ## Development notes
 
+- `bun run bench` runs a local, manual benchmark suite (`scripts/bench.ts`). It prints a table of avg / p50 / p95 / p99 latencies for perf-sensitive paths and exits non-zero if any average exceeds its declared budget. It is intentionally not wired into CI today — run it locally before touching hot paths like the secret redactor.
 - Structured logs only — never `console.log` free-form strings.
 - The review never emits `REQUEST_CHANGES`. Verdicts are `APPROVE` or `COMMENT`.
 - Diffs above `DEFAULT_MAX_DIFF_CHARS` (150 kB of patch text) fail open with a summary-only "too large to review automatically" comment rather than blocking or burning tokens.

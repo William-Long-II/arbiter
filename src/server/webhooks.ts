@@ -27,10 +27,12 @@ import {
   incAnthropicTokens,
   incReviewFailures,
   incReviewsTotal,
+  incThreadReply,
   observeReviewDuration,
 } from "./metrics";
 import { enqueueOrThrow } from "./queue";
 import { decideFromCheckSuite, mentionsReviewCommand } from "./triggers";
+import { handleReviewCommentCreated } from "./handlers/review-comment";
 
 export type WebhookDeps = {
   /**
@@ -320,6 +322,27 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
     });
   });
 
+  webhooks.on(
+    "pull_request_review_comment.created",
+    async ({ id, payload }) => {
+      try {
+        await handleReviewCommentCreated(payload, {
+          octokit,
+          anthropic,
+          selfLogin,
+          jiraCreds,
+        });
+      } catch (err) {
+        incThreadReply("error");
+        log.error("review comment handler error", {
+          evt: "thread.handler_error",
+          deliveryId: id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+
   return webhooks;
 }
 
@@ -439,6 +462,7 @@ async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
     ({ result, warnings, usage } = await runReview(deps.anthropic, {
       intent,
       diff,
+      octokit: deps.octokit,
     }));
   } catch (err) {
     incReviewFailures("llm-review", err instanceof Error ? err.message : "unknown");

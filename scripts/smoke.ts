@@ -242,6 +242,18 @@ function installFetchInterceptor(state: InterceptorState): () => void {
         });
       }
 
+      // GET /repos/acme/widget/contents/.gitattributes — return 404 so the
+      // pipeline proceeds without linguist filtering (repo has no .gitattributes).
+      if (
+        method === "GET" &&
+        /^\/repos\/acme\/widget\/contents\/\.gitattributes/.test(path)
+      ) {
+        return new Response(JSON.stringify({ message: "Not Found" }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        });
+      }
+
       // GET /user (fetchAuthenticatedLogin — not used when selfLogin injected)
       if (method === "GET" && path === "/user") {
         return new Response(

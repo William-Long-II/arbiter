@@ -242,6 +242,20 @@ registry.registerCounter(
   "Total webhook requests rejected by the per-installation rate limiter.",
 );
 
+/** Thread replies posted (or errored), labelled by outcome (sent/error). */
+export const threadReplyTotal = "reviewme_thread_reply_total";
+registry.registerCounter(
+  threadReplyTotal,
+  "Total thread reply attempts, by outcome (sent/error).",
+);
+
+/** Threads rate-limited (exceeded per-thread reply cap). */
+export const threadRateLimitedTotal = "reviewme_thread_rate_limited_total";
+registry.registerCounter(
+  threadRateLimitedTotal,
+  "Total thread replies suppressed by the per-thread rate limit.",
+);
+
 // --- Histograms ---
 
 /** Seconds spent draining in-flight tasks on SIGTERM before process.exit(). */
@@ -327,6 +341,14 @@ export function incRatelimitRejected(installation: string): void {
 
 export function observeShutdownDrain(seconds: number): void {
   registry.observeHistogram(shutdownDrainSeconds, seconds);
+}
+
+export function incThreadReply(outcome: "sent" | "error"): void {
+  registry.incrementCounter(threadReplyTotal, { outcome });
+}
+
+export function incThreadRateLimited(): void {
+  registry.incrementCounter(threadRateLimitedTotal);
 }
 
 // ---------------------------------------------------------------------------

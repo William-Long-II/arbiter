@@ -2,6 +2,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type Anthropic from "@anthropic-ai/sdk";
 import type { Octokit } from "../github/client";
 import type { PullRequestDiff } from "../github";
+import { fetchGitattributes } from "../github/gitattributes";
 import type { Intent } from "../jira";
 import type { RepoReviewConfig } from "../config/repos";
 import { buildUserMessage, SYSTEM_PROMPT } from "./prompt";
@@ -17,7 +18,12 @@ export const DEFAULT_MAX_DIFF_CHARS = 150_000;
 export type RunReviewInput = {
   intent: Intent;
   diff: PullRequestDiff;
-  /** When provided, conventions are fetched from this repo before building the prompt. */
+  /**
+   * When provided, `runReview` will fetch repo conventions (CLAUDE.md etc.)
+   * and `.gitattributes` from the target repo at the PR head ref. Conventions
+   * are injected into the prompt; `.gitattributes` is passed to `filterDiff` so
+   * files marked `linguist-generated=true` / `linguist-vendored=true` are omitted.
+   */
   octokit?: Octokit;
   /** Per-repo filter config from `repos.yaml`. When absent, only built-in
    *  rules (lockfiles, binaries, etc.) are applied. */
@@ -55,11 +61,32 @@ export async function runReview(
   const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
   const maxDiffChars = options.maxDiffChars ?? DEFAULT_MAX_DIFF_CHARS;
 
+  // Fetch conventions and .gitattributes in parallel — both are GitHub reads
+  // with no ordering dependency. Errors inside each helper are already
+  // handled (silent on 404, warn-log on 5xx), so Promise.all never rejects.
+  const [conventions, gitattributes] = input.octokit
+    ? await Promise.all([
+        fetchConventions({
+          octokit: input.octokit,
+          owner: input.diff.owner,
+          repo: input.diff.repo,
+          ref: input.diff.headSha,
+        }),
+        fetchGitattributes({
+          octokit: input.octokit,
+          owner: input.diff.owner,
+          repo: input.diff.repo,
+          ref: input.diff.headSha,
+        }),
+      ])
+    : [{ sections: [], totalBytes: 0 }, null];
+
   // Filter out lockfiles, binaries, and generated files before measuring size
   // or building the prompt.  Per-repo glob overrides come from repos.yaml.
   const filterResult = filterDiff(input.diff.files, {
     include: input.reviewConfig?.include_paths,
     exclude: input.reviewConfig?.exclude_paths,
+    gitattributes: gitattributes ?? undefined,
   });
 
   // Measure diff size against the kept files only — use a Set for O(n) lookup.
@@ -69,17 +96,6 @@ export async function runReview(
       omittedPathSet.has(f.filename) ? sum : sum + (f.patch?.length ?? 0),
     0,
   );
-
-  // Fetch repo conventions before building the user message.
-  // fetchConventions never throws; absent octokit → empty result.
-  const conventions = input.octokit
-    ? await fetchConventions({
-        octokit: input.octokit,
-        owner: input.diff.owner,
-        repo: input.diff.repo,
-        ref: input.diff.headSha,
-      })
-    : { sections: [], totalBytes: 0 };
 
   if (diffSize > maxDiffChars) {
     return {

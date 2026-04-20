@@ -8,7 +8,8 @@
     "start": "bun index.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "smoke": "bun scripts/smoke.ts"
+    "smoke": "bun scripts/smoke.ts",
+    "bench": "bun scripts/bench.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"
