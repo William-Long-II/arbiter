@@ -14,6 +14,20 @@ const RepoReviewConfigSchema = z.object({
    *  reaches this value, reviews fall back to a summary-only response with no
    *  Anthropic call until the week rolls over. */
   max_weekly_tokens: z.number().int().positive().optional(),
+  /**
+   * Name of an environment variable whose *value* is the Anthropic API key to
+   * use for this repo.  The indirection keeps secrets out of repos.yaml — only
+   * the env-var name (safe to commit) is stored here; the actual key lives in
+   * the process environment.
+   *
+   * When set, the named env var is resolved at review time:
+   *   - env var present and non-empty → a fresh Anthropic client is constructed
+   *     with that key (debug log).
+   *   - env var missing or empty → fall back to the shared default client (warn
+   *     log).
+   *   - field absent → the shared default client is used with no logging.
+   */
+  anthropic_api_key_env: z.string().min(1).optional(),
 });
 
 export type RepoReviewConfig = z.infer<typeof RepoReviewConfigSchema>;
