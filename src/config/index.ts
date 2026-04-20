@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { loadReposFile, type RepoAllowlist } from "./repos";
+export { getAllowlist, reload } from "./repos";
 
 const EnvSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),

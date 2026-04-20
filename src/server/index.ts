@@ -1,14 +1,19 @@
-import { loadAllowlist, loadConfig } from "../config";
+import { getAllowlist, loadAllowlist, loadConfig, reload } from "../config";
 import { createOctokit, fetchAuthenticatedLogin } from "../github";
 import { createAnthropic } from "../review";
 import { sweepDeadLetters, writeDeadLetter } from "./dead-letter";
 import { log } from "./logger";
-import { buildMetricsHandler, incWebhookReceived } from "./metrics";
+import {
+  buildMetricsHandler,
+  incConfigReload,
+  incWebhookReceived,
+} from "./metrics";
 import { QueueFullError } from "./queue";
 import { createWebhooks } from "./webhooks";
 
 const config = loadConfig();
-const allowlist = loadAllowlist(config.reposPath);
+// loadAllowlist seeds the mutable holder; getAllowlist() is used from here on.
+loadAllowlist(config.reposPath);
 const octokit = createOctokit(config.githubPat);
 const anthropic = createAnthropic(config.anthropicApiKey);
 
@@ -20,7 +25,7 @@ log.info("machine user identity resolved", {
 });
 
 const webhooks = createWebhooks(config.githubWebhookSecret, {
-  allowlist,
+  getAllowlist,
   octokit,
   anthropic,
   selfLogin,
@@ -50,8 +55,24 @@ const server = Bun.serve({
 log.info("server started", {
   hostname: server.hostname,
   port: server.port,
-  allowlistedRepos: Object.keys(allowlist.all()).length,
+  allowlistedRepos: Object.keys(getAllowlist().all()).length,
   jiraConfigured: Boolean(config.jira),
+});
+
+// ---------------------------------------------------------------------------
+// SIGHUP — hot-reload repos.yaml without a restart.
+// On parse/IO error the old snapshot is preserved; we never swap to a broken one.
+// Note: SIGHUP is not available on Windows; Bun silently ignores the handler there.
+// ---------------------------------------------------------------------------
+process.on("SIGHUP", () => {
+  const result = reload();
+  if (result.ok) {
+    incConfigReload("success");
+    log.info("config reloaded", { evt: "config.reload", ok: true, repos_count: result.count });
+  } else {
+    incConfigReload("failure");
+    log.error("config reload failed", { evt: "config.reload", ok: false, error: result.error });
+  }
 });
 
 // Prune old dead-letter dirs at startup (non-fatal).

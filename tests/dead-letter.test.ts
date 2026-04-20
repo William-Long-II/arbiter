@@ -285,8 +285,9 @@ describe("dead-letter replay via handler", () => {
     // Record received event to verify the handler was invoked.
     let receivedPayload: string | undefined;
 
+    const emptyAllowlist = buildAllowlist({});
     const webhooks = createWebhooks(SECRET, {
-      allowlist: buildAllowlist({}),
+      getAllowlist: () => emptyAllowlist,
       octokit: {} as never,
       anthropic: {} as never,
       selfLogin: "replay-bot",

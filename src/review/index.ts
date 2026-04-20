@@ -3,8 +3,10 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { Octokit } from "../github/client";
 import type { PullRequestDiff } from "../github";
 import type { Intent } from "../jira";
+import type { RepoReviewConfig } from "../config/repos";
 import { buildUserMessage, SYSTEM_PROMPT } from "./prompt";
 import { ReviewResultSchema, type ReviewResult } from "./schema";
+import { filterDiff } from "./diff-filter";
 import { withRetry } from "../util/retry";
 import { fetchConventions } from "./conventions";
 
@@ -17,6 +19,9 @@ export type RunReviewInput = {
   diff: PullRequestDiff;
   /** When provided, conventions are fetched from this repo before building the prompt. */
   octokit?: Octokit;
+  /** Per-repo filter config from `repos.yaml`. When absent, only built-in
+   *  rules (lockfiles, binaries, etc.) are applied. */
+  reviewConfig?: RepoReviewConfig;
 };
 
 export type RunReviewOptions = {
@@ -50,8 +55,18 @@ export async function runReview(
   const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
   const maxDiffChars = options.maxDiffChars ?? DEFAULT_MAX_DIFF_CHARS;
 
+  // Filter out lockfiles, binaries, and generated files before measuring size
+  // or building the prompt.  Per-repo glob overrides come from repos.yaml.
+  const filterResult = filterDiff(input.diff.files, {
+    include: input.reviewConfig?.include_paths,
+    exclude: input.reviewConfig?.exclude_paths,
+  });
+
+  // Measure diff size against the kept files only — use a Set for O(n) lookup.
+  const omittedPathSet = new Set(filterResult.omitted.map((o) => o.path));
   const diffSize = input.diff.files.reduce(
-    (sum, f) => sum + (f.patch?.length ?? 0),
+    (sum, f) =>
+      omittedPathSet.has(f.filename) ? sum : sum + (f.patch?.length ?? 0),
     0,
   );
 
@@ -83,7 +98,7 @@ export async function runReview(
     };
   }
 
-  const userMessage = buildUserMessage({ ...input, conventions });
+  const userMessage = buildUserMessage({ ...input, conventions, filterResult });
 
   const response = await withRetry(() =>
     anthropic.messages.parse({
@@ -132,6 +147,8 @@ export {
 } from "./conventions";
 export { ReviewResultSchema, type ReviewResult, type LineComment } from "./schema";
 export { createAnthropic } from "./client";
+export { filterDiff, OMITTED_FILES_SENTINEL } from "./diff-filter";
+export type { FilterDiffOptions, FilterDiffResult, OmittedFile } from "./diff-filter";
 export {
   ReviewErrorCode,
   isReviewError,
