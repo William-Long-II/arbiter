@@ -1,0 +1,4 @@
+# Golden-file fixtures and prompts must stay LF on every platform so
+# byte-for-byte comparisons don't fail on Windows checkouts.
+tests/golden/** text eol=lf
+tests/fixtures/** text eol=lf

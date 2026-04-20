@@ -439,6 +439,7 @@ async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
     ({ result, warnings, usage } = await runReview(deps.anthropic, {
       intent,
       diff,
+      octokit: deps.octokit,
     }));
   } catch (err) {
     incReviewFailures("llm-review", err instanceof Error ? err.message : "unknown");
