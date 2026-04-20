@@ -1,6 +1,7 @@
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type Anthropic from "@anthropic-ai/sdk";
-import type { PullRequestDiff } from "../github";
+import type { Octokit, PullRequestDiff } from "../github";
+import { fetchGitattributes } from "../github/gitattributes";
 import type { Intent } from "../jira";
 import type { RepoReviewConfig } from "../config/repos";
 import { buildUserMessage, SYSTEM_PROMPT } from "./prompt";
@@ -18,6 +19,12 @@ export type RunReviewInput = {
   /** Per-repo filter config from `repos.yaml`. When absent, only built-in
    *  rules (lockfiles, binaries, etc.) are applied. */
   reviewConfig?: RepoReviewConfig;
+  /**
+   * When provided, `runReview` will fetch `.gitattributes` from the target
+   * repo at the PR head ref and pass it to `filterDiff` so that files marked
+   * `linguist-generated=true` / `linguist-vendored=true` are omitted.
+   */
+  octokit?: Octokit;
 };
 
 export type RunReviewOptions = {
@@ -51,11 +58,24 @@ export async function runReview(
   const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
   const maxDiffChars = options.maxDiffChars ?? DEFAULT_MAX_DIFF_CHARS;
 
+  // Fetch .gitattributes from the target repo when an Octokit client is
+  // available. Errors are handled inside fetchGitattributes (404 → null,
+  // other errors → warn + null), so this call never throws.
+  const gitattributes = input.octokit
+    ? await fetchGitattributes({
+        octokit: input.octokit,
+        owner: input.diff.owner,
+        repo: input.diff.repo,
+        ref: input.diff.headSha,
+      })
+    : null;
+
   // Filter out lockfiles, binaries, and generated files before measuring size
   // or building the prompt.  Per-repo glob overrides come from repos.yaml.
   const filterResult = filterDiff(input.diff.files, {
     include: input.reviewConfig?.include_paths,
     exclude: input.reviewConfig?.exclude_paths,
+    gitattributes: gitattributes ?? undefined,
   });
 
   // Measure diff size against the kept files only — use a Set for O(n) lookup.

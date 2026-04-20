@@ -309,6 +309,49 @@ describe("filterDiff — error resilience", () => {
   });
 });
 
+// ─── Integration: .gitattributes linguist-generated pipeline ─────────────────
+
+describe("filterDiff — integration: .gitattributes linguist-generated", () => {
+  /**
+   * Simulates a fixture PR where dist/bundle.js is marked as
+   * linguist-generated=true in the repo's .gitattributes. The file must
+   * appear as OMITTED in the filtered result.
+   */
+  test("dist/bundle.js marked linguist-generated=true produces OMITTED entry", () => {
+    const gitattributes = [
+      "# Built artefacts — never review",
+      "dist/bundle.js linguist-generated=true",
+      "dist/bundle.js.map linguist-generated=true",
+    ].join("\n");
+
+    const files = [
+      makeFile({ filename: "src/index.ts", patch: "@@ -1,1 +1,2 @@\n+export {};\n" }),
+      makeFile({ filename: "dist/bundle.js", patch: "@@ -1 +1 @@\n-old\n+new\n" }),
+      makeFile({ filename: "README.md", patch: "@@ -1 +1 @@\n-old\n+new\n" }),
+    ];
+
+    const { filtered, omitted } = filterDiff(files, { gitattributes });
+
+    // dist/bundle.js must be omitted as linguist-generated
+    const bundleOmit = omitted.find((o) => o.path === "dist/bundle.js");
+    expect(bundleOmit).toBeDefined();
+    expect(bundleOmit!.reason).toBe("linguist-generated");
+
+    // The OMITTED_FILES block must appear in the output
+    expect(filtered).toContain(OMITTED_FILES_SENTINEL);
+    expect(filtered).toContain("dist/bundle.js (linguist-generated)");
+
+    // The kept files must appear in the diff section
+    expect(filtered).toContain("src/index.ts");
+    expect(filtered).toContain("README.md");
+
+    // dist/bundle.js must NOT appear in the diff section (only in OMITTED block)
+    const diffSectionStart = filtered.indexOf("\n### ");
+    const diffSection = filtered.slice(diffSectionStart);
+    expect(diffSection).not.toContain("dist/bundle.js");
+  });
+});
+
 // ─── Integration: 2 MB lockfile ──────────────────────────────────────────────
 
 describe("filterDiff — integration: large lockfile", () => {
