@@ -54,7 +54,7 @@ export type WebhookDeps = {
   jiraCreds?: JiraCredentials;
 };
 
-type PrRef = {
+export type PrRef = {
   owner: string;
   repo: string;
   pullNumber: number;
@@ -65,9 +65,9 @@ type PrRef = {
   branch?: string;
 };
 
-type TriggerSource = "check-suite" | "label" | "mention" | "ready-for-review";
+export type TriggerSource = "check-suite" | "label" | "mention" | "ready-for-review";
 
-type PipelineDeps = {
+export type PipelineDeps = {
   octokit: Octokit;
   anthropic: Anthropic;
   selfLogin: string;
@@ -664,7 +664,8 @@ async function triggerExplicit(
   }
 }
 
-async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
+/** Exported for queue-persistence restore path (issue #92). */
+export async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
   const repoFull = `${ref.owner}/${ref.repo}`;
   const logFields = {
     deliveryId: deps.deliveryId,

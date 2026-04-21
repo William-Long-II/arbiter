@@ -17,9 +17,15 @@ import {
   observeShutdownDrain,
 } from "./metrics";
 import { getActiveCount, QueueFullError } from "./queue";
+import {
+  getQueueSnapshotIntervalSeconds,
+  getQueueStateDir,
+  restoreQueue,
+  snapshotQueue,
+} from "./queue-persistence";
 import { rateLimiter } from "./rate-limit";
 import { replayCache } from "./replay-cache";
-import { createWebhooks } from "./webhooks";
+import { createWebhooks, runPipeline } from "./webhooks";
 
 /**
  * GitHub event names the bot actually handles.  Any other event arriving at
@@ -81,6 +87,13 @@ function verifyHmac(payload: string, signature: string, secret: string): boolean
 // While draining: /health and /ready return 503, /webhook returns 429.
 // ---------------------------------------------------------------------------
 let isDraining = false;
+
+// ---------------------------------------------------------------------------
+// Periodic queue snapshot (issue #92).
+// Snaps every QUEUE_SNAPSHOT_INTERVAL_SECONDS; cleared on SIGTERM before drain.
+// QUEUE_SNAPSHOT_INTERVAL_SECONDS=0 disables entirely.
+// ---------------------------------------------------------------------------
+let snapshotInterval: ReturnType<typeof setInterval> | null = null;
 
 const SHUTDOWN_DRAIN_SECONDS = (() => {
   const raw = process.env["SHUTDOWN_DRAIN_SECONDS"];
@@ -157,6 +170,19 @@ process.on("SIGTERM", () => {
   isDraining = true;
   log.info("graceful shutdown started", { evt: "shutdown.draining" });
 
+  // Stop periodic snapshots — we are about to take a final snapshot below.
+  if (snapshotInterval !== null) {
+    clearInterval(snapshotInterval);
+    snapshotInterval = null;
+  }
+
+  // Snapshot pending (not yet started) tasks BEFORE accepting new connections
+  // stop.  Tasks that are currently executing will finish during the drain;
+  // they are not in the pending map so they are not double-counted.
+  snapshotQueue().catch(() => {
+    // snapshotQueue never throws, but belt-and-suspenders.
+  });
+
   const drainStart = Date.now();
   const maxWaitMs = SHUTDOWN_DRAIN_SECONDS * 1_000;
   const pollIntervalMs = 250;
@@ -225,6 +251,34 @@ sweepAudit().catch((err: unknown) => {
     error: err instanceof Error ? err.message : String(err),
   });
 });
+
+// Restore in-flight tasks that were snapshotted before the last shutdown.
+// Fire-and-forget; never blocks boot.
+restoreQueue(
+  getQueueStateDir(),
+  { octokit, anthropic, selfLogin, jiraCreds: config.jira },
+  runPipeline,
+).catch((err: unknown) => {
+  log.error("queue restore failed at startup", {
+    error: err instanceof Error ? err.message : String(err),
+  });
+});
+
+// Periodic snapshot — runs every QUEUE_SNAPSHOT_INTERVAL_SECONDS so a crash
+// between SIGTERM snapshots loses at most one interval worth of tasks.
+// QUEUE_SNAPSHOT_INTERVAL_SECONDS=0 disables entirely.
+const snapshotIntervalSeconds = getQueueSnapshotIntervalSeconds();
+if (snapshotIntervalSeconds > 0) {
+  snapshotInterval = setInterval(() => {
+    snapshotQueue().catch(() => {
+      // snapshotQueue never throws, belt-and-suspenders.
+    });
+  }, snapshotIntervalSeconds * 1_000);
+  // Prevent the interval from keeping the process alive during normal exit.
+  if (snapshotInterval.unref) {
+    snapshotInterval.unref();
+  }
+}
 
 export async function handleWebhook(
   req: Request,
