@@ -10,7 +10,7 @@ import { runChunkedReview } from "./synthesize";
 import { fetchConventions } from "./conventions";
 import { computeCoverageDelta } from "./coverage-delta";
 import { applicableHeuristics } from "./heuristics/index";
-import { incBudgetExhausted, incCoverageSignal, incReviewCache } from "../server/metrics";
+import { incBudgetExhausted, incCoverageSignal, incReviewCache, observePromptUserBytes } from "../server/metrics";
 import { recordCacheTelemetry } from "./cache-telemetry";
 import { writeAuditRecord } from "./audit";
 import { resultCache } from "./result-cache";
@@ -260,6 +260,21 @@ export async function runReview(
   });
 
   const promptHash = computePromptHash(userMessage);
+
+  // Observe prompt size for capacity planning (issue #77).
+  // Buffer.byteLength gives the true UTF-8 byte count, not JS string length.
+  const userMessageBytes = Buffer.byteLength(userMessage, "utf8");
+  observePromptUserBytes(userMessageBytes);
+  if (userMessageBytes >= 1024) {
+    log.info("prompt.size", {
+      evt: "prompt.size",
+      repo: repoFull,
+      pr: input.diff.number,
+      headSha,
+      user_message_bytes: userMessageBytes,
+      mode: "single",
+    });
+  }
 
   // withBreaker gates BEFORE withRetry so a tripped breaker short-circuits
   // the retry loop entirely rather than burning quota on repeated attempts.
