@@ -35,6 +35,7 @@ import {
 import { enqueueOrThrow } from "./queue";
 import { decideFromCheckSuite, parseSlashCommand } from "./triggers";
 import { skipKey, skipRegistry } from "./skip-registry";
+import { resultCache } from "../review/result-cache";
 import { handleReviewCommentCreated } from "./handlers/review-comment";
 
 export type WebhookDeps = {
@@ -390,6 +391,7 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
           "| --- | --- |",
           "| `/review-me` | Trigger a re-review of this PR immediately. |",
           "| `/review-me re-review` | Same as bare `/review-me`. |",
+          "| `/review-me refresh` | Clear the cached result for this head SHA and trigger a fresh review. |",
           "| `/review-me skip` | Stop auto-reviewing this PR (expires after 7 days). |",
           "| `/review-me resume` | Resume auto-reviewing this PR after a skip. |",
           "| `/review-me help` | Show this help message. |",
@@ -476,6 +478,11 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
         // Fall through to the existing re-review / mention flow below.
         break;
 
+      case "refresh":
+        // Fall through to the re-review path below; the cache eviction and
+        // ack comment are handled there after the head SHA is fetched.
+        break;
+
       default:
         // Exhaustiveness guard — should never be reached with the current
         // command union type.
@@ -483,7 +490,7 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
         return;
     }
 
-    // --- re-review path (unchanged logic) ---
+    // --- re-review / refresh path ---
 
     // issue_comment doesn't include head SHA; fetch the PR.
     const prData = await octokit.pulls.get({
@@ -498,6 +505,44 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
       pullNumber: prNumber,
       headSha: prData.data.head.sha,
     };
+
+    // For /review-me refresh: evict the cached result for this head SHA so
+    // the next pipeline run calls the LLM fresh, then post an ack comment.
+    // The ack is posted BEFORE triggerExplicit so the user sees immediate
+    // feedback even if the re-review is queued and takes a while.
+    //
+    // Race-condition note: there is a narrow window between the delete and
+    // the pipeline running where a concurrent check_suite event could arrive
+    // and re-populate the cache with a fresh result (which is correct
+    // behaviour — we only wanted to bust the stale entry). The bot's own
+    // ack comment is posted with selfLogin so the issue_comment guard above
+    // (`payload.comment.user?.login === selfLogin`) prevents a webhook loop.
+    if (parsed.command === "refresh") {
+      const cacheKey = `${repoFull}@${ref.headSha}`;
+      resultCache.delete(cacheKey);
+      log.info("slash command: refresh — cache evicted", {
+        deliveryId: id,
+        repo: repoFull,
+        pr: ref.pullNumber,
+        headSha: ref.headSha,
+        cacheKey,
+      });
+      try {
+        await octokit.issues.createComment({
+          owner,
+          repo: name,
+          issue_number: prNumber,
+          body: "Cache cleared for this head SHA — triggering fresh review…",
+        });
+      } catch (err) {
+        log.error("slash command: failed to post refresh ack", {
+          deliveryId: id,
+          repo: repoFull,
+          pr: prNumber,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
 
     log.info("/review-me mention triggered review", {
       deliveryId: id,
