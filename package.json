@@ -9,7 +9,8 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "smoke": "bun scripts/smoke.ts",
-    "bench": "bun scripts/bench.ts"
+    "bench": "bun scripts/bench.ts",
+    "review-pr": "bun scripts/review-pr.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"
