@@ -1,6 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { aggregateRecords, type UsageRecord } from "../src/review/usage";
+import type { RepoAllowlist } from "../src/config/repos";
 
 function parseSinceDuration(raw: string): Date {
   const m = /^(\d+)d$/.exec(raw);
@@ -14,10 +15,12 @@ function parseSinceDuration(raw: string): Date {
   return since;
 }
 
-function parseArgs(): { since?: Date; logDir: string } {
+function parseArgs(): { since?: Date; logDir: string; warnAt: number; reposPath: string } {
   const args = process.argv.slice(2);
   let since: Date | undefined;
   const logDir = process.env["USAGE_LOG_DIR"] ?? "var/usage";
+  const reposPath = process.env["REPOS_PATH"] ?? "./repos.yaml";
+  let warnAt = 0.8;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--since" && args[i + 1]) {
@@ -25,10 +28,17 @@ function parseArgs(): { since?: Date; logDir: string } {
       i++;
     } else if (args[i]?.startsWith("--since=")) {
       since = parseSinceDuration(args[i]!.slice("--since=".length));
+    } else if (args[i] === "--warn-at" && args[i + 1]) {
+      const v = parseFloat(args[i + 1]!);
+      if (!isNaN(v) && v >= 0 && v <= 1) warnAt = v;
+      i++;
+    } else if (args[i]?.startsWith("--warn-at=")) {
+      const v = parseFloat(args[i]!.slice("--warn-at=".length));
+      if (!isNaN(v) && v >= 0 && v <= 1) warnAt = v;
     }
   }
 
-  return { since, logDir };
+  return { since, logDir, warnAt, reposPath };
 }
 
 async function loadRecords(logDir: string): Promise<UsageRecord[]> {
@@ -58,6 +68,35 @@ async function loadRecords(logDir: string): Promise<UsageRecord[]> {
   return records;
 }
 
+/**
+ * Try to load repos.yaml and return an allowlist. Returns null when the file
+ * is absent, empty, or unparseable — callers treat null as "no caps known".
+ *
+ * We call `loadReposFile` which seeds the module-level singleton; that's
+ * acceptable here since the report script runs once and exits. The singleton
+ * is isolated to this process.
+ */
+async function tryLoadAllowlist(reposPath: string): Promise<RepoAllowlist | null> {
+  let raw: string;
+  try {
+    raw = await readFile(reposPath, "utf8");
+  } catch {
+    return null;
+  }
+
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  // Dynamic import to avoid executing module side-effects when not needed and
+  // to isolate parse failures from the main execution path.
+  try {
+    const { loadReposFile } = await import("../src/config/repos");
+    return loadReposFile(reposPath);
+  } catch {
+    return null;
+  }
+}
+
 function fmtNumber(n: number): string {
   return n.toLocaleString("en-US");
 }
@@ -66,7 +105,28 @@ function fmtCost(usd: number): string {
   return `$${usd.toFixed(4)}`;
 }
 
-function printTable(
+function fmtPct(pct: number): string {
+  return `${Math.round(pct * 100)}%`;
+}
+
+function fmtCap(cap: number | undefined): string {
+  return cap !== undefined ? fmtNumber(cap) : "—";
+}
+
+type ReportRow = {
+  repo: string;
+  reviews: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  estimatedCostUsd: number;
+  cap?: number;
+  pct?: number;
+  warned: boolean;
+};
+
+export function buildReportRows(
   rows: Array<{
     repo: string;
     reviews: number;
@@ -76,19 +136,50 @@ function printTable(
     cacheCreationTokens: number;
     estimatedCostUsd: number;
   }>,
-): void {
+  allowlist: RepoAllowlist | null,
+  warnAt: number,
+): ReportRow[] {
+  return rows.map((r) => {
+    const cfg = allowlist?.getEffectiveConfig(r.repo);
+    const cap = cfg?.review?.max_weekly_tokens;
+    const totalTokens = r.inputTokens + r.outputTokens;
+
+    if (cap === undefined) {
+      return { ...r, warned: false };
+    }
+
+    const pct = cap > 0 ? totalTokens / cap : 0;
+    const warned = pct >= warnAt;
+    return { ...r, cap, pct, warned };
+  });
+}
+
+function printTable(rows: ReportRow[], showBudgetCols: boolean): void {
+  const WARN_GLYPH = "⚠";
+
+  // Repo column width must account for possible glyph suffix (⚠ is 1 char visually
+  // but may be 3 bytes — we measure display width by string .length).
+  const repoDisplayLen = (r: ReportRow) =>
+    r.repo.length + (r.warned ? ` ${WARN_GLYPH}`.length : 0);
+
   const COL_WIDTHS = {
-    repo: Math.max(4, ...rows.map((r) => r.repo.length)),
+    repo: Math.max(4, ...rows.map(repoDisplayLen)),
     reviews: 7,
     input: 10,
     output: 10,
     cacheR: 10,
     cacheC: 12,
     cost: 12,
+    cap: 10,
+    pct: 6,
   };
 
   const pad = (s: string, w: number) => s.padEnd(w);
   const rpad = (s: string, w: number) => s.padStart(w);
+
+  const budgetHeaders = showBudgetCols
+    ? [rpad("cap (tok)", COL_WIDTHS.cap), rpad("% cap", COL_WIDTHS.pct)]
+    : [];
 
   const header = [
     pad("repo", COL_WIDTHS.repo),
@@ -98,6 +189,7 @@ function printTable(
     rpad("cache read", COL_WIDTHS.cacheR),
     rpad("cache create", COL_WIDTHS.cacheC),
     rpad("est. cost", COL_WIDTHS.cost),
+    ...budgetHeaders,
   ].join("  ");
 
   const sep = "-".repeat(header.length);
@@ -106,14 +198,23 @@ function printTable(
   console.log(sep);
 
   for (const r of rows) {
+    const repoLabel = r.warned ? `${r.repo} ${WARN_GLYPH}` : r.repo;
+    const budgetCols = showBudgetCols
+      ? [
+          rpad(fmtCap(r.cap), COL_WIDTHS.cap),
+          rpad(r.pct !== undefined ? fmtPct(r.pct) : "—", COL_WIDTHS.pct),
+        ]
+      : [];
+
     const line = [
-      pad(r.repo, COL_WIDTHS.repo),
+      pad(repoLabel, COL_WIDTHS.repo),
       rpad(String(r.reviews), COL_WIDTHS.reviews),
       rpad(fmtNumber(r.inputTokens), COL_WIDTHS.input),
       rpad(fmtNumber(r.outputTokens), COL_WIDTHS.output),
       rpad(fmtNumber(r.cacheReadTokens), COL_WIDTHS.cacheR),
       rpad(fmtNumber(r.cacheCreationTokens), COL_WIDTHS.cacheC),
       rpad(fmtCost(r.estimatedCostUsd), COL_WIDTHS.cost),
+      ...budgetCols,
     ].join("  ");
     console.log(line);
   }
@@ -139,6 +240,8 @@ function printTable(
     },
   );
 
+  const budgetTotalCols = showBudgetCols ? [rpad("—", COL_WIDTHS.cap), rpad("—", COL_WIDTHS.pct)] : [];
+
   const footer = [
     pad("TOTAL", COL_WIDTHS.repo),
     rpad(String(totals.reviews), COL_WIDTHS.reviews),
@@ -147,29 +250,43 @@ function printTable(
     rpad(fmtNumber(totals.cacheReadTokens), COL_WIDTHS.cacheR),
     rpad(fmtNumber(totals.cacheCreationTokens), COL_WIDTHS.cacheC),
     rpad(fmtCost(totals.estimatedCostUsd), COL_WIDTHS.cost),
+    ...budgetTotalCols,
   ].join("  ");
 
   console.log(footer);
 }
 
 async function main(): Promise<void> {
-  const { since, logDir } = parseArgs();
+  const { since, logDir, warnAt, reposPath } = parseArgs();
 
   const records = await loadRecords(logDir);
-  const rows = aggregateRecords(records, since);
+  const aggregated = aggregateRecords(records, since);
 
   const label = since
     ? `since ${since.toISOString().slice(0, 10)}`
     : "all time";
   console.log(`\nToken usage report — ${label}\n`);
 
-  if (rows.length === 0) {
+  if (aggregated.length === 0) {
     console.log("No usage records found.");
     return;
   }
 
-  printTable(rows);
+  const allowlist = await tryLoadAllowlist(reposPath);
+  const rows = buildReportRows(aggregated, allowlist, warnAt);
+
+  // Show budget columns only when at least one repo has a cap configured.
+  const showBudgetCols = rows.some((r) => r.cap !== undefined);
+
+  printTable(rows, showBudgetCols);
+
+  const warnedCount = rows.filter((r) => r.warned).length;
+  const thresholdPct = Math.round(warnAt * 100);
+  console.log(`\n${warnedCount} repo${warnedCount !== 1 ? "s" : ""} at ≥${thresholdPct}% of cap this week.`);
   console.log();
 }
 
-await main();
+// Only execute when run directly (not when imported by tests).
+if (import.meta.main) {
+  await main();
+}
