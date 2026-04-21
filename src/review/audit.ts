@@ -10,12 +10,142 @@
  *
  * Secret redaction: promptSystem, promptUser, and responseRaw are passed
  * through redact() before writing, so no PATs or Anthropic keys end up on disk.
+ *
+ * Byte cap: set AUDIT_MAX_PROMPT_BYTES to cap each of promptSystem, promptUser,
+ * and responseRaw to at most that many UTF-8 bytes. Truncation happens AFTER
+ * secret redaction. When a field is truncated, a suffix is appended recording
+ * the original byte count, and an optional boolean flag (e.g. promptSystemTruncated)
+ * is added to the record. The cap is unset by default — no truncation occurs.
+ *
+ * Note: truncating prompts breaks replayability — operators cannot feed a
+ * truncated prompt back into a new run. Use the cap only when disk pressure
+ * outweighs that concern.
  */
 
 import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { log } from "../server/logger";
 import { redact } from "../util/redact";
+
+// ---------------------------------------------------------------------------
+// Byte-cap configuration (module-scoped, lazy-initialised on first write)
+// ---------------------------------------------------------------------------
+
+/** Result returned by truncateToBytes. */
+type TruncateResult = {
+  text: string;
+  truncated: boolean;
+  originalBytes: number;
+};
+
+/**
+ * Truncate `s` to at most `maxBytes` UTF-8 bytes without splitting a multi-byte
+ * codepoint. When truncation is needed, appends a human-readable suffix that
+ * records the original byte count.
+ *
+ * Uses TextEncoder for accurate UTF-8 byte counting and TextDecoder for
+ * safe reconstruction from the truncated byte slice.
+ */
+export function truncateToBytes(s: string, maxBytes: number): TruncateResult {
+  const encoder = new TextEncoder();
+  const encoded = encoder.encode(s);
+  const originalBytes = encoded.byteLength;
+
+  if (originalBytes <= maxBytes) {
+    return { text: s, truncated: false, originalBytes };
+  }
+
+  // The suffix itself costs bytes; reserve space for it.
+  // We build the suffix first with the final originalBytes, then fit content.
+  const suffix = `\n… [truncated, original ${originalBytes} bytes]`;
+  const suffixBytes = encoder.encode(suffix).byteLength;
+  const contentBudget = maxBytes - suffixBytes;
+
+  if (contentBudget <= 0) {
+    // Edge case: the suffix alone exceeds the cap. Return just the suffix
+    // trimmed to maxBytes — at minimum the operator sees the truncation marker.
+    const suffixEncoded = encoder.encode(suffix);
+    const trimmed = suffixEncoded.slice(0, maxBytes);
+    return {
+      text: new TextDecoder().decode(trimmed),
+      truncated: true,
+      originalBytes,
+    };
+  }
+
+  // Slice the encoded bytes to contentBudget and decode. TextDecoder with
+  // fatal:false will replace any partial codepoint at the boundary with the
+  // Unicode replacement character, which we then trim to keep output clean.
+  const contentSlice = encoded.slice(0, contentBudget);
+  const decoder = new TextDecoder("utf-8", { fatal: false });
+  // Trim any replacement character inserted for a partial codepoint.
+  const contentText = decoder.decode(contentSlice).replace(/\uFFFD$/, "");
+
+  return { text: contentText + suffix, truncated: true, originalBytes };
+}
+
+/** Parsed value of AUDIT_MAX_PROMPT_BYTES, or undefined when unset/invalid. */
+let _capBytes: number | undefined;
+/** Whether the module-init log has been emitted. */
+let _hasLoggedCap = false;
+
+/**
+ * Reset the module-level cap cache. Exported for test use only — allows tests
+ * to change AUDIT_MAX_PROMPT_BYTES between cases without module reload.
+ * @internal
+ */
+export function _resetCapCache(): void {
+  _capBytes = undefined;
+  _hasLoggedCap = false;
+}
+
+/** Read and validate the cap env var. Called lazily on first write. */
+function getCapBytes(): number | undefined {
+  if (_capBytes !== undefined) return _capBytes;
+
+  const raw = process.env.AUDIT_MAX_PROMPT_BYTES;
+  if (!raw) return undefined;
+
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+
+  _capBytes = n;
+
+  if (!_hasLoggedCap) {
+    _hasLoggedCap = true;
+    log.info("audit.cap_configured", { bytes: n });
+  }
+
+  return _capBytes;
+}
+
+/**
+ * Apply the byte cap to a string field if configured.
+ * Returns the (possibly truncated) string and a flag indicating truncation.
+ */
+function applyCapToString(
+  s: string,
+  capBytes: number | undefined,
+): { value: string; wasTruncated: boolean } {
+  if (capBytes === undefined) return { value: s, wasTruncated: false };
+  const result = truncateToBytes(s, capBytes);
+  return { value: result.text, wasTruncated: result.truncated };
+}
+
+/**
+ * Apply the byte cap to an unknown field. Non-string values are JSON-serialised
+ * before truncation and stored as the truncated string. If no cap is set, the
+ * original value is returned unchanged.
+ */
+function applyCapToUnknown(
+  v: unknown,
+  capBytes: number | undefined,
+): { value: unknown; wasTruncated: boolean } {
+  if (capBytes === undefined) return { value: v, wasTruncated: false };
+  const s = typeof v === "string" ? v : JSON.stringify(v);
+  const result = truncateToBytes(s, capBytes);
+  return { value: result.text, wasTruncated: result.truncated };
+}
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -43,6 +173,12 @@ export type AuditRecord = {
   } | undefined;
   verdict: string | undefined;
   warnings: string[];
+  /** Present and true only when the field was truncated by AUDIT_MAX_PROMPT_BYTES. */
+  promptSystemTruncated?: boolean;
+  /** Present and true only when the field was truncated by AUDIT_MAX_PROMPT_BYTES. */
+  promptUserTruncated?: boolean;
+  /** Present and true only when the field was truncated by AUDIT_MAX_PROMPT_BYTES. */
+  responseRawTruncated?: boolean;
 };
 
 export type WriteAuditRecordInput = {
@@ -115,19 +251,37 @@ export async function writeAuditRecord(
   const fileName = `${slug}_${input.pr}_${input.headSha}_${input.mode}.json`;
   const filePath = join(dirPath, fileName);
 
+  // Redact secrets first, then apply the byte cap (redact-then-truncate order
+  // ensures secrets are never preserved via the truncation suffix).
+  const redactedSystem = redact(input.promptSystem) as string;
+  const redactedUser = redact(input.promptUser) as string;
+  const redactedResponse = redact(input.responseRaw);
+
+  const capBytes = getCapBytes();
+
+  const { value: cappedSystem, wasTruncated: systemTruncated } =
+    applyCapToString(redactedSystem, capBytes);
+  const { value: cappedUser, wasTruncated: userTruncated } =
+    applyCapToString(redactedUser, capBytes);
+  const { value: cappedResponse, wasTruncated: responseTruncated } =
+    applyCapToUnknown(redactedResponse, capBytes);
+
   const record: AuditRecord = {
     ts: now.toISOString(),
     repo: input.repo,
     pr: input.pr,
     head_sha: input.headSha,
     mode: input.mode,
-    // Redact secrets from all three text fields before writing.
-    prompt_system: redact(input.promptSystem),
-    prompt_user: redact(input.promptUser),
-    response_raw: redact(input.responseRaw),
+    prompt_system: cappedSystem,
+    prompt_user: cappedUser,
+    response_raw: cappedResponse,
     usage: input.usage,
     verdict: input.verdict,
     warnings: input.warnings,
+    // Omit truncation flags when false to keep audit files forward-compatible.
+    ...(systemTruncated && { promptSystemTruncated: true }),
+    ...(userTruncated && { promptUserTruncated: true }),
+    ...(responseTruncated && { responseRawTruncated: true }),
   };
 
   try {
