@@ -9,7 +9,22 @@ const EnvSchema = z.object({
   GITHUB_WEBHOOK_SECRET: z.string().min(1),
   /** Optional secondary webhook secret for zero-downtime rotation. */
   GITHUB_WEBHOOK_SECRET_SECONDARY: z.string().min(1).optional(),
-  ANTHROPIC_API_KEY: z.string().min(1),
+  /**
+   * The Anthropic API key is required when LLM_BACKEND=api (the default).
+   * When LLM_BACKEND=claude-cli the key is ignored and may be empty/unset,
+   * since the `claude` CLI uses its own auth (claude /login). An empty string
+   * is treated as unset so operators can leave `ANTHROPIC_API_KEY=` in .env
+   * when running CLI-backed. loadConfig() enforces the combined rule.
+   */
+  ANTHROPIC_API_KEY: z
+    .string()
+    .optional()
+    .transform((v) => (v === "" ? undefined : v)),
+  /**
+   * LLM backend selection.  `api` is the SDK-backed default; `claude-cli`
+   * shells out to the `claude` binary using its own auth (Max subscription).
+   */
+  LLM_BACKEND: z.enum(["api", "claude-cli"]).default("api"),
   JIRA_BASE_URL: z.string().url().optional(),
   JIRA_EMAIL: z.string().email().optional(),
   JIRA_API_TOKEN: z.string().optional(),
@@ -30,7 +45,13 @@ export type Config = {
   githubWebhookSecret: string;
   /** Optional secondary secret for zero-downtime rotation. When set, both secrets are accepted. */
   githubWebhookSecretSecondary?: string;
+  /**
+   * Anthropic API key. Required when llmBackend === "api"; a harmless placeholder
+   * when llmBackend === "claude-cli" (the SDK client is constructed but never
+   * used for LLM calls in CLI mode).
+   */
   anthropicApiKey: string;
+  llmBackend: "api" | "claude-cli";
   reposPath: string;
   machineUserLogin?: string;
   jira?: {
@@ -45,6 +66,16 @@ export type Config = {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const parsed = EnvSchema.parse(env);
+
+  // Cross-field validation: ANTHROPIC_API_KEY is required in api mode.
+  // In claude-cli mode we fall back to a clearly-labelled placeholder —
+  // the SDK client is constructed for type reasons but never sends a request.
+  if (parsed.LLM_BACKEND === "api" && !parsed.ANTHROPIC_API_KEY) {
+    throw new Error(
+      "ANTHROPIC_API_KEY is required when LLM_BACKEND=api. " +
+        "Set the key in .env, or set LLM_BACKEND=claude-cli to use the Claude CLI (requires `claude /login`).",
+    );
+  }
 
   const jira =
     parsed.JIRA_BASE_URL && parsed.JIRA_EMAIL && parsed.JIRA_API_TOKEN
@@ -61,7 +92,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     githubPat: parsed.GITHUB_PAT,
     githubWebhookSecret: parsed.GITHUB_WEBHOOK_SECRET,
     githubWebhookSecretSecondary: parsed.GITHUB_WEBHOOK_SECRET_SECONDARY,
-    anthropicApiKey: parsed.ANTHROPIC_API_KEY,
+    anthropicApiKey:
+      parsed.ANTHROPIC_API_KEY ?? "sk-ant-unused-claude-cli-backend",
+    llmBackend: parsed.LLM_BACKEND,
     reposPath: parsed.REPOS_PATH,
     machineUserLogin: parsed.GITHUB_MACHINE_USER_LOGIN,
     jira,
