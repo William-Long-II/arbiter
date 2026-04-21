@@ -12,7 +12,7 @@ An intent-aware GitHub pull-request review bot. Listens for webhooks, waits unti
 6. If a human replies to a bot line-comment, the bot replies once in-thread (capped at three replies per thread; `/stop` in a reply ends the thread permanently).
 7. Per-repo config (with org-level defaults) decides whether re-reviews trigger automatically on every push (`auto-on-sync`) or only when a reviewer applies a label or mentions `/review-me` in a comment (`label-or-mention`).
 8. Draft PRs are skipped entirely — the bot does not review them until the author marks the PR as ready for review, at which point the normal CI-gate flow runs.
-9. Operators and reviewers control the bot via slash commands in any PR comment: `/review-me` re-triggers a review, `/review-me skip` pauses it for that PR (7-day TTL), `/review-me resume` re-enables it, `/review-me help` lists the commands.
+9. Operators and reviewers control the bot via slash commands in any PR comment: `/review-me` re-triggers a review, `/review-me refresh` bypasses the result cache for a fresh review, `/review-me skip` pauses it for that PR (7-day TTL), `/review-me resume` re-enables it, `/review-me help` lists the commands.
 10. Each repo can set a weekly token budget (`review.max_weekly_tokens` in `repos.yaml`). When the budget is hit the bot returns a short summary-only comment instead of calling the LLM, and automatically resumes full reviews the following ISO week.
 
 ---
@@ -170,6 +170,8 @@ Open a pull request on a repo in your allowlist. Once CI goes green, within ~60 
 | `DEAD_LETTER_AUTO_REPLAY` | no | `enabled` | `enabled` or `disabled` — replays recent dead-letter records on boot |
 | `DEAD_LETTER_REPLAY_MAX_AGE_MINUTES` | no | `60` | Max age of DL files eligible for auto-replay |
 | `DEAD_LETTER_REPLAY_MAX_COUNT` | no | `50` | Hard cap on DL files replayed per boot |
+| `LARGE_PR_FILES_THRESHOLD` | no | `50` | Kept-file count above which a `review.large_pr` log + metric fires |
+| `LARGE_PR_LOC_THRESHOLD` | no | `3000` | Added-plus-deleted LoC (over kept files) above which the same signal fires |
 | `AUDIT_LOG_DIR` | no | `./var/audit` | Directory for prompt + LLM-response audit records; set to `disabled` to suppress writes |
 | `AUDIT_RETENTION_DAYS` | no | `7` | Retention for audit date-dirs |
 | `METRICS_BIND_TOKEN` | no | — | If set, `GET /metrics` requires `Authorization: Bearer <token>` |
@@ -338,6 +340,7 @@ Any user can drive the bot from a PR comment. Commands must appear at the start 
 - `/review-me` — re-trigger a review (the original command, still the default).
 - `/review-me help` — post a short command reference as a comment.
 - `/review-me skip` — suppress the bot on this PR for 7 days (per-PR, in-memory, TTL-bounded).
+- `/review-me refresh` — evict the result cache for this PR's head SHA and re-run a fresh review.
 - `/review-me resume` — clear an active skip.
 
 The bot only reacts to slash commands it did not author; `reviewme_slash_command_total{command}` tracks usage.
@@ -357,6 +360,14 @@ The system prompt is cached via Anthropic's `cache_control`. Every review emits 
 ### Review-comment thread resolution
 
 When a reviewer marks a bot line-comment thread as Resolved in GitHub's UI, the bot stops replying to new messages in that thread (queried via GraphQL before every reply, cached 5 minutes). Resolving is the UI-equivalent of a user typing `/stop` — both halt the conversation cleanly. Tracked by `reviewme_thread_resolved_skip_total`.
+
+### Auto-resolve stale bot threads on new reviews
+
+When a new review lands on a PR, the bot automatically Resolves any still-open bot threads whose `originalCommit` doesn't match the current head SHA. Keeps the PR UI's "unresolved" count honest and prevents stale feedback from pretending to still be live. Capped at 50 resolutions per review to stay within GitHub API quotas. Metric: `reviewme_thread_auto_resolved_total`.
+
+### Large-PR warning signal
+
+When a post-filter PR exceeds `LARGE_PR_FILES_THRESHOLD` (default 50 files) or `LARGE_PR_LOC_THRESHOLD` (default 3000 LoC), the bot emits a `review.large_pr` log and bumps `reviewme_large_pr_total{reason}` (`files`/`loc`/`both`). Observation-only — the normal pipeline (chunker, budget, cache) is unaffected. Use the metric to alert on outliers before they show up as token spikes in the weekly usage report.
 
 ### Dead-letter auto-replay on boot
 
@@ -409,6 +420,9 @@ JSON to stdout — route via journald, Fluent Bit, Vector, etc. Every log payloa
 | `reviewme_prompt_cache_creation_tokens_total` | counter | — |
 | `reviewme_dead_letter_replay_total` | counter | `result` — `success` / `failure` / `skipped` |
 | `reviewme_thread_resolved_skip_total` | counter | — |
+| `reviewme_thread_auto_resolved_total` | counter | — |
+| `reviewme_large_pr_total` | counter | `reason` — `files` / `loc` / `both` |
+| `reviewme_prompt_user_bytes` | histogram | — (buckets 1KB–1MB) |
 | `reviewme_draft_skipped_total` | counter | — |
 | `reviewme_breaker_state` | gauge (via counter) | `dep` — `0` closed / `1` open / `2` half-open |
 | `reviewme_coverage_signal_total` | counter | `bucket` — `no_new_src` / `has_tests` / `untested` |
@@ -460,6 +474,9 @@ bun test           # test suite (includes e2e smoke harness)
 bun run typecheck  # tsc --noEmit
 bun run smoke      # full e2e pipeline against in-process mocks
 bun run bench      # perf benchmarks (local/manual; not wired into CI)
+bun run review-pr owner/repo#123           # dry-run: fetch + build prompt + print (no LLM, no post)
+bun run review-pr owner/repo#123 --with-llm  # also call Anthropic; still no post
+bun run review-pr owner/repo#123 --post      # full pipeline including posting the review
 ```
 
 ### Project layout
