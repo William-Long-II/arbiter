@@ -1,11 +1,8 @@
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type Anthropic from "@anthropic-ai/sdk";
 import { fetchGitattributes } from "../github/gitattributes";
 import { buildUserMessage, SYSTEM_PROMPT } from "./prompt";
 import { ReviewResultSchema } from "./schema";
 import { filterDiff } from "./diff-filter";
-import { withRetry } from "../util/retry";
-import { withBreaker } from "./breaker";
 import { runChunkedReview } from "./synthesize";
 import { fetchConventions } from "./conventions";
 import { computeCoverageDelta } from "./coverage-delta";
@@ -20,6 +17,7 @@ import { recordUsage } from "./usage";
 import { log } from "../server/logger";
 import { createHash } from "node:crypto";
 import { resolveAnthropicClient } from "./client";
+import { getReviewBackend, ApiBackend } from "./backends";
 import {
   DEFAULT_MODEL,
   DEFAULT_MAX_TOKENS,
@@ -313,47 +311,41 @@ export async function runReview(
     });
   }
 
-  // withBreaker gates BEFORE withRetry so a tripped breaker short-circuits
-  // the retry loop entirely rather than burning quota on repeated attempts.
-  const response = await withBreaker("anthropic", () =>
-    withRetry(() =>
-      effectiveClient.messages.parse({
-        model,
-        max_tokens: maxTokens,
-        thinking: { type: "adaptive" },
-        system: [
-          {
-            type: "text",
-            text: SYSTEM_PROMPT,
-            cache_control: { type: "ephemeral" },
-          },
-        ],
-        messages: [{ role: "user", content: userMessage }],
-        output_config: {
-          format: zodOutputFormat(ReviewResultSchema),
-        },
-      }),
-    ),
-  );
+  // Select the backend.  When using the api backend, honour per-repo client
+  // overrides by constructing a fresh ApiBackend with the effective client.
+  // The claude-cli backend ignores the client entirely.
+  const backend =
+    process.env["LLM_BACKEND"] === "claude-cli"
+      ? getReviewBackend()
+      : new ApiBackend(effectiveClient);
 
-  if (!response.parsed_output) {
-    throw new Error("LLM returned a response that did not match the schema");
-  }
+  const { parsedOutput, usage: backendUsage } = await backend.parseReview({
+    system: SYSTEM_PROMPT,
+    userMessage,
+    schema: ReviewResultSchema,
+    model,
+    maxTokens,
+    repo: repoFull,
+    pr: input.diff.number,
+  });
 
   const usageOut = {
-    inputTokens: response.usage.input_tokens,
-    outputTokens: response.usage.output_tokens,
-    cacheCreationInputTokens:
-      response.usage.cache_creation_input_tokens ?? undefined,
-    cacheReadInputTokens:
-      response.usage.cache_read_input_tokens ?? undefined,
+    inputTokens: backendUsage.input_tokens,
+    outputTokens: backendUsage.output_tokens,
+    cacheCreationInputTokens: backendUsage.cache_creation_input_tokens || undefined,
+    cacheReadInputTokens: backendUsage.cache_read_input_tokens || undefined,
   };
 
   recordCacheTelemetry({
     repo: repoFull,
     pr: input.diff.number,
     headSha,
-    usage: response.usage,
+    usage: {
+      input_tokens: backendUsage.input_tokens,
+      output_tokens: backendUsage.output_tokens,
+      cache_read_input_tokens: backendUsage.cache_read_input_tokens,
+      cache_creation_input_tokens: backendUsage.cache_creation_input_tokens,
+    },
     mode: "single",
   });
 
@@ -364,14 +356,14 @@ export async function runReview(
     mode: "single",
     promptSystem: SYSTEM_PROMPT,
     promptUser: userMessage,
-    responseRaw: response.parsed_output,
+    responseRaw: parsedOutput,
     usage: usageOut,
-    verdict: response.parsed_output.verdict,
+    verdict: parsedOutput.verdict,
     warnings: [],
   });
 
   const singlePassResult: RunReviewOutput = {
-    result: response.parsed_output,
+    result: parsedOutput,
     warnings: [],
     usage: usageOut,
     traceMetadata: {
