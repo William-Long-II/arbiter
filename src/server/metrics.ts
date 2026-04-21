@@ -293,6 +293,23 @@ registry.registerHistogram(
   "Seconds elapsed waiting for CI gate to pass.",
 );
 
+/**
+ * Byte length of the user message sent to Anthropic per review pass.
+ *
+ * Buckets cover the expected range from a trivial 1 KB prompt to a large
+ * 1 MB monorepo prompt. This is the raw UTF-8 byte count of the user message
+ * string, NOT a token count — byte size is the cheapest proxy for capacity
+ * planning without token-math.
+ *
+ * No labels (cardinality discipline: do not add repo/pr labels here).
+ */
+export const promptUserBytes = "reviewme_prompt_user_bytes";
+registry.registerHistogram(
+  promptUserBytes,
+  "UTF-8 byte length of the user message sent to Anthropic per review pass.",
+  [1024, 4096, 16384, 65536, 150000, 500000, 1000000],
+);
+
 /** Slash commands processed, labelled by command name. */
 export const slashCommandTotal = "reviewme_slash_command_total";
 registry.registerCounter(
@@ -393,6 +410,15 @@ export const promptCacheCreationTokensTotal =
 registry.registerCounter(
   promptCacheCreationTokensTotal,
   "Total Anthropic prompt-cache creation tokens (cache seeding) across all review passes.",
+);
+
+// --- Thread auto-resolution counter ---
+
+/** Threads auto-resolved when a new review lands on a fresh head SHA. */
+export const threadAutoResolvedTotal = "reviewme_thread_auto_resolved_total";
+registry.registerCounter(
+  threadAutoResolvedTotal,
+  "Total bot review threads auto-resolved when a new review lands on a fresh head SHA.",
 );
 
 // --- Replay-protection counters ---
@@ -533,6 +559,28 @@ export function incPromptCacheCreation(amount: number): void {
 
 export function incDeadLetterReplay(result: "success" | "failure" | "skipped"): void {
   registry.incrementCounter(deadLetterReplayTotal, { result });
+}
+
+/**
+ * Increment the auto-resolve counter by `n`. Accepts a count so the caller
+ * can batch the full set of resolutions in a single call rather than one
+ * increment per thread.
+ */
+export function incThreadAutoResolved(n: number): void {
+  registry.incrementCounter(threadAutoResolvedTotal, {}, n);
+}
+
+/**
+ * Record the UTF-8 byte size of a user message sent to Anthropic.
+ *
+ * Call this once per Anthropic invocation, immediately after the user message
+ * string is finalised and before the API call. Pass-1 batch messages in the
+ * chunked path are NOT observed here — only the final user-facing messages
+ * (single-pass `userMessage` and chunked pass-2 `synthesisMessage`) count
+ * toward capacity-planning capacity.
+ */
+export function observePromptUserBytes(bytes: number): void {
+  registry.observeHistogram(promptUserBytes, bytes);
 }
 
 export function incLargePr(reason: "files" | "loc" | "both"): void {

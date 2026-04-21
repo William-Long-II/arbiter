@@ -2,6 +2,8 @@ import type { Octokit } from "./client";
 import { withGitHubRetry } from "./client";
 import type { LineComment, ReviewResult } from "../review/schema";
 import type { TraceMetadata } from "../review/types";
+import { resolveBotThreadsForPR } from "./resolve-threads";
+import { log } from "../server/logger";
 
 export type PostReviewInput = {
   owner: string;
@@ -180,6 +182,25 @@ export async function postReview(
       body: summaryBody,
       comments: toApiComments(review.lineComments),
     });
+
+    // Fire-and-forget: auto-resolve stale bot threads from prior review cycles.
+    // Errors are warn-logged but must not fail the review post.
+    resolveBotThreadsForPR({
+      octokit,
+      owner,
+      name: repo,
+      prNumber: pullNumber,
+      selfLogin,
+      currentHeadSha: headSha,
+    }).catch((err: unknown) => {
+      log.warn("thread: auto-resolve fire-and-forget failed", {
+        evt: "thread.auto_resolve_fire_and_forget_failed",
+        repo: `${owner}/${repo}`,
+        pr: pullNumber,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+
     return {
       status: "posted",
       reviewId: res.data.id,
