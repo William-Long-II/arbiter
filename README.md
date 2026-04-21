@@ -11,7 +11,7 @@ An intent-aware GitHub pull-request review bot. Listens for webhooks, waits unti
 5. The review is posted as a GitHub review — `APPROVE` for clean PRs, `COMMENT` with inline feedback when there's something to call out. It never uses `REQUEST_CHANGES`.
 6. If a human replies to a bot line-comment, the bot replies once in-thread (capped at three replies per thread; `/stop` in a reply ends the thread permanently).
 7. Per-repo config (with org-level defaults) decides whether re-reviews trigger automatically on every push (`auto-on-sync`) or only when a reviewer applies a label or mentions `/review-me` in a comment (`label-or-mention`).
-8. Draft PRs are skipped entirely — the bot does not review them until the author marks the PR as ready for review, at which point the normal CI-gate flow runs.
+8. Draft PRs are skipped entirely — the bot does not review them until the author marks the PR as ready for review, at which point the normal CI-gate flow runs. PRs titled `WIP:`, `Draft:`, `[skip-review]`, `[WIP]`, or opened on branches prefixed `wip/` / `draft/` are also skipped implicitly; normal reviews resume once the title or branch changes.
 9. Operators and reviewers control the bot via slash commands in any PR comment: `/review-me` re-triggers a review, `/review-me refresh` bypasses the result cache for a fresh review, `/review-me skip` pauses it for that PR (7-day TTL), `/review-me resume` re-enables it, `/review-me help` lists the commands.
 10. Each repo can set a weekly token budget (`review.max_weekly_tokens` in `repos.yaml`). When the budget is hit the bot returns a short summary-only comment instead of calling the LLM, and automatically resumes full reviews the following ISO week.
 
@@ -172,6 +172,11 @@ Open a pull request on a repo in your allowlist. Once CI goes green, within ~60 
 | `DEAD_LETTER_REPLAY_MAX_COUNT` | no | `50` | Hard cap on DL files replayed per boot |
 | `LARGE_PR_FILES_THRESHOLD` | no | `50` | Kept-file count above which a `review.large_pr` log + metric fires |
 | `LARGE_PR_LOC_THRESHOLD` | no | `3000` | Added-plus-deleted LoC (over kept files) above which the same signal fires |
+| `LLM_BACKEND` | no | `api` | `api` uses `ANTHROPIC_API_KEY`; `claude-cli` uses the `claude` CLI (Max subscription) — see [backend section](#alternate-backend-claude-cli-max-subscription) |
+| `AUDIT_MAX_PROMPT_BYTES` | no | — | When set, caps stored prompt/response size in audit records (bytes, UTF-8-safe) |
+| `QUEUE_STATE_DIR` | no | `./var/queue` | Directory for in-flight queue snapshots used to survive restarts |
+| `QUEUE_STALE_MAX_MINUTES` | no | `60` | Discard queue entries older than this at restore time |
+| `QUEUE_SNAPSHOT_INTERVAL_SECONDS` | no | `30` | Periodic snapshot interval; `0` disables periodic snapshotting (SIGTERM still snapshots) |
 | `AUDIT_LOG_DIR` | no | `./var/audit` | Directory for prompt + LLM-response audit records; set to `disabled` to suppress writes |
 | `AUDIT_RETENTION_DAYS` | no | `7` | Retention for audit date-dirs |
 | `METRICS_BIND_TOKEN` | no | — | If set, `GET /metrics` requires `Authorization: Bearer <token>` |
@@ -373,6 +378,31 @@ When a post-filter PR exceeds `LARGE_PR_FILES_THRESHOLD` (default 50 files) or `
 
 On startup, after the retention sweep, the bot automatically replays any dead-letter files newer than `DEAD_LETTER_REPLAY_MAX_AGE_MINUTES` (default 60), up to `DEAD_LETTER_REPLAY_MAX_COUNT` (default 50). Successfully-replayed files are renamed to `<name>.replayed` so they are not re-attempted on the next boot. Set `DEAD_LETTER_AUTO_REPLAY=disabled` to opt out. Metric: `reviewme_dead_letter_replay_total{result}`.
 
+### Alternate backend: Claude CLI (Max subscription)
+
+The default LLM backend uses `ANTHROPIC_API_KEY` via the Anthropic SDK. Operators running the bot on their own machine can instead point it at the `claude` CLI — which uses whatever auth `claude /login` set up, including a Claude Max subscription.
+
+```bash
+# One-time, on the host running the bot:
+claude /login
+
+# Then in .env:
+LLM_BACKEND=claude-cli
+# ANTHROPIC_API_KEY is not read in this mode — leave set or unset.
+```
+
+At boot the bot runs `claude --version` once. If the binary is missing or unresponsive within 5 seconds, the process exits with code 1 — a misconfigured backend at startup beats failing every review at runtime. When the CLI returns output that can't be parsed into the review schema, the bot falls back to a summary-only verdict (`verdict: "comment"`) and emits a `backend.schema_fallback` warn log rather than throwing.
+
+**Tradeoffs to know:**
+- Max subscription usage is metered differently than the API (5-hour windows, message caps) — check Anthropic's terms before using it for automated workloads.
+- The `claude-cli` backend does not honor the per-repo `review.anthropic_api_key_env` override (Max subscriptions don't accept alternate keys).
+- Prompt caching behavior differs from the SDK path; the cache-hit metric may be zero for CLI-backend deployments.
+- The thread-reply handler for `/review-me` follow-ups stays on the API backend.
+
+### Queue persistence across restarts
+
+In-flight review tasks are snapshotted to `${QUEUE_STATE_DIR}/pending.json` every `QUEUE_SNAPSHOT_INTERVAL_SECONDS` (default 30) AND on `SIGTERM` before drain. At boot the bot reads this file, re-enqueues tasks, and renames it to `pending.json.restored.<ts>` for audit. Entries older than `QUEUE_STALE_MAX_MINUTES` (default 60) are discarded and logged. Set `QUEUE_SNAPSHOT_INTERVAL_SECONDS=0` to disable periodic snapshotting (SIGTERM snapshotting still runs). Useful especially for laptop / local-run deployments where restarts are frequent.
+
 ### Review traceability footer
 
 Every posted review summary ends with a hidden HTML comment recording `head_sha`, `model`, `mode` (`single`/`chunked`/`budget_exhausted`/`too_large`), `intent_source`, `intent_ref`, `prompt_hash` (first 12 chars of the user-message SHA-256), and `ts`. Hidden from GitHub's rendered UI; visible via the comment's three-dots → Edit. Pair with the audit-trail JSONL to trace a surprising review back to its exact prompt.
@@ -423,6 +453,8 @@ JSON to stdout — route via journald, Fluent Bit, Vector, etc. Every log payloa
 | `reviewme_thread_auto_resolved_total` | counter | — |
 | `reviewme_large_pr_total` | counter | `reason` — `files` / `loc` / `both` |
 | `reviewme_prompt_user_bytes` | histogram | — (buckets 1KB–1MB) |
+| `reviewme_implicit_skip_total` | counter | `reason` — `title` / `branch` |
+| `reviewme_queue_persistence_total` | counter | `result` — `snapshot_ok` / `snapshot_failed` / `restore_ok` / `restore_failed` / `skipped_stale` |
 | `reviewme_draft_skipped_total` | counter | — |
 | `reviewme_breaker_state` | gauge (via counter) | `dep` — `0` closed / `1` open / `2` half-open |
 | `reviewme_coverage_signal_total` | counter | `bucket` — `no_new_src` / `has_tests` / `untested` |
@@ -477,6 +509,7 @@ bun run bench      # perf benchmarks (local/manual; not wired into CI)
 bun run review-pr owner/repo#123           # dry-run: fetch + build prompt + print (no LLM, no post)
 bun run review-pr owner/repo#123 --with-llm  # also call Anthropic; still no post
 bun run review-pr owner/repo#123 --post      # full pipeline including posting the review
+bun run usage-report --since 7d              # per-repo usage; warns rows >=80% of weekly cap
 ```
 
 ### Project layout
