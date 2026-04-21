@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { getAllowlist, loadAllowlist, loadConfig, reload } from "../config";
 import { createOctokit, fetchAuthenticatedLogin } from "../github";
 import { createAnthropic } from "../review";
+import { runBootHealthCheck } from "../review/backends";
 import { sweepDeadLetters, writeDeadLetter } from "./dead-letter";
 import { replayRecentDeadLetters } from "./dead-letter-replay";
 import { sweepAudit } from "../review/audit";
@@ -42,6 +43,11 @@ const config = loadConfig();
 loadAllowlist(config.reposPath);
 const octokit = createOctokit(config.githubPat);
 const anthropic = createAnthropic(config.anthropicApiKey);
+
+// Boot-time health check for the claude-cli backend.  Exits with code 1 if
+// LLM_BACKEND=claude-cli and the `claude` binary is absent or non-functional.
+// No-op when LLM_BACKEND=api (the default).
+await runBootHealthCheck();
 
 const selfLogin =
   config.machineUserLogin ?? (await fetchAuthenticatedLogin(octokit));

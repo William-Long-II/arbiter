@@ -1,13 +1,10 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type Anthropic from "@anthropic-ai/sdk";
 import { ReviewResultSchema } from "./schema";
 import { planReview, toFileDiffs, DEFAULT_BATCH_BUDGET_CHARS } from "./chunker";
 import type { FileDiff } from "./chunker";
 import { buildUserMessage, SYSTEM_PROMPT } from "./prompt";
-import { withRetry } from "../util/retry";
-import { withBreaker } from "./breaker";
 import { recordUsage } from "./usage";
 import { writeAuditRecord } from "./audit";
 import {
@@ -22,6 +19,7 @@ import { log } from "../server/logger";
 import { recordCacheTelemetry } from "./cache-telemetry";
 import { resolveAnthropicClient } from "./client";
 import { observePromptUserBytes } from "../server/metrics";
+import { getReviewBackend, ApiBackend } from "./backends";
 
 // ─── Pass-1 schema ───────────────────────────────────────────────────────────
 
@@ -275,43 +273,34 @@ export async function runChunkedReview(
 
       const userMessage = buildBatchUserMessage(batch, intentSection);
 
-      const response = await withBreaker("anthropic", () =>
-        withRetry(() =>
-          effectiveClient.messages.parse({
-            model,
-            max_tokens: maxTokens,
-            system: [
-              {
-                type: "text",
-                text: BATCH_SYSTEM_PROMPT,
-                cache_control: { type: "ephemeral" },
-              },
-            ],
-            messages: [{ role: "user", content: userMessage }],
-            output_config: {
-              format: zodOutputFormat(BatchSummarySchema),
-            },
-          }),
-        ),
-      );
+      // Select backend for this call — per-repo client override honoured for api path.
+      const batchBackend =
+        process.env["LLM_BACKEND"] === "claude-cli"
+          ? getReviewBackend()
+          : new ApiBackend(effectiveClient);
 
-      if (!response.parsed_output) {
-        throw new Error(
-          `[chunked-review] pass-1 batch ${batchIdx}: LLM returned a response that did not match the schema`,
-        );
-      }
+      const { parsedOutput: batchParsed, usage: batchUsage } =
+        await batchBackend.parseReview({
+          system: BATCH_SYSTEM_PROMPT,
+          userMessage,
+          schema: BatchSummarySchema,
+          model,
+          maxTokens,
+          repo: `${input.diff.owner}/${input.diff.repo}`,
+          pr: input.diff.number,
+        });
 
-      pass1InputTokens += response.usage.input_tokens;
-      pass1OutputTokens += response.usage.output_tokens;
-      pass1CacheCreation += response.usage.cache_creation_input_tokens ?? 0;
-      pass1CacheRead += response.usage.cache_read_input_tokens ?? 0;
+      pass1InputTokens += batchUsage.input_tokens;
+      pass1OutputTokens += batchUsage.output_tokens;
+      pass1CacheCreation += batchUsage.cache_creation_input_tokens;
+      pass1CacheRead += batchUsage.cache_read_input_tokens;
 
       log.info("[chunked-review] pass-1 batch end", {
         batchIdx,
         files: batch.map((f) => f.path),
       });
 
-      return response.parsed_output as BatchSummary;
+      return batchParsed as BatchSummary;
     },
     BATCH_CONCURRENCY,
   );
@@ -392,33 +381,22 @@ export async function runChunkedReview(
     });
   }
 
-  const synthesisResponse = await withBreaker("anthropic", () =>
-    withRetry(() =>
-      effectiveClient.messages.parse({
-        model,
-        max_tokens: maxTokens,
-        system: [
-          {
-            type: "text",
-            text: SYSTEM_PROMPT,
-            cache_control: { type: "ephemeral" },
-          },
-        ],
-        messages: [{ role: "user", content: synthesisMessage }],
-        output_config: {
-          format: zodOutputFormat(ReviewResultSchema),
-        },
-      }),
-    ),
-  );
+  // Select backend for pass-2 synthesis.
+  const synthBackend =
+    process.env["LLM_BACKEND"] === "claude-cli"
+      ? getReviewBackend()
+      : new ApiBackend(effectiveClient);
 
-  if (!synthesisResponse.parsed_output) {
-    throw new Error(
-      "[chunked-review] pass-2: LLM returned a response that did not match the schema",
-    );
-  }
-
-  const rawResult = synthesisResponse.parsed_output;
+  const { parsedOutput: rawResult, usage: synthUsage } =
+    await synthBackend.parseReview({
+      system: SYSTEM_PROMPT,
+      userMessage: synthesisMessage,
+      schema: ReviewResultSchema,
+      model,
+      maxTokens,
+      repo: `${input.diff.owner}/${input.diff.repo}`,
+      pr: input.diff.number,
+    });
 
   // Record pass-2 usage.
   await recordUsage({
@@ -427,12 +405,10 @@ export async function runChunkedReview(
     headSha: input.diff.headSha,
     model,
     verdict: rawResult.verdict,
-    inputTokens: synthesisResponse.usage.input_tokens,
-    outputTokens: synthesisResponse.usage.output_tokens,
-    cacheCreationTokens:
-      synthesisResponse.usage.cache_creation_input_tokens ?? undefined,
-    cacheReadTokens:
-      synthesisResponse.usage.cache_read_input_tokens ?? undefined,
+    inputTokens: synthUsage.input_tokens,
+    outputTokens: synthUsage.output_tokens,
+    cacheCreationTokens: synthUsage.cache_creation_input_tokens || undefined,
+    cacheReadTokens: synthUsage.cache_read_input_tokens || undefined,
     pass: 2,
   });
 
@@ -440,7 +416,12 @@ export async function runChunkedReview(
     repo: `${input.diff.owner}/${input.diff.repo}`,
     pr: input.diff.number,
     headSha: input.diff.headSha,
-    usage: synthesisResponse.usage,
+    usage: {
+      input_tokens: synthUsage.input_tokens,
+      output_tokens: synthUsage.output_tokens,
+      cache_read_input_tokens: synthUsage.cache_read_input_tokens,
+      cache_creation_input_tokens: synthUsage.cache_creation_input_tokens,
+    },
     mode: "chunked-pass-2",
   });
 
@@ -454,12 +435,10 @@ export async function runChunkedReview(
     promptUser: synthesisMessage,
     responseRaw: rawResult,
     usage: {
-      inputTokens: synthesisResponse.usage.input_tokens,
-      outputTokens: synthesisResponse.usage.output_tokens,
-      cacheCreationInputTokens:
-        synthesisResponse.usage.cache_creation_input_tokens ?? undefined,
-      cacheReadInputTokens:
-        synthesisResponse.usage.cache_read_input_tokens ?? undefined,
+      inputTokens: synthUsage.input_tokens,
+      outputTokens: synthUsage.output_tokens,
+      cacheCreationInputTokens: synthUsage.cache_creation_input_tokens || undefined,
+      cacheReadInputTokens: synthUsage.cache_read_input_tokens || undefined,
     },
     verdict: rawResult.verdict,
     warnings: [],
@@ -468,8 +447,8 @@ export async function runChunkedReview(
   log.info("[chunked-review] pass-2 complete", {
     pr: `${input.diff.owner}/${input.diff.repo}#${input.diff.number}`,
     verdict: rawResult.verdict,
-    inputTokens: synthesisResponse.usage.input_tokens,
-    outputTokens: synthesisResponse.usage.output_tokens,
+    inputTokens: synthUsage.input_tokens,
+    outputTokens: synthUsage.output_tokens,
   });
 
   // ── Validate line comments against actual diff hunks ──────────────────────
@@ -507,14 +486,12 @@ export async function runChunkedReview(
     },
     warnings,
     usage: {
-      inputTokens: pass1InputTokens + synthesisResponse.usage.input_tokens,
-      outputTokens: pass1OutputTokens + synthesisResponse.usage.output_tokens,
+      inputTokens: pass1InputTokens + synthUsage.input_tokens,
+      outputTokens: pass1OutputTokens + synthUsage.output_tokens,
       cacheCreationInputTokens:
-        pass1CacheCreation +
-        (synthesisResponse.usage.cache_creation_input_tokens ?? 0),
+        pass1CacheCreation + synthUsage.cache_creation_input_tokens,
       cacheReadInputTokens:
-        pass1CacheRead +
-        (synthesisResponse.usage.cache_read_input_tokens ?? 0),
+        pass1CacheRead + synthUsage.cache_read_input_tokens,
     },
     traceMetadata: {
       headSha: input.diff.headSha,
