@@ -577,7 +577,7 @@ export function incThreadAutoResolved(n: number): void {
  * string is finalised and before the API call. Pass-1 batch messages in the
  * chunked path are NOT observed here — only the final user-facing messages
  * (single-pass `userMessage` and chunked pass-2 `synthesisMessage`) count
- * toward capacity-planning capacity.
+ * toward capacity-planning signal.
  */
 export function observePromptUserBytes(bytes: number): void {
   registry.observeHistogram(promptUserBytes, bytes);
@@ -586,6 +586,7 @@ export function observePromptUserBytes(bytes: number): void {
 export function incLargePr(reason: "files" | "loc" | "both"): void {
   registry.incrementCounter(largePrTotal, { reason });
 }
+
 
 // ---------------------------------------------------------------------------
 // HTTP handler

@@ -21,6 +21,7 @@ import { filterDiff } from "./diff-filter";
 import { log } from "../server/logger";
 import { recordCacheTelemetry } from "./cache-telemetry";
 import { resolveAnthropicClient } from "./client";
+import { observePromptUserBytes } from "../server/metrics";
 
 // ─── Pass-1 schema ───────────────────────────────────────────────────────────
 
@@ -376,6 +377,20 @@ export async function runChunkedReview(
   });
 
   const synthesisMessage = buildSynthesisUserMessage(intentSection, batchSummaries);
+
+  // Observe pass-2 synthesis prompt size for capacity planning (issue #77).
+  const synthesisMessageBytes = Buffer.byteLength(synthesisMessage, "utf8");
+  observePromptUserBytes(synthesisMessageBytes);
+  if (synthesisMessageBytes >= 1024) {
+    log.info("prompt.size", {
+      evt: "prompt.size",
+      repo: `${input.diff.owner}/${input.diff.repo}`,
+      pr: input.diff.number,
+      headSha: input.diff.headSha,
+      user_message_bytes: synthesisMessageBytes,
+      mode: "chunked",
+    });
+  }
 
   const synthesisResponse = await withBreaker("anthropic", () =>
     withRetry(() =>
