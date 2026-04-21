@@ -588,6 +588,30 @@ export function incLargePr(reason: "files" | "loc" | "both"): void {
 }
 
 
+// --- Queue persistence counters ---
+
+/**
+ * Queue persistence outcomes, labelled by result.
+ *
+ * result values:
+ *   snapshot_ok      — pending.json written successfully
+ *   snapshot_failed  — write/rename failed (best-effort; review flow unaffected)
+ *   restore_ok       — entry re-enqueued from pending.json at boot
+ *   restore_failed   — entry could not be re-enqueued (e.g. queue full)
+ *   skipped_stale    — entry discarded because queuedAt > QUEUE_STALE_MAX_MINUTES
+ */
+export const queuePersistenceTotal = "reviewme_queue_persistence_total";
+registry.registerCounter(
+  queuePersistenceTotal,
+  "Total queue persistence events, by result (snapshot_ok/snapshot_failed/restore_ok/restore_failed/skipped_stale).",
+);
+
+export function incQueuePersistence(
+  result: "snapshot_ok" | "snapshot_failed" | "restore_ok" | "restore_failed" | "skipped_stale",
+): void {
+  registry.incrementCounter(queuePersistenceTotal, { result });
+}
+
 // ---------------------------------------------------------------------------
 // HTTP handler
 // ---------------------------------------------------------------------------
