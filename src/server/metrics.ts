@@ -385,6 +385,23 @@ registry.registerCounter(
   "Total PRs that exceeded the large-PR warning thresholds, by reason (files/loc/both).",
 );
 
+// --- Implicit-skip counter ---
+
+/**
+ * PRs skipped due to implicit title keyword or branch prefix conventions.
+ *
+ * reason values:
+ *   title  — PR title matched a WIP/Draft/RFC/skip-review pattern
+ *   branch — branch name matched a draft/ or wip/ prefix
+ *
+ * Cardinality is bounded: only two label values are ever emitted.
+ */
+export const implicitSkipTotal = "reviewme_implicit_skip_total";
+registry.registerCounter(
+  implicitSkipTotal,
+  "Total PR reviews skipped due to implicit title or branch conventions, by reason (title/branch).",
+);
+
 // --- Result cache counters ---
 
 /** Review result cache hits and misses, labelled by result (hit/miss). */
@@ -585,6 +602,10 @@ export function observePromptUserBytes(bytes: number): void {
 
 export function incLargePr(reason: "files" | "loc" | "both"): void {
   registry.incrementCounter(largePrTotal, { reason });
+}
+
+export function incImplicitSkip(reason: "title" | "branch"): void {
+  registry.incrementCounter(implicitSkipTotal, { reason });
 }
 
 

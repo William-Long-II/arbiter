@@ -26,6 +26,7 @@ import { log } from "./logger";
 import {
   incAnthropicTokens,
   incDraftSkipped,
+  incImplicitSkip,
   incReviewFailures,
   incReviewsTotal,
   incSlashCommand,
@@ -33,7 +34,7 @@ import {
   observeReviewDuration,
 } from "./metrics";
 import { enqueueOrThrow } from "./queue";
-import { decideFromCheckSuite, parseSlashCommand } from "./triggers";
+import { decideFromCheckSuite, parseSlashCommand, shouldSkipImplicit } from "./triggers";
 import { skipKey, skipRegistry } from "./skip-registry";
 import { resultCache } from "../review/result-cache";
 import { handleReviewCommentCreated } from "./handlers/review-comment";
@@ -58,6 +59,10 @@ type PrRef = {
   repo: string;
   pullNumber: number;
   headSha: string;
+  /** PR title at the time of the triggering event — used for implicit-skip checks. */
+  prTitle?: string;
+  /** Head branch ref (e.g. "wip/my-feature") — used for implicit-skip checks. */
+  branch?: string;
 };
 
 type TriggerSource = "check-suite" | "label" | "mention" | "ready-for-review";
@@ -165,6 +170,8 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
       repo: name,
       pullNumber: payload.pull_request.number,
       headSha: payload.pull_request.head.sha,
+      prTitle: payload.pull_request.title,
+      branch: payload.pull_request.head.ref,
     };
 
     log.info("pull_request.ready_for_review", {
@@ -226,6 +233,8 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
         repo: name,
         pullNumber: pr.number,
         headSha,
+        // head.ref is the branch name; included in the check_suite PR list.
+        branch: (pr as unknown as { head?: { ref?: string } }).head?.ref,
       };
       try {
         const hasPrior = await hasAnyPriorReview(
@@ -319,6 +328,8 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
       repo: name,
       pullNumber: payload.pull_request.number,
       headSha: payload.pull_request.head.sha,
+      prTitle: payload.pull_request.title,
+      branch: payload.pull_request.head.ref,
     };
 
     log.info("pull_request.labeled triggered review", {
@@ -504,6 +515,8 @@ export function createWebhooks(secret: string, deps: WebhookDeps): Webhooks {
       repo: name,
       pullNumber: prNumber,
       headSha: prData.data.head.sha,
+      prTitle: prData.data.title,
+      branch: prData.data.head.ref,
     };
 
     // For /review-me refresh: evict the cached result for this head SHA so
@@ -603,6 +616,25 @@ async function triggerExplicit(
     source: deps.source,
   };
 
+  // Short-circuit before the CI-gate API call when an implicit-skip pattern
+  // matches. This covers ready-for-review, label, and mention triggers.
+  // (The check_suite path is guarded inside runPipeline instead.)
+  if (ref.prTitle !== undefined || ref.branch !== undefined) {
+    const implicitCheck = shouldSkipImplicit({
+      prTitle: ref.prTitle ?? "",
+      branch: ref.branch ?? "",
+    });
+    if (implicitCheck.skip) {
+      log.info("skip.implicit", {
+        ...logFields,
+        evt: "skip.implicit",
+        reason: implicitCheck.reason,
+      });
+      incImplicitSkip(implicitCheck.reason as "title" | "branch");
+      return;
+    }
+  }
+
   try {
     const gate = await evaluateHeadSha(
       deps.octokit,
@@ -650,6 +682,24 @@ async function runPipeline(ref: PrRef, deps: PipelineDeps): Promise<void> {
       evt: "skip.user_requested",
     });
     return;
+  }
+
+  // Early return when the PR title or branch matches an implicit-skip pattern
+  // (e.g. "WIP: …" title, or a "wip/" / "draft/" branch prefix).
+  if (ref.prTitle !== undefined || ref.branch !== undefined) {
+    const implicitCheck = shouldSkipImplicit({
+      prTitle: ref.prTitle ?? "",
+      branch: ref.branch ?? "",
+    });
+    if (implicitCheck.skip) {
+      log.info("skip.implicit", {
+        ...logFields,
+        evt: "skip.implicit",
+        reason: implicitCheck.reason,
+      });
+      incImplicitSkip(implicitCheck.reason as "title" | "branch");
+      return;
+    }
   }
 
   if (

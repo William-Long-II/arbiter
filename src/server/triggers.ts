@@ -1,5 +1,61 @@
 export type RereviewMode = "auto-on-sync" | "label-or-mention";
 
+// ---------------------------------------------------------------------------
+// Implicit skip — title keywords and branch prefixes
+// ---------------------------------------------------------------------------
+
+export type ImplicitSkipResult =
+  | { skip: false }
+  | { skip: true; reason: string };
+
+/**
+ * Decide whether a PR should be skipped based on conventional title keywords
+ * or branch prefixes — without requiring an explicit /review-me skip comment.
+ *
+ * Title patterns (case-insensitive, matched at the start of the trimmed title):
+ *   - `WIP:`, `Draft:`, `RFC:` (with optional whitespace before the colon)
+ *   - `[skip-review]`, `[skip review]`, `[WIP]`, `[Draft]`
+ *   - Bare `WIP` or `Draft` word at the start (e.g. "WIP my feature")
+ *
+ * Branch patterns (case-insensitive prefix):
+ *   - `draft/…`, `wip/…`
+ *
+ * The `reason` field uses the coarse category (`title` or `branch`) so that
+ * the Prometheus label cardinality stays bounded.
+ *
+ * Known limitation: the `Draft:` title keyword duplicates GitHub's native
+ * `draft: true` PR flag. The explicit draft flag (handled separately upstream)
+ * is more authoritative; this matcher is an English-language heuristic for
+ * non-draft PRs whose authors follow the convention but skipped the draft toggle.
+ */
+export function shouldSkipImplicit(opts: {
+  prTitle: string;
+  branch: string;
+}): ImplicitSkipResult {
+  const trimmed = opts.prTitle.trim();
+
+  // Title patterns — anchored at the start of the trimmed title.
+  // Order: most-specific first so we match the earliest pattern.
+  const TITLE_RES = [
+    /^(wip|draft|rfc)\s*:/i,
+    /^\[(skip[\s-]?review|wip|draft)\]/i,
+    /^(wip|draft)\b/i,
+  ];
+
+  for (const re of TITLE_RES) {
+    if (re.test(trimmed)) {
+      return { skip: true, reason: "title" };
+    }
+  }
+
+  // Branch prefix patterns.
+  if (/^(draft|wip)\//i.test(opts.branch)) {
+    return { skip: true, reason: "branch" };
+  }
+
+  return { skip: false };
+}
+
 export type CheckSuiteDecision =
   | { proceed: true }
   | { proceed: false; reason: string };
