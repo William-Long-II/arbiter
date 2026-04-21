@@ -17,6 +17,17 @@
 #   review:
 #     include_paths: [glob, ...]   only review files matching these globs
 #     exclude_paths: [glob, ...]   omit files matching these globs
+#
+# YAML indentation rules (common traps):
+#   - Use 2-space indents. Be consistent — mixing 2 and 3 spaces is a parse error.
+#   - Do NOT write `repos: {}` above your entries. `{}` means "empty map" and
+#     cannot have children; the parser will reject any entries that follow.
+#     Either omit the `repos:` key entirely or put entries directly under it
+#     (see the example below).
+#   - When every section is commented out (as in this fresh template), the file
+#     is an empty YAML document. Both `orgs` and `repos` are optional, so that
+#     parses fine — the bot boots with zero allowlisted repos and ignores all
+#     webhooks until you add at least one entry.
 
 # orgs:
 #   acme:
@@ -25,7 +36,7 @@
 #     review:
 #       exclude_paths: ["docs/**", "*.generated.*"]
 
-repos: {}
+# repos:
 #   acme/widget:
 #     enabled: true
 #     rereview: auto-on-sync
