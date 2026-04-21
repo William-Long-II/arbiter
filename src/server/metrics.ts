@@ -352,6 +352,22 @@ registry.registerCounter(
   "Total dead-letter auto-replay outcomes, by result (success/failure/skipped).",
 );
 
+// --- Large-PR warning counter ---
+
+/**
+ * PRs that exceed the large-PR warning thresholds, labelled by reason.
+ *
+ * reason values:
+ *   files — kept-file count exceeded LARGE_PR_FILES_THRESHOLD
+ *   loc   — sum of additions+deletions exceeded LARGE_PR_LOC_THRESHOLD
+ *   both  — both thresholds exceeded simultaneously
+ */
+export const largePrTotal = "reviewme_large_pr_total";
+registry.registerCounter(
+  largePrTotal,
+  "Total PRs that exceeded the large-PR warning thresholds, by reason (files/loc/both).",
+);
+
 // --- Result cache counters ---
 
 /** Review result cache hits and misses, labelled by result (hit/miss). */
@@ -517,6 +533,10 @@ export function incPromptCacheCreation(amount: number): void {
 
 export function incDeadLetterReplay(result: "success" | "failure" | "skipped"): void {
   registry.incrementCounter(deadLetterReplayTotal, { result });
+}
+
+export function incLargePr(reason: "files" | "loc" | "both"): void {
+  registry.incrementCounter(largePrTotal, { reason });
 }
 
 // ---------------------------------------------------------------------------
