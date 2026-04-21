@@ -297,7 +297,7 @@ registry.registerHistogram(
 export const slashCommandTotal = "reviewme_slash_command_total";
 registry.registerCounter(
   slashCommandTotal,
-  "Total slash commands processed, by command name (help/skip/resume/re-review/unknown).",
+  "Total slash commands processed, by command name (help/skip/resume/re-review/refresh/unknown).",
 );
 
 // --- Coverage signal counter ---
@@ -502,7 +502,7 @@ export function incReviewCache(result: "hit" | "miss"): void {
 }
 
 export function incSlashCommand(
-  command: "help" | "skip" | "resume" | "re-review" | "unknown",
+  command: "help" | "skip" | "resume" | "re-review" | "refresh" | "unknown",
 ): void {
   registry.incrementCounter(slashCommandTotal, { command });
 }

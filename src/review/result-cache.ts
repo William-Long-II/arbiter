@@ -91,6 +91,21 @@ class ResultLruCache {
   }
 
   /**
+   * Remove a single entry by key.  No-op when the key is absent.  Never throws.
+   *
+   * Used by the `/review-me refresh` slash command to evict the cached result
+   * for a specific `${repoFull}@${headSha}` key so that the next review call
+   * produces a fresh LLM result instead of returning the stale cached value.
+   */
+  delete(key: string): void {
+    try {
+      this.map.delete(key);
+    } catch {
+      // Swallow — same rationale as get() / set().
+    }
+  }
+
+  /**
    * Remove all entries.  Called by tests between runs and available for
    * operator tooling that wants a full flush without a process restart.
    */

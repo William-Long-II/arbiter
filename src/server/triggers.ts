@@ -43,6 +43,7 @@ export type SlashCommandName =
   | "skip"
   | "resume"
   | "re-review"
+  | "refresh"
   | "unknown";
 
 export type SlashCommand = {
@@ -59,6 +60,7 @@ export type SlashCommand = {
  * - `/review-me skip`       → { command: "skip" }
  * - `/review-me resume`     → { command: "resume" }
  * - `/review-me re-review`  → { command: "re-review" }
+ * - `/review-me refresh`    → { command: "refresh" }
  * - `/review-me`            → { command: "re-review" }  (bare mention = re-review)
  * - `/review-me foo`        → { command: "unknown" }
  *
@@ -100,6 +102,8 @@ export function parseSlashCommand(
       return { command: "resume", raw };
     case "re-review":
       return { command: "re-review", raw };
+    case "refresh":
+      return { command: "refresh", raw };
     default:
       return { command: "unknown", raw };
   }
