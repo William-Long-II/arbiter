@@ -314,7 +314,7 @@ registry.registerHistogram(
 export const slashCommandTotal = "reviewme_slash_command_total";
 registry.registerCounter(
   slashCommandTotal,
-  "Total slash commands processed, by command name (help/skip/resume/re-review/unknown).",
+  "Total slash commands processed, by command name (help/skip/resume/re-review/refresh/unknown).",
 );
 
 // --- Coverage signal counter ---
@@ -369,6 +369,22 @@ registry.registerCounter(
   "Total dead-letter auto-replay outcomes, by result (success/failure/skipped).",
 );
 
+// --- Large-PR warning counter ---
+
+/**
+ * PRs that exceed the large-PR warning thresholds, labelled by reason.
+ *
+ * reason values:
+ *   files — kept-file count exceeded LARGE_PR_FILES_THRESHOLD
+ *   loc   — sum of additions+deletions exceeded LARGE_PR_LOC_THRESHOLD
+ *   both  — both thresholds exceeded simultaneously
+ */
+export const largePrTotal = "reviewme_large_pr_total";
+registry.registerCounter(
+  largePrTotal,
+  "Total PRs that exceeded the large-PR warning thresholds, by reason (files/loc/both).",
+);
+
 // --- Result cache counters ---
 
 /** Review result cache hits and misses, labelled by result (hit/miss). */
@@ -394,6 +410,15 @@ export const promptCacheCreationTokensTotal =
 registry.registerCounter(
   promptCacheCreationTokensTotal,
   "Total Anthropic prompt-cache creation tokens (cache seeding) across all review passes.",
+);
+
+// --- Thread auto-resolution counter ---
+
+/** Threads auto-resolved when a new review lands on a fresh head SHA. */
+export const threadAutoResolvedTotal = "reviewme_thread_auto_resolved_total";
+registry.registerCounter(
+  threadAutoResolvedTotal,
+  "Total bot review threads auto-resolved when a new review lands on a fresh head SHA.",
 );
 
 // --- Replay-protection counters ---
@@ -519,7 +544,7 @@ export function incReviewCache(result: "hit" | "miss"): void {
 }
 
 export function incSlashCommand(
-  command: "help" | "skip" | "resume" | "re-review" | "unknown",
+  command: "help" | "skip" | "resume" | "re-review" | "refresh" | "unknown",
 ): void {
   registry.incrementCounter(slashCommandTotal, { command });
 }
@@ -537,6 +562,15 @@ export function incDeadLetterReplay(result: "success" | "failure" | "skipped"): 
 }
 
 /**
+ * Increment the auto-resolve counter by `n`. Accepts a count so the caller
+ * can batch the full set of resolutions in a single call rather than one
+ * increment per thread.
+ */
+export function incThreadAutoResolved(n: number): void {
+  registry.incrementCounter(threadAutoResolvedTotal, {}, n);
+}
+
+/**
  * Record the UTF-8 byte size of a user message sent to Anthropic.
  *
  * Call this once per Anthropic invocation, immediately after the user message
@@ -548,6 +582,11 @@ export function incDeadLetterReplay(result: "success" | "failure" | "skipped"): 
 export function observePromptUserBytes(bytes: number): void {
   registry.observeHistogram(promptUserBytes, bytes);
 }
+
+export function incLargePr(reason: "files" | "loc" | "both"): void {
+  registry.incrementCounter(largePrTotal, { reason });
+}
+
 
 // ---------------------------------------------------------------------------
 // HTTP handler

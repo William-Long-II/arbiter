@@ -10,7 +10,8 @@ import { runChunkedReview } from "./synthesize";
 import { fetchConventions } from "./conventions";
 import { computeCoverageDelta } from "./coverage-delta";
 import { applicableHeuristics } from "./heuristics/index";
-import { incBudgetExhausted, incCoverageSignal, incReviewCache, observePromptUserBytes } from "../server/metrics";
+import { incBudgetExhausted, incCoverageSignal, incLargePr, incReviewCache, observePromptUserBytes } from "../server/metrics";
+import { largePrThresholds } from "./large-pr-thresholds";
 import { recordCacheTelemetry } from "./cache-telemetry";
 import { writeAuditRecord } from "./audit";
 import { resultCache } from "./result-cache";
@@ -182,6 +183,42 @@ export async function runReview(
   );
   const coverageDelta = computeCoverageDelta(keptFiles);
   const heuristics = applicableHeuristics(keptFiles);
+
+  // -------------------------------------------------------------------------
+  // Large-PR warning — observation-only; does NOT alter downstream routing.
+  // Counts kept files and total LoC (additions + deletions) against operator-
+  // configurable thresholds. Emits one structured log line and one metric
+  // increment when either threshold is exceeded.
+  // -------------------------------------------------------------------------
+  {
+    const keptFileCount = keptFiles.length;
+    const addedLoc = keptFiles.reduce((s, f) => s + f.additions, 0);
+    const deletedLoc = keptFiles.reduce((s, f) => s + f.deletions, 0);
+    const totalLoc = addedLoc + deletedLoc;
+
+    const exceedsFiles = keptFileCount > largePrThresholds.files;
+    const exceedsLoc = totalLoc > largePrThresholds.loc;
+
+    if (exceedsFiles || exceedsLoc) {
+      const exceeds: string[] = [];
+      if (exceedsFiles) exceeds.push("files");
+      if (exceedsLoc) exceeds.push("loc");
+      const reason = exceedsFiles && exceedsLoc ? "both" : exceeds[0]!;
+
+      log.info("review.large_pr", {
+        evt: "review.large_pr",
+        repo: repoFull,
+        pr: input.diff.number,
+        headSha: input.diff.headSha,
+        kept_files: keptFileCount,
+        added_loc: addedLoc,
+        deleted_loc: deletedLoc,
+        exceeds,
+      });
+
+      incLargePr(reason as "files" | "loc" | "both");
+    }
+  }
 
   // Emit metric — one bump per review, not per file, to avoid cardinality issues.
   if (coverageDelta.addedSrcLines === 0) {
