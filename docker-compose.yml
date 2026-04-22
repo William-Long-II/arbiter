@@ -6,8 +6,18 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      # Bind the web UI inside the container to 0.0.0.0 so the host port mapping
+      # below can reach it. The host side still only listens on 127.0.0.1, so
+      # the UI is not exposed to your LAN.
+      AUTO_REVIEWER_WEB_HOST: "0.0.0.0"
+      AUTO_REVIEWER_WEB_PORT: "8787"
+    ports:
+      - "127.0.0.1:8787:8787"
     volumes:
-      # Configuration. Edit locally and restart the container to apply.
+      # Optional one-time bootstrap. If present at first boot, values are
+      # copied into the sqlite DB and the file is ignored from then on. The UI
+      # is the source of truth after that.
       - ./config.yaml:/app/config.yaml:ro
 
       # The Claude Max session lives in ~/.claude on the host. Mount it so the
@@ -19,5 +29,5 @@ services:
       # change UID/GID in the Dockerfile to match.
       - ${HOME}/.claude:/home/reviewer/.claude
 
-      # Persistent state: reviewed-PR dedupe + per-hour approval counter.
+      # Persistent state: reviews + events + config lives here.
       - ./data:/app/data

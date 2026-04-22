@@ -21,9 +21,13 @@ export async function runTick(args: { gh: GH; cfg: Config; store: Store }): Prom
     try {
       await processRepo(gh, cfg, store, repo);
     } catch (e) {
-      log.error("repo.failed", {
+      const msg = (e as Error).message;
+      log.error("repo.failed", { repo: slug(repo), error: msg });
+      store.recordEvent({
+        level: "error",
+        kind: "repo.failed",
+        message: msg,
         repo: slug(repo),
-        error: (e as Error).message,
       });
     }
   }
@@ -49,6 +53,15 @@ async function processPr(gh: GH, cfg: Config, store: Store, pr: PullRef): Promis
     }
     if (ci.kind === "failing") {
       log.info("ci.failing", { ...tag, failing: ci.failing });
+      store.recordEvent({
+        level: "info",
+        kind: "ci.failing",
+        message: `CI failing: ${ci.failing.join(", ")}`,
+        repo: repoSlug,
+        prNumber: pr.number,
+        headSha: pr.head_sha,
+        payload: { failing: ci.failing },
+      });
       return;
     }
     if (ci.kind === "none") {
@@ -60,6 +73,14 @@ async function processPr(gh: GH, cfg: Config, store: Store, pr: PullRef): Promis
   const approvals = store.approvalsInLastHour();
   if (approvals >= cfg.review.max_approvals_per_hour) {
     log.warn("ratelimit.block", { ...tag, approvals, cap: cfg.review.max_approvals_per_hour });
+    store.recordEvent({
+      level: "warn",
+      kind: "ratelimit.block",
+      message: `Approval cap (${cfg.review.max_approvals_per_hour}/hr) reached; deferring`,
+      repo: repoSlug,
+      prNumber: pr.number,
+      headSha: pr.head_sha,
+    });
     return;
   }
 
@@ -81,6 +102,18 @@ async function processPr(gh: GH, cfg: Config, store: Store, pr: PullRef): Promis
 
   if (!result.ok) {
     log.error("claude.failed", { ...tag, error: result.error, stderr: result.stderr });
+    store.recordEvent({
+      level: "error",
+      kind: "claude.failed",
+      message: result.error,
+      repo: repoSlug,
+      prNumber: pr.number,
+      headSha: pr.head_sha,
+      payload: {
+        stderr: result.stderr?.slice(0, 2000),
+        stdoutSample: result.stdoutSample?.slice(0, 500),
+      },
+    });
     store.recordReview({
       repo: repoSlug,
       prNumber: pr.number,
@@ -111,6 +144,14 @@ async function processPr(gh: GH, cfg: Config, store: Store, pr: PullRef): Promis
 
   if (!post.ok) {
     log.error("post.failed", { ...tag, error: post.error });
+    store.recordEvent({
+      level: "error",
+      kind: "post.failed",
+      message: post.error,
+      repo: repoSlug,
+      prNumber: pr.number,
+      headSha: pr.head_sha,
+    });
     store.recordReview({
       repo: repoSlug,
       prNumber: pr.number,
@@ -122,17 +163,34 @@ async function processPr(gh: GH, cfg: Config, store: Store, pr: PullRef): Promis
   }
 
   const persisted =
-    validated.verdict === "approve" && !cfg.review.dry_run
-      ? "approve"
-      : validated.verdict === "request_changes" && !cfg.review.dry_run
-        ? "request_changes"
-        : "dry_run";
+    cfg.review.dry_run
+      ? "dry_run"
+      : validated.verdict === "approve"
+        ? "approve"
+        : "request_changes";
 
   store.recordReview({
     repo: repoSlug,
     prNumber: pr.number,
     headSha: pr.head_sha,
     verdict: persisted,
+    note: buildReviewNote(validated),
+  });
+
+  store.recordEvent({
+    level: "info",
+    kind: cfg.review.dry_run ? "post.dry_run" : "post.ok",
+    message: cfg.review.dry_run
+      ? `dry-run: would ${validated.verdict}`
+      : `posted ${validated.verdict}`,
+    repo: repoSlug,
+    prNumber: pr.number,
+    headSha: pr.head_sha,
+    payload: {
+      url: "url" in post ? post.url : undefined,
+      validComments: validated.valid.length,
+      droppedComments: validated.dropped.length,
+    },
   });
 
   log.info("post.ok", {
@@ -141,6 +199,23 @@ async function processPr(gh: GH, cfg: Config, store: Store, pr: PullRef): Promis
     verdict: validated.verdict,
     url: "url" in post ? post.url : undefined,
   });
+}
+
+function buildReviewNote(v: {
+  summary: string;
+  valid: unknown[];
+  dropped: unknown[];
+  verdict: string;
+}): string {
+  const payload = {
+    verdict: v.verdict,
+    valid: v.valid,
+    dropped: v.dropped,
+    summary: v.summary,
+  };
+  const json = JSON.stringify(payload);
+  // Note is indexed by sqlite but not size-constrained; cap at 512KB to be safe.
+  return json.slice(0, 512 * 1024);
 }
 
 function slug(r: RepoRef): string {
