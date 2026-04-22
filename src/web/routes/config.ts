@@ -85,14 +85,15 @@ export function configRoute(args: {
                   <td class="mono muted">${parseArr(o.include_json).join(", ") || "—"}</td>
                   <td class="mono muted">${parseArr(o.exclude_json).join(", ") || "—"}</td>
                   <td class="muted">${o.tone_override === null ? "inherits default" : html`${o.tone_mode}s ${o.tone_override.length}c`}</td>
-                  <td class="right">
-                    <a href="/config/orgs/${encodeURIComponent(o.name)}/edit">edit</a>
-                    &nbsp;
-                    <form method="post" action="/config/orgs" class="inline">
-                      <input type="hidden" name="_action" value="delete">
-                      <input type="hidden" name="name" value="${o.name}">
-                      <button type="submit" class="danger">delete</button>
-                    </form>
+                  <td>
+                    <div class="actions">
+                      <a href="/config/orgs/${encodeURIComponent(o.name)}/edit">edit</a>
+                      <form method="post" action="/config/orgs" class="inline">
+                        <input type="hidden" name="_action" value="delete">
+                        <input type="hidden" name="name" value="${o.name}">
+                        <button type="submit" class="danger">delete</button>
+                      </form>
+                    </div>
                   </td>
                 </tr>
               `)}
@@ -129,21 +130,22 @@ export function configRoute(args: {
                 <tr>
                   <td class="mono">${r.slug}</td>
                   <td class="muted">${r.tone_override === null ? "inherits" : html`${r.tone_mode}s ${r.tone_override.length}c`}</td>
-                  <td class="right">
-                    <a href="/config/repos/${repoEditPath(r.slug)}/edit">edit</a>
-                    &nbsp;
-                    <form method="post" action="/config/repos" class="inline">
-                      <input type="hidden" name="_action" value="delete">
-                      <input type="hidden" name="slug" value="${r.slug}">
-                      <button type="submit" class="danger">delete</button>
-                    </form>
+                  <td>
+                    <div class="actions">
+                      <a href="/config/repos/${repoEditPath(r.slug)}/edit">edit</a>
+                      <form method="post" action="/config/repos" class="inline">
+                        <input type="hidden" name="_action" value="delete">
+                        <input type="hidden" name="slug" value="${r.slug}">
+                        <button type="submit" class="danger">delete</button>
+                      </form>
+                    </div>
                   </td>
                 </tr>
               `)}
             </tbody>
           </table>
         `}
-      <form method="post" action="/config/repos" class="space row">
+      <form method="post" action="/config/repos" class="space inline-form">
         <input type="hidden" name="_action" value="add">
         <input type="text" name="slug" required placeholder="owner/name">
         <button type="submit">Add repo</button>

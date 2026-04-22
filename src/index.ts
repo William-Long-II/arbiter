@@ -86,12 +86,15 @@ while (!stopping) {
     log.info("tick.skipped", {
       reason: "not configured: set bot_username and at least one org or repo",
     });
-    await sleepInterruptible(cfg.poll.interval_seconds * 1_000, () => stopping);
+    const waitMs = cfg.poll.interval_seconds * 1_000;
+    runtime.nextTickAt = new Date(Date.now() + waitMs).toISOString();
+    await sleepInterruptible(waitMs, () => stopping);
     continue;
   }
 
   runtime.lastTickStart = new Date().toISOString();
   runtime.lastTickError = null;
+  runtime.nextTickAt = null; // tick in progress
   const started = Date.now();
   try {
     await runTick({ gh, cfg, store });
@@ -104,6 +107,7 @@ while (!stopping) {
   runtime.lastTickEnd = new Date().toISOString();
   const elapsedMs = Date.now() - started;
   const remainingMs = Math.max(0, cfg.poll.interval_seconds * 1_000 - elapsedMs);
+  runtime.nextTickAt = new Date(Date.now() + remainingMs).toISOString();
   if (stopping) break;
   await sleepInterruptible(remainingMs, () => stopping);
 }
