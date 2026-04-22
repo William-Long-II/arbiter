@@ -7,6 +7,8 @@ export type Runtime = {
   lastTickStart: string | null;
   lastTickEnd: string | null;
   lastTickError: string | null;
+  /** ISO timestamp of when the loop intends to run the next tick. Null while a tick is in progress. */
+  nextTickAt: string | null;
   bootstrappedFromYaml: boolean;
 };
 
@@ -16,6 +18,7 @@ export function createRuntime(bootstrappedFromYaml: boolean): Runtime {
     lastTickStart: null,
     lastTickEnd: null,
     lastTickError: null,
+    nextTickAt: null,
     bootstrappedFromYaml,
   };
 }

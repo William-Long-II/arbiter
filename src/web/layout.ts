@@ -37,10 +37,26 @@ td.mono,th.mono,code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,mono
 form.inline{display:inline}
 button,input[type=submit]{
   background:var(--panel-2);color:var(--fg);border:1px solid var(--line);
-  border-radius:6px;padding:6px 12px;font:inherit;cursor:pointer
+  border-radius:6px;padding:6px 12px;font:inherit;cursor:pointer;line-height:1.4
 }
 button:hover,input[type=submit]:hover{border-color:var(--accent);color:var(--accent)}
 button.danger:hover{border-color:var(--err);color:var(--err)}
+
+/* Tight, right-aligned cluster of row actions (edit link + delete button, etc).
+   Matches anchor and button dimensions so they line up as a unit. */
+.actions{display:flex;gap:8px;align-items:center;justify-content:flex-end}
+.actions a{
+  background:var(--panel-2);color:var(--fg);border:1px solid var(--line);
+  border-radius:6px;padding:6px 12px;font:inherit;text-decoration:none;line-height:1.4
+}
+.actions a:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}
+
+/* Inline form where an input + a single button sit on one row.
+   Prevents the base input[type=text]{width:100%} rule from pushing the
+   button to wrap when flex-wrap is on. */
+.inline-form{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.inline-form input[type=text]{flex:1 1 240px;max-width:420px;width:auto}
+.inline-form button{flex:0 0 auto}
 input[type=text],input[type=number],select,textarea{
   width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--line);
   border-radius:6px;padding:6px 10px;font:inherit
@@ -68,6 +84,8 @@ export function layout(args: {
   active?: "dashboard" | "config" | "events";
   banner?: Banner | null;
   body: RawHtml;
+  /** Inline script injected before </body>. Use raw() — content is not escaped. */
+  footScript?: RawHtml;
 }): RawHtml {
   const active = args.active;
   const cls = (k: typeof active) => (active === k ? "active" : "");
@@ -92,6 +110,7 @@ export function layout(args: {
     ${args.banner ? html`<div class="banner ${args.banner.kind}">${args.banner.message}</div>` : ""}
     ${args.body}
   </main>
+  ${args.footScript ? html`<script>${args.footScript}</script>` : ""}
 </body>
 </html>`;
 }

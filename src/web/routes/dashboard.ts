@@ -2,7 +2,7 @@ import type { Store } from "../../state/db.ts";
 import type { Config } from "../../config.ts";
 import type { Runtime } from "../runtime.ts";
 import { isConfigured } from "../../config.ts";
-import { html, htmlResponse } from "../html.ts";
+import { html, htmlResponse, raw } from "../html.ts";
 import { layout, type Banner } from "../layout.ts";
 
 export function dashboardRoute(args: {
@@ -38,6 +38,7 @@ export function dashboardRoute(args: {
         <div class="stat"><div class="k">Watched</div><div class="v">${watched} ${watched === 1 ? "entry" : "entries"}</div></div>
         <div class="stat"><div class="k">Poll interval</div><div class="v">${cfg.poll.interval_seconds}s</div></div>
         <div class="stat"><div class="k">Last tick</div><div class="v">${fmtRel(runtime.lastTickEnd)}</div></div>
+        <div class="stat"><div class="k">Next tick</div><div class="v" id="next-tick" data-at="${runtime.nextTickAt ?? ""}">${runtime.nextTickAt ? "…" : "running"}</div></div>
         <div class="stat"><div class="k">Bot user</div><div class="v">${cfg.github.bot_username || "—"}</div></div>
       </div>
       <div class="space flex">
@@ -75,9 +76,47 @@ export function dashboardRoute(args: {
   `;
 
   return htmlResponse(
-    layout({ title: "Dashboard", active: "dashboard", banner, body }),
+    layout({
+      title: "Dashboard",
+      active: "dashboard",
+      banner,
+      body,
+      footScript: raw(COUNTDOWN_SCRIPT),
+    }),
   );
 }
+
+/**
+ * Counts down to the time encoded in `data-at` on #next-tick, rewriting the
+ * element's text every second. On reaching zero (or past it) shows "running"
+ * so the user sees something is happening even if the next paint is delayed.
+ * Passes through any bindings the layout doesn't define — noop if the element
+ * isn't present.
+ */
+const COUNTDOWN_SCRIPT = `
+(function(){
+  var el = document.getElementById('next-tick');
+  if (!el) return;
+  var iso = el.dataset.at;
+  if (!iso) return;
+  var target = Date.parse(iso);
+  if (isNaN(target)) return;
+  function fmt(s){
+    if (s <= 0) return 'now';
+    if (s < 60) return s + 's';
+    var m = Math.floor(s / 60), r = s % 60;
+    if (m < 60) return m + 'm ' + r + 's';
+    var h = Math.floor(m / 60), rm = m % 60;
+    return h + 'h ' + rm + 'm';
+  }
+  function tick(){
+    var secs = Math.ceil((target - Date.now()) / 1000);
+    el.textContent = fmt(secs);
+  }
+  tick();
+  setInterval(tick, 1000);
+})();
+`;
 
 function reviewUrl(repo: string, pr: number): string {
   // Emit owner and name as SEPARATE path segments. Encoding the whole
