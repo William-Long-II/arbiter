@@ -51,6 +51,14 @@ export const ConfigSchema = z.object({
     skip_drafts: z.boolean().default(true),
     skip_bots: z.boolean().default(true),
     require_ci_green: z.boolean().default(true),
+    /**
+     * How many PRs to review in parallel.
+     * Default 1 (fully serial, original behavior). Max 4 is enforced because
+     * the Claude Max subscription is sized for interactive use, not high
+     * concurrency; a single session pushed too hard can trigger a 5-hour
+     * cooldown from which there is no recovery except waiting.
+     */
+    concurrency: z.number().int().min(1).max(4).default(1),
   }),
   poll: z.object({
     interval_seconds: z.number().int().positive().default(60),
@@ -81,6 +89,7 @@ export const SCALAR_DEFAULTS: Record<string, string> = {
   "review.skip_drafts": "true",
   "review.skip_bots": "true",
   "review.require_ci_green": "true",
+  "review.concurrency": "1",
   "poll.interval_seconds": "60",
   "claude.command": "claude",
   "claude.timeout_seconds": "600",
@@ -118,6 +127,7 @@ export function loadConfigFromStore(store: Store): Config {
       skip_drafts: asBool(scalars["review.skip_drafts"], true),
       skip_bots: asBool(scalars["review.skip_bots"], true),
       require_ci_green: asBool(scalars["review.require_ci_green"], true),
+      concurrency: asInt(scalars["review.concurrency"], 1),
     },
     poll: {
       interval_seconds: asInt(scalars["poll.interval_seconds"], 60),
@@ -164,6 +174,7 @@ export function bootstrapFromYaml(store: Store, yamlPath: string): boolean {
   store.setScalar("review.skip_drafts", String(cfg.review.skip_drafts));
   store.setScalar("review.skip_bots", String(cfg.review.skip_bots));
   store.setScalar("review.require_ci_green", String(cfg.review.require_ci_green));
+  store.setScalar("review.concurrency", String(cfg.review.concurrency));
   store.setScalar("poll.interval_seconds", String(cfg.poll.interval_seconds));
   store.setScalar("claude.command", cfg.claude.command);
   store.setScalar("claude.timeout_seconds", String(cfg.claude.timeout_seconds));

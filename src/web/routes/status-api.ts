@@ -23,6 +23,9 @@ export function statusApiRoute(args: { store: Store; runtime: Runtime }): Respon
     lastTickEnd: runtime.lastTickEnd,
     lastTickError: runtime.lastTickError,
     nextTickAt: runtime.nextTickAt,
+    currentPrs: runtime.currentPrs,
+    lastActivityAt: runtime.lastActivityAt,
+    concurrency: cfg.review.concurrency,
     storage: {
       path: store.meta.path,
       freshlyCreated: store.meta.freshlyCreated,

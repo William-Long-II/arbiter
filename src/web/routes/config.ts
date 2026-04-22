@@ -71,7 +71,15 @@ export function configRoute(args: {
             <label>Claude timeout (seconds)</label>
             <input type="number" name="claude_timeout_seconds" min="30" value="${cfg.claude.timeout_seconds}">
           </div>
+          <div>
+            <label title="How many PRs to review in parallel. Claude Max is sized for interactive use, not heavy concurrency. Start at 1; raise cautiously. Max 4.">Concurrency (1–4)</label>
+            <input type="number" name="concurrency" min="1" max="4" value="${cfg.review.concurrency}">
+          </div>
         </div>
+
+        <p class="muted space" style="font-size:12px">
+          <strong>Concurrency note:</strong> Claude Max isn't built for many parallel sessions. 1 is the safe default. If you raise it, watch Events for a burst of <code>claude.failed</code> — that's the session hitting a burst limit, and you should drop back.
+        </p>
 
         <div class="space"><button type="submit">Save general</button></div>
       </form>
@@ -184,6 +192,7 @@ export async function handleGeneralPost(
   const interval = clampInt(form.get("interval_seconds"), 10, 86400, 60);
   const claudeCmd = String(form.get("claude_command") ?? "claude").trim() || "claude";
   const claudeTimeout = clampInt(form.get("claude_timeout_seconds"), 30, 3600, 600);
+  const concurrency = clampInt(form.get("concurrency"), 1, 4, 1);
 
   store.setScalar("github.bot_username", bot);
   store.setScalar("review.dry_run", String(dryRun));
@@ -195,6 +204,7 @@ export async function handleGeneralPost(
   store.setScalar("poll.interval_seconds", String(interval));
   store.setScalar("claude.command", claudeCmd);
   store.setScalar("claude.timeout_seconds", String(claudeTimeout));
+  store.setScalar("review.concurrency", String(concurrency));
 
   // Replace the skip-authors set (add new, remove missing).
   const existing = new Set(store.listSkipAuthors());
