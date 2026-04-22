@@ -13,6 +13,7 @@ import { loadConfigFromStore } from "../../config.ts";
 export function statusApiRoute(args: { store: Store; runtime: Runtime }): Response {
   const { store, runtime } = args;
   const cfg = loadConfigFromStore(store);
+  const counts = store.counts();
   const body = {
     now: new Date().toISOString(),
     mode: cfg.review.dry_run ? "dry-run" : "live",
@@ -22,6 +23,12 @@ export function statusApiRoute(args: { store: Store; runtime: Runtime }): Respon
     lastTickEnd: runtime.lastTickEnd,
     lastTickError: runtime.lastTickError,
     nextTickAt: runtime.nextTickAt,
+    storage: {
+      path: store.meta.path,
+      freshlyCreated: store.meta.freshlyCreated,
+      sizeBytes: store.meta.sizeBytes,
+      counts,
+    },
   };
   return new Response(JSON.stringify(body), {
     status: 200,

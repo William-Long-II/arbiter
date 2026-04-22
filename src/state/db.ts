@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { dirname } from "node:path";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, existsSync, statSync } from "node:fs";
 
 export type Verdict = "approve" | "request_changes" | "dry_run" | "skipped";
 
@@ -42,8 +42,28 @@ export type RepoRow = {
   tone_mode: ToneMode;
 };
 
+export type StoreCounts = {
+  reviews: number;
+  events: number;
+  scalars: number;
+  orgs: number;
+  repos: number;
+  skip_authors: number;
+};
+
+export type StoreMeta = {
+  path: string;
+  /** True when openStore had to create the DB file itself — useful for telling
+   *  "fresh install" from "existing state on disk" in logs and the UI. */
+  freshlyCreated: boolean;
+  /** sqlite file size in bytes at the time openStore() returned. */
+  sizeBytes: number;
+};
+
 export type Store = {
   db: Database;
+  meta: StoreMeta;
+  counts(): StoreCounts;
 
   // reviews
   recordReview(args: {
@@ -119,6 +139,7 @@ function migrateAddColumn(
 
 export function openStore(path: string): Store {
   mkdirSync(dirname(path), { recursive: true });
+  const preExisted = existsSync(path);
   const db = new Database(path, { create: true });
   db.exec("PRAGMA journal_mode=WAL;");
   db.exec("PRAGMA foreign_keys=ON;");
@@ -227,6 +248,13 @@ export function openStore(path: string): Store {
     ),
     pruneEvents: db.prepare(`DELETE FROM events WHERE ts < ?`),
 
+    countReviews: db.prepare(`SELECT COUNT(*) AS n FROM reviews`),
+    countEvents: db.prepare(`SELECT COUNT(*) AS n FROM events`),
+    countScalars: db.prepare(`SELECT COUNT(*) AS n FROM config_scalars`),
+    countOrgs: db.prepare(`SELECT COUNT(*) AS n FROM config_watch_orgs`),
+    countRepos: db.prepare(`SELECT COUNT(*) AS n FROM config_watch_repos`),
+    countSkipAuthors: db.prepare(`SELECT COUNT(*) AS n FROM config_skip_authors`),
+
     getScalar: db.prepare(`SELECT value FROM config_scalars WHERE key=?`),
     setScalar: db.prepare(
       `INSERT INTO config_scalars(key, value) VALUES (?, ?)
@@ -279,8 +307,30 @@ export function openStore(path: string): Store {
     removeSkipAuthor: db.prepare(`DELETE FROM config_skip_authors WHERE username=?`),
   };
 
+  const meta: StoreMeta = {
+    path,
+    freshlyCreated: !preExisted,
+    sizeBytes: safeStatSize(path),
+  };
+
+  const count = (s: ReturnType<typeof db.prepare>): number => {
+    const row = s.get() as { n: number } | undefined;
+    return row?.n ?? 0;
+  };
+
   return {
     db,
+    meta,
+    counts(): StoreCounts {
+      return {
+        reviews: count(stmts.countReviews),
+        events: count(stmts.countEvents),
+        scalars: count(stmts.countScalars),
+        orgs: count(stmts.countOrgs),
+        repos: count(stmts.countRepos),
+        skip_authors: count(stmts.countSkipAuthors),
+      };
+    },
 
     recordReview({ repo, prNumber, headSha, verdict, note }) {
       stmts.insertReview.run(
@@ -410,4 +460,12 @@ export function openStore(path: string): Store {
       db.close();
     },
   };
+}
+
+function safeStatSize(p: string): number {
+  try {
+    return statSync(p).size;
+  } catch {
+    return 0;
+  }
 }

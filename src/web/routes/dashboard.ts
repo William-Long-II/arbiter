@@ -14,6 +14,7 @@ export function dashboardRoute(args: {
   const reviews = store.recentReviews(50);
   const approvalsHour = store.approvalsInLastHour();
   const watched = cfg.watch.orgs.length + cfg.watch.repos.length;
+  const counts = store.counts();
 
   const banner: Banner | null = !isConfigured(cfg)
     ? {
@@ -46,6 +47,19 @@ export function dashboardRoute(args: {
           <button type="submit">Flip dry-run → ${cfg.review.dry_run ? "live" : "dry-run"}</button>
         </form>
         <span class="lvl-error" id="stat-tick-error">${runtime.lastTickError ? `last tick error: ${runtime.lastTickError}` : ""}</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Storage</h2>
+      ${store.meta.freshlyCreated ? html`<div class="banner err">This DB was created on THIS boot. If you had settings before, your <code>./data</code> volume didn't persist. Fix the mount before configuring again.</div>` : ""}
+      <div class="grid">
+        <div class="stat"><div class="k">DB path</div><div class="v mono" style="font-size:12.5px">${store.meta.path}</div></div>
+        <div class="stat"><div class="k">Size</div><div class="v" id="stat-storage-size">${(store.meta.sizeBytes / 1024).toFixed(1)} KB</div></div>
+        <div class="stat"><div class="k">Reviews</div><div class="v" id="stat-storage-reviews">${counts.reviews}</div></div>
+        <div class="stat"><div class="k">Events</div><div class="v" id="stat-storage-events">${counts.events}</div></div>
+        <div class="stat"><div class="k">Orgs</div><div class="v" id="stat-storage-orgs">${counts.orgs}</div></div>
+        <div class="stat"><div class="k">Repos</div><div class="v" id="stat-storage-repos">${counts.repos}</div></div>
       </div>
     </section>
 
@@ -148,6 +162,14 @@ const DASHBOARD_SCRIPT = `
     if (errEl) errEl.textContent = s.lastTickError ? 'last tick error: ' + s.lastTickError : '';
     if (modeEl) modeEl.textContent = s.mode;
     if (approvalsEl) approvalsEl.textContent = s.approvalsInLastHour + ' / ' + s.approvalCap;
+    if (s.storage) {
+      var setText = function(id, v){ var e = document.getElementById(id); if (e) e.textContent = v; };
+      setText('stat-storage-size', (s.storage.sizeBytes / 1024).toFixed(1) + ' KB');
+      setText('stat-storage-reviews', s.storage.counts.reviews);
+      setText('stat-storage-events', s.storage.counts.events);
+      setText('stat-storage-orgs', s.storage.counts.orgs);
+      setText('stat-storage-repos', s.storage.counts.repos);
+    }
   }
 
   // Seed from the server-rendered data-at so the countdown starts immediately,
