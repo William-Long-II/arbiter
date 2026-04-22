@@ -121,6 +121,24 @@ src/
 tests/                   bun:test
 ```
 
+## Troubleshooting: state disappears between restarts
+
+If your configured orgs/repos/settings vanish every time you restart the container, the `./data` bind mount isn't persisting. The Dashboard now shows a **Storage** card with the DB path, file size, and row counts — and a red banner if the DB file was created fresh on this boot instead of being reused.
+
+Check in order:
+
+1. **Run `docker compose up` from the repo root.** The `./data` path in `docker-compose.yml` is relative to wherever you invoke compose. Invoking from a different cwd points at a different `./data`.
+2. **Don't pass `--volumes` or `-v` to `docker compose down`.** That removes named volumes (and can blow away bind-mount contents depending on Docker version). Plain `docker compose down` + `docker compose up` preserves the bind.
+3. **Confirm the mount is correct:** `docker inspect auto-reviewer --format '{{json .Mounts}}'` should show a bind mount for `/app/data` pointing at your host `./data` directory.
+4. **Confirm the host directory has contents after the container ran:** `ls -la data/` should show `state.sqlite` (and a `state.sqlite-wal` + `state.sqlite-shm` while the container runs). If the file is there but the DB is fresh next boot, the container is pointing somewhere else.
+5. **Permissions.** The container runs as UID 1000 (`bun`). If the host directory is root-owned and read-only for 1000, sqlite can't write — and each reboot starts clean. `chown 1000:1000 data/` on Linux; on Windows with Docker Desktop this is usually a non-issue but worth verifying if the startup log says `storage.opened freshlyCreated=true` every boot.
+
+The startup log also prints one JSON line summarizing state:
+```json
+{"msg":"storage.opened","path":"/app/data/state.sqlite","freshlyCreated":false,"sizeKB":"45.2","reviews":12,"events":203,"orgs":1,"repos":3,"skip_authors":2}
+```
+`freshlyCreated:true` on every boot is the unambiguous signal the mount isn't working.
+
 ## Known limits / non-goals
 
 - **No webhooks.** Sub-minute latency is not a goal.

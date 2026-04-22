@@ -20,6 +20,24 @@ if (!TOKEN) {
 }
 
 const store = openStore(DB_PATH);
+{
+  const counts = store.counts();
+  const mb = (store.meta.sizeBytes / 1024).toFixed(1);
+  log.info("storage.opened", {
+    path: store.meta.path,
+    freshlyCreated: store.meta.freshlyCreated,
+    sizeKB: mb,
+    ...counts,
+  });
+  store.recordEvent({
+    level: store.meta.freshlyCreated ? "warn" : "info",
+    kind: "storage.opened",
+    message: store.meta.freshlyCreated
+      ? `DB at ${store.meta.path} did NOT exist before boot — starting fresh. If you expected your previous setup to persist, check the ./data bind mount.`
+      : `DB at ${store.meta.path} opened (${mb} KB). Reviews=${counts.reviews}, events=${counts.events}, orgs=${counts.orgs}, repos=${counts.repos}, skip_authors=${counts.skip_authors}.`,
+    payload: { path: store.meta.path, freshlyCreated: store.meta.freshlyCreated, sizeBytes: store.meta.sizeBytes, ...counts },
+  });
+}
 
 let bootstrapped = false;
 try {
