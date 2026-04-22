@@ -75,7 +75,18 @@ label{display:block;color:var(--muted);font-size:12px;margin:10px 0 4px}
 .banner.warn{background:rgba(210,153,34,.1);border-color:rgba(210,153,34,.4);color:var(--warn)}
 .banner.ok{background:rgba(63,185,80,.1);border-color:rgba(63,185,80,.4);color:var(--ok)}
 .banner.err{background:rgba(248,81,73,.1);border-color:rgba(248,81,73,.4);color:var(--err)}
-pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:10px;overflow:auto;margin:0}
+pre{
+  background:var(--bg);border:1px solid var(--line);border-radius:6px;
+  padding:10px;margin:0;overflow:auto;
+  /* Wrap long lines instead of scrolling sideways. pre-wrap preserves the
+     newlines/indentation we care about but lets the renderer break lines at
+     whitespace; overflow-wrap:break-word forces a break inside unbreakable
+     tokens (long URLs, code identifiers) rather than pushing the container
+     wider, which was blowing review-detail line-comment cells past their
+     containing card. */
+  white-space:pre-wrap;
+  overflow-wrap:break-word;
+}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .row > *{flex:1 1 auto}
 .row > button{flex:0 0 auto}
