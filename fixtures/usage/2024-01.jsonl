@@ -1,3 +1,0 @@
-{"ts":"2024-01-10T10:00:00.000Z","repo":"acme/alpha","pr":1,"headSha":"aaa","model":"claude-opus-4-7","verdict":"approve","inputTokens":1000,"outputTokens":200,"cacheReadTokens":0,"cacheCreationTokens":500}
-{"ts":"2024-01-15T12:00:00.000Z","repo":"acme/alpha","pr":2,"headSha":"bbb","model":"claude-opus-4-7","verdict":"comment","inputTokens":2000,"outputTokens":400,"cacheReadTokens":100,"cacheCreationTokens":0}
-{"ts":"2024-01-20T08:00:00.000Z","repo":"acme/beta","pr":10,"headSha":"ccc","model":"claude-opus-4-7","verdict":"too_large","inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheCreationTokens":0}

@@ -1,2 +1,0 @@
-{"ts":"2024-02-05T09:00:00.000Z","repo":"acme/alpha","pr":3,"headSha":"ddd","model":"claude-opus-4-7","verdict":"approve","inputTokens":1500,"outputTokens":300,"cacheReadTokens":200,"cacheCreationTokens":0}
-{"ts":"2024-02-12T14:00:00.000Z","repo":"acme/gamma","pr":1,"headSha":"eee","model":"claude-opus-4-7","verdict":"comment","inputTokens":3000,"outputTokens":600,"cacheReadTokens":0,"cacheCreationTokens":1000}
