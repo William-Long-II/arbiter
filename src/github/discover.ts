@@ -24,8 +24,8 @@ export async function resolveWatchedRepos(gh: GH, cfg: Config): Promise<RepoRef[
     for (const name of filtered) add({ owner: org.name, name });
   }
 
-  for (const s of cfg.watch.repos) {
-    const [owner, name] = s.split("/");
+  for (const r of cfg.watch.repos) {
+    const [owner, name] = r.slug.split("/");
     if (!owner || !name) continue;
     add({ owner, name });
   }

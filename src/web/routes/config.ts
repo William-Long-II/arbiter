@@ -10,7 +10,7 @@ export function configRoute(args: {
 }): Response {
   const { store, cfg } = args;
   const orgs = store.listOrgs();
-  const repos = store.listWatchedRepos();
+  const repos = store.listWatchedRepoRows();
   const skipAuthors = store.listSkipAuthors();
 
   const body = html`
@@ -76,7 +76,7 @@ export function configRoute(args: {
         ? html`<p class="muted">No orgs. Add one below to watch every repo under it.</p>`
         : html`
           <table>
-            <thead><tr><th>Name</th><th>Mode</th><th>Include</th><th>Exclude</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Mode</th><th>Include</th><th>Exclude</th><th>Tone</th><th></th></tr></thead>
             <tbody>
               ${orgs.map((o) => html`
                 <tr>
@@ -84,7 +84,10 @@ export function configRoute(args: {
                   <td>${o.mode}</td>
                   <td class="mono muted">${parseArr(o.include_json).join(", ") || "—"}</td>
                   <td class="mono muted">${parseArr(o.exclude_json).join(", ") || "—"}</td>
+                  <td class="muted">${o.tone_override === null ? "inherits default" : html`${o.tone_mode}s ${o.tone_override.length}c`}</td>
                   <td class="right">
+                    <a href="/config/orgs/${encodeURIComponent(o.name)}/edit">edit</a>
+                    &nbsp;
                     <form method="post" action="/config/orgs" class="inline">
                       <input type="hidden" name="_action" value="delete">
                       <input type="hidden" name="name" value="${o.name}">
@@ -120,15 +123,18 @@ export function configRoute(args: {
         ? html`<p class="muted">No individual repos. Use this for one-off repos outside a watched org.</p>`
         : html`
           <table>
-            <thead><tr><th>owner/name</th><th></th></tr></thead>
+            <thead><tr><th>owner/name</th><th>Tone</th><th></th></tr></thead>
             <tbody>
-              ${repos.map((slug) => html`
+              ${repos.map((r) => html`
                 <tr>
-                  <td class="mono">${slug}</td>
+                  <td class="mono">${r.slug}</td>
+                  <td class="muted">${r.tone_override === null ? "inherits" : html`${r.tone_mode}s ${r.tone_override.length}c`}</td>
                   <td class="right">
+                    <a href="/config/repos/${encodeURIComponent(r.slug)}/edit">edit</a>
+                    &nbsp;
                     <form method="post" action="/config/repos" class="inline">
                       <input type="hidden" name="_action" value="delete">
-                      <input type="hidden" name="slug" value="${slug}">
+                      <input type="hidden" name="slug" value="${r.slug}">
                       <button type="submit" class="danger">delete</button>
                     </form>
                   </td>
@@ -210,11 +216,17 @@ export function handleOrgsPost(
     if (mode === "include" && include.length === 0) {
       return { ok: false, error: "include list required when mode=include" };
     }
+    // The quick-add form on /config doesn't include tone fields. If this is an
+    // update to an existing org, preserve its tone so we don't silently wipe
+    // it; use defaults for a brand-new row.
+    const existing = store.getOrg(name);
     store.upsertOrg({
       name,
       mode,
       include_json: JSON.stringify(include),
       exclude_json: JSON.stringify(exclude),
+      tone_override: existing?.tone_override ?? null,
+      tone_mode: existing?.tone_mode ?? "append",
     });
     store.recordEvent({
       level: "info",

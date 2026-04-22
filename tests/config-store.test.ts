@@ -55,7 +55,9 @@ describe("config store", () => {
       expect(cfg.review.dry_run).toBe(false);
       expect(cfg.review.max_approvals_per_hour).toBe(25);
       expect(cfg.poll.interval_seconds).toBe(120);
-      expect(cfg.watch.repos).toEqual(["owner/repo-a"]);
+      expect(cfg.watch.repos.map((r) => r.slug)).toEqual(["owner/repo-a"]);
+      expect(cfg.watch.repos[0]!.tone_override).toBeNull();
+      expect(cfg.watch.repos[0]!.tone_mode).toBe("append");
       expect(isConfigured(cfg)).toBe(true);
       store.close();
     } finally {
@@ -73,21 +75,29 @@ describe("config store", () => {
         mode: "all",
         include_json: "[]",
         exclude_json: JSON.stringify(["archived", "legacy"]),
+        tone_override: null,
+        tone_mode: "append",
       });
       store.upsertOrg({
         name: "partner",
         mode: "include",
         include_json: JSON.stringify(["shared-lib"]),
         exclude_json: "[]",
+        tone_override: "partner-specific guidance",
+        tone_mode: "replace",
       });
       const cfg = loadConfigFromStore(store);
       expect(cfg.watch.orgs).toHaveLength(2);
       const acme = cfg.watch.orgs.find((o) => o.name === "acme")!;
       expect(acme.mode).toBe("all");
       expect(acme.exclude).toEqual(["archived", "legacy"]);
+      expect(acme.tone_override).toBeNull();
+      expect(acme.tone_mode).toBe("append");
       const partner = cfg.watch.orgs.find((o) => o.name === "partner")!;
       expect(partner.mode).toBe("include");
       expect(partner.include).toEqual(["shared-lib"]);
+      expect(partner.tone_override).toBe("partner-specific guidance");
+      expect(partner.tone_mode).toBe("replace");
       store.close();
     } finally {
       cleanup();
@@ -153,7 +163,7 @@ claude:
       expect(cfg.github.skip_authors.sort()).toEqual(["teammate", "you"]);
       expect(cfg.watch.orgs).toHaveLength(1);
       expect(cfg.watch.orgs[0]!.exclude).toEqual(["legacy"]);
-      expect(cfg.watch.repos).toEqual(["one/two"]);
+      expect(cfg.watch.repos.map((r) => r.slug)).toEqual(["one/two"]);
       expect(cfg.review.dry_run).toBe(false);
       expect(cfg.review.max_approvals_per_hour).toBe(5);
       expect(cfg.poll.interval_seconds).toBe(30);
@@ -212,6 +222,46 @@ claude:
       expect(removedAll).toBe(1);
       expect(store.hasReviewed("a/b", 1, "sha2")).toBe(false);
       expect(store.hasReviewed("a/b", 2, "sha3")).toBe(true);
+
+      store.close();
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("opens cleanly on a pre-tones schema and adds the columns", async () => {
+    // Simulate a DB created by an older version of this app: same tables,
+    // but without the tone_override / tone_mode columns. openStore() should
+    // migrate the schema forward without losing existing rows.
+    const { path, cleanup } = tmpDb();
+    try {
+      const { Database } = await import("bun:sqlite");
+      const legacy = new Database(path, { create: true });
+      legacy.exec(`
+        CREATE TABLE config_watch_orgs (
+          name TEXT PRIMARY KEY,
+          mode TEXT NOT NULL,
+          include_json TEXT NOT NULL DEFAULT '[]',
+          exclude_json TEXT NOT NULL DEFAULT '[]'
+        );
+        CREATE TABLE config_watch_repos (slug TEXT PRIMARY KEY);
+        INSERT INTO config_watch_orgs(name, mode) VALUES ('legacy-org', 'all');
+        INSERT INTO config_watch_repos(slug) VALUES ('legacy/repo');
+      `);
+      legacy.close();
+
+      const store = openStore(path);
+      const orgs = store.listOrgs();
+      expect(orgs).toHaveLength(1);
+      expect(orgs[0]!.name).toBe("legacy-org");
+      expect(orgs[0]!.tone_override).toBeNull();
+      expect(orgs[0]!.tone_mode).toBe("append");
+
+      const repos = store.listWatchedRepoRows();
+      expect(repos).toHaveLength(1);
+      expect(repos[0]!.slug).toBe("legacy/repo");
+      expect(repos[0]!.tone_override).toBeNull();
+      expect(repos[0]!.tone_mode).toBe("append");
 
       store.close();
     } finally {

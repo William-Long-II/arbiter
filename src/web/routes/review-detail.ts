@@ -22,6 +22,8 @@ type StoredNote = {
     };
     reason: string;
   }>;
+  /** Present on reviews recorded after per-repo tones shipped. Older rows omit it. */
+  tone_used?: string;
 };
 
 export function reviewDetailRoute(args: {
@@ -86,6 +88,16 @@ export function reviewDetailRoute(args: {
             </table>
           `}
       </section>
+
+      ${parsed.tone_used !== undefined ? html`
+        <section class="card">
+          <h2>Tone used</h2>
+          <details>
+            <summary class="muted">The exact tone text Claude received for this review (not posted to GitHub — prompt-time only).</summary>
+            <pre>${parsed.tone_used || "(empty)"}</pre>
+          </details>
+        </section>
+      ` : ""}
 
       ${parsed.dropped.length > 0 ? html`
         <section class="card">

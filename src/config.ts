@@ -3,18 +3,35 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import type { Store } from "./state/db.ts";
 
+const ToneMode = z.enum(["append", "replace"]);
+export type ToneMode = z.infer<typeof ToneMode>;
+
 const OrgWatch = z
   .object({
     name: z.string().min(1),
     mode: z.enum(["all", "include"]).default("all"),
     include: z.array(z.string()).default([]),
     exclude: z.array(z.string()).default([]),
+    tone_override: z.string().nullable().default(null),
+    tone_mode: ToneMode.default("append"),
   })
   .refine((v) => v.mode !== "include" || v.include.length > 0, {
     message: "orgs[].include must be non-empty when mode is 'include'",
   });
 
-const RepoSlug = z.string().regex(/^[^/]+\/[^/]+$/, "repos[] must be 'owner/name'");
+/**
+ * A repo entry is either a bare "owner/name" string (legacy YAML form) or an
+ * object with a slug plus tone fields. Preprocess normalizes the string form
+ * into an object so the rest of the app sees a single shape.
+ */
+const RepoEntry = z.preprocess(
+  (v) => (typeof v === "string" ? { slug: v } : v),
+  z.object({
+    slug: z.string().regex(/^[^/]+\/[^/]+$/, "repos[] must be 'owner/name'"),
+    tone_override: z.string().nullable().default(null),
+    tone_mode: ToneMode.default("append"),
+  }),
+);
 
 export const ConfigSchema = z.object({
   github: z.object({
@@ -23,7 +40,7 @@ export const ConfigSchema = z.object({
   }),
   watch: z.object({
     orgs: z.array(OrgWatch).default([]),
-    repos: z.array(RepoSlug).default([]),
+    repos: z.array(RepoEntry).default([]),
   }),
   review: z.object({
     dry_run: z.boolean().default(true),
@@ -74,6 +91,13 @@ export function loadConfigFromStore(store: Store): Config {
     mode: r.mode,
     include: safeJsonArray(r.include_json),
     exclude: safeJsonArray(r.exclude_json),
+    tone_override: r.tone_override,
+    tone_mode: r.tone_mode,
+  }));
+  const repos = store.listWatchedRepoRows().map((r) => ({
+    slug: r.slug,
+    tone_override: r.tone_override,
+    tone_mode: r.tone_mode,
   }));
 
   const raw = {
@@ -83,7 +107,7 @@ export function loadConfigFromStore(store: Store): Config {
     },
     watch: {
       orgs,
-      repos: store.listWatchedRepos(),
+      repos,
     },
     review: {
       dry_run: asBool(scalars["review.dry_run"], true),
@@ -141,13 +165,20 @@ export function bootstrapFromYaml(store: Store, yamlPath: string): boolean {
   store.setScalar("claude.timeout_seconds", String(cfg.claude.timeout_seconds));
 
   for (const a of cfg.github.skip_authors) store.addSkipAuthor(a);
-  for (const r of cfg.watch.repos) store.addWatchedRepo(r);
+  for (const r of cfg.watch.repos) {
+    store.addWatchedRepo(r.slug);
+    if (r.tone_override !== null || r.tone_mode !== "append") {
+      store.setRepoTone(r.slug, r.tone_override, r.tone_mode);
+    }
+  }
   for (const o of cfg.watch.orgs) {
     store.upsertOrg({
       name: o.name,
       mode: o.mode,
       include_json: JSON.stringify(o.include),
       exclude_json: JSON.stringify(o.exclude),
+      tone_override: o.tone_override,
+      tone_mode: o.tone_mode,
     });
   }
 
