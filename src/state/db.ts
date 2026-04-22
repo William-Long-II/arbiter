@@ -4,8 +4,38 @@ import { mkdirSync } from "node:fs";
 
 export type Verdict = "approve" | "request_changes" | "dry_run" | "skipped";
 
+export type ReviewRow = {
+  repo: string;
+  pr_number: number;
+  head_sha: string;
+  verdict: Verdict;
+  note: string | null;
+  reviewed_at: string;
+};
+
+export type EventRow = {
+  id: number;
+  ts: string;
+  level: "info" | "warn" | "error";
+  kind: string;
+  repo: string | null;
+  pr_number: number | null;
+  head_sha: string | null;
+  message: string;
+  payload: string | null;
+};
+
+export type OrgRow = {
+  name: string;
+  mode: "all" | "include";
+  include_json: string; // JSON array of strings
+  exclude_json: string; // JSON array of strings
+};
+
 export type Store = {
   db: Database;
+
+  // reviews
   recordReview(args: {
     repo: string;
     prNumber: number;
@@ -15,6 +45,42 @@ export type Store = {
   }): void;
   hasReviewed(repo: string, prNumber: number, headSha: string): boolean;
   approvalsInLastHour(): number;
+  recentReviews(limit: number): ReviewRow[];
+  getReview(repo: string, prNumber: number): ReviewRow | null;
+  clearDedupe(repo: string, prNumber: number): number;
+
+  // events
+  recordEvent(args: {
+    level: EventRow["level"];
+    kind: string;
+    message: string;
+    repo?: string;
+    prNumber?: number;
+    headSha?: string;
+    payload?: Record<string, unknown>;
+  }): void;
+  recentEvents(limit: number): EventRow[];
+
+  // config scalars (dotted keys like "review.dry_run", "poll.interval_seconds")
+  getScalar(key: string): string | null;
+  setScalar(key: string, value: string): void;
+  allScalars(): Record<string, string>;
+
+  // watch.orgs
+  listOrgs(): OrgRow[];
+  upsertOrg(row: OrgRow): void;
+  deleteOrg(name: string): void;
+
+  // watch.repos
+  listWatchedRepos(): string[];
+  addWatchedRepo(slug: string): void;
+  removeWatchedRepo(slug: string): void;
+
+  // github.skip_authors
+  listSkipAuthors(): string[];
+  addSkipAuthor(username: string): void;
+  removeSkipAuthor(username: string): void;
+
   close(): void;
 };
 
@@ -22,6 +88,8 @@ export function openStore(path: string): Store {
   mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path, { create: true });
   db.exec("PRAGMA journal_mode=WAL;");
+  db.exec("PRAGMA foreign_keys=ON;");
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS reviews (
       repo TEXT NOT NULL,
@@ -32,34 +100,206 @@ export function openStore(path: string): Store {
       reviewed_at TEXT NOT NULL,
       PRIMARY KEY (repo, pr_number, head_sha)
     );
-  `);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_reviews_time ON reviews(reviewed_at);`);
+    CREATE INDEX IF NOT EXISTS idx_reviews_time ON reviews(reviewed_at);
 
-  const insert = db.prepare(
-    `INSERT OR REPLACE INTO reviews(repo, pr_number, head_sha, verdict, note, reviewed_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  );
-  const selectOne = db.prepare(
-    `SELECT 1 AS hit FROM reviews WHERE repo = ? AND pr_number = ? AND head_sha = ? LIMIT 1`,
-  );
-  const countApprovals = db.prepare(
-    `SELECT COUNT(*) AS n FROM reviews WHERE verdict = 'approve' AND reviewed_at >= ?`,
-  );
+    CREATE TABLE IF NOT EXISTS events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts TEXT NOT NULL,
+      level TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      repo TEXT,
+      pr_number INTEGER,
+      head_sha TEXT,
+      message TEXT NOT NULL,
+      payload TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts DESC);
+
+    CREATE TABLE IF NOT EXISTS config_scalars (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS config_watch_orgs (
+      name TEXT PRIMARY KEY,
+      mode TEXT NOT NULL CHECK(mode IN ('all','include')),
+      include_json TEXT NOT NULL DEFAULT '[]',
+      exclude_json TEXT NOT NULL DEFAULT '[]'
+    );
+
+    CREATE TABLE IF NOT EXISTS config_watch_repos (
+      slug TEXT PRIMARY KEY
+    );
+
+    CREATE TABLE IF NOT EXISTS config_skip_authors (
+      username TEXT PRIMARY KEY
+    );
+  `);
+
+  // Prepared statements
+  const stmts = {
+    insertReview: db.prepare(
+      `INSERT OR REPLACE INTO reviews(repo, pr_number, head_sha, verdict, note, reviewed_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ),
+    reviewHit: db.prepare(
+      `SELECT 1 AS hit FROM reviews WHERE repo=? AND pr_number=? AND head_sha=? LIMIT 1`,
+    ),
+    approvalCount: db.prepare(
+      `SELECT COUNT(*) AS n FROM reviews WHERE verdict='approve' AND reviewed_at >= ?`,
+    ),
+    recentReviews: db.prepare(
+      `SELECT repo, pr_number, head_sha, verdict, note, reviewed_at
+       FROM reviews ORDER BY reviewed_at DESC LIMIT ?`,
+    ),
+    getReview: db.prepare(
+      `SELECT repo, pr_number, head_sha, verdict, note, reviewed_at
+       FROM reviews WHERE repo=? AND pr_number=?
+       ORDER BY reviewed_at DESC LIMIT 1`,
+    ),
+    clearDedupe: db.prepare(`DELETE FROM reviews WHERE repo=? AND pr_number=?`),
+
+    insertEvent: db.prepare(
+      `INSERT INTO events(ts, level, kind, repo, pr_number, head_sha, message, payload)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ),
+    recentEvents: db.prepare(
+      `SELECT id, ts, level, kind, repo, pr_number, head_sha, message, payload
+       FROM events ORDER BY id DESC LIMIT ?`,
+    ),
+
+    getScalar: db.prepare(`SELECT value FROM config_scalars WHERE key=?`),
+    setScalar: db.prepare(
+      `INSERT INTO config_scalars(key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+    ),
+    allScalars: db.prepare(`SELECT key, value FROM config_scalars`),
+
+    listOrgs: db.prepare(
+      `SELECT name, mode, include_json, exclude_json
+       FROM config_watch_orgs ORDER BY name`,
+    ),
+    upsertOrg: db.prepare(
+      `INSERT INTO config_watch_orgs(name, mode, include_json, exclude_json)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(name) DO UPDATE SET
+         mode=excluded.mode,
+         include_json=excluded.include_json,
+         exclude_json=excluded.exclude_json`,
+    ),
+    deleteOrg: db.prepare(`DELETE FROM config_watch_orgs WHERE name=?`),
+
+    listWatchedRepos: db.prepare(`SELECT slug FROM config_watch_repos ORDER BY slug`),
+    addRepo: db.prepare(`INSERT OR IGNORE INTO config_watch_repos(slug) VALUES (?)`),
+    removeRepo: db.prepare(`DELETE FROM config_watch_repos WHERE slug=?`),
+
+    listSkipAuthors: db.prepare(
+      `SELECT username FROM config_skip_authors ORDER BY username`,
+    ),
+    addSkipAuthor: db.prepare(
+      `INSERT OR IGNORE INTO config_skip_authors(username) VALUES (?)`,
+    ),
+    removeSkipAuthor: db.prepare(`DELETE FROM config_skip_authors WHERE username=?`),
+  };
 
   return {
     db,
+
     recordReview({ repo, prNumber, headSha, verdict, note }) {
-      insert.run(repo, prNumber, headSha, verdict, note ?? null, new Date().toISOString());
+      stmts.insertReview.run(
+        repo,
+        prNumber,
+        headSha,
+        verdict,
+        note ?? null,
+        new Date().toISOString(),
+      );
     },
     hasReviewed(repo, prNumber, headSha) {
-      const row = selectOne.get(repo, prNumber, headSha) as { hit: number } | undefined;
+      const row = stmts.reviewHit.get(repo, prNumber, headSha) as
+        | { hit: number }
+        | undefined;
       return !!row;
     },
     approvalsInLastHour() {
       const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-      const row = countApprovals.get(since) as { n: number } | undefined;
+      const row = stmts.approvalCount.get(since) as { n: number } | undefined;
       return row?.n ?? 0;
     },
+    recentReviews(limit) {
+      return stmts.recentReviews.all(limit) as ReviewRow[];
+    },
+    getReview(repo, prNumber) {
+      const row = stmts.getReview.get(repo, prNumber) as ReviewRow | undefined;
+      return row ?? null;
+    },
+    clearDedupe(repo, prNumber) {
+      const res = stmts.clearDedupe.run(repo, prNumber);
+      return Number(res.changes);
+    },
+
+    recordEvent({ level, kind, message, repo, prNumber, headSha, payload }) {
+      stmts.insertEvent.run(
+        new Date().toISOString(),
+        level,
+        kind,
+        repo ?? null,
+        prNumber ?? null,
+        headSha ?? null,
+        message,
+        payload ? JSON.stringify(payload) : null,
+      );
+    },
+    recentEvents(limit) {
+      return stmts.recentEvents.all(limit) as EventRow[];
+    },
+
+    getScalar(key) {
+      const row = stmts.getScalar.get(key) as { value: string } | undefined;
+      return row?.value ?? null;
+    },
+    setScalar(key, value) {
+      stmts.setScalar.run(key, value);
+    },
+    allScalars() {
+      const rows = stmts.allScalars.all() as { key: string; value: string }[];
+      const out: Record<string, string> = {};
+      for (const r of rows) out[r.key] = r.value;
+      return out;
+    },
+
+    listOrgs() {
+      return stmts.listOrgs.all() as OrgRow[];
+    },
+    upsertOrg(row) {
+      stmts.upsertOrg.run(row.name, row.mode, row.include_json, row.exclude_json);
+    },
+    deleteOrg(name) {
+      stmts.deleteOrg.run(name);
+    },
+
+    listWatchedRepos() {
+      const rows = stmts.listWatchedRepos.all() as { slug: string }[];
+      return rows.map((r) => r.slug);
+    },
+    addWatchedRepo(slug) {
+      stmts.addRepo.run(slug);
+    },
+    removeWatchedRepo(slug) {
+      stmts.removeRepo.run(slug);
+    },
+
+    listSkipAuthors() {
+      const rows = stmts.listSkipAuthors.all() as { username: string }[];
+      return rows.map((r) => r.username);
+    },
+    addSkipAuthor(username) {
+      stmts.addSkipAuthor.run(username);
+    },
+    removeSkipAuthor(username) {
+      stmts.removeSkipAuthor.run(username);
+    },
+
     close() {
       db.close();
     },
