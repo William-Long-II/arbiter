@@ -27,7 +27,7 @@ export function repoEditRoute(args: {
         Repo-level tone sits on top of the org tone (if any), which sits on top of the default.
         Append adds to what's inherited; replace wipes everything above it and uses only this text.
       </p>
-      <form method="post" action="/config/repos/${encodeURIComponent(args.slug)}">
+      <form method="post" action="/config/repos/${splitSlug(args.slug)}">
         <label>Tone mode</label>
         <select name="tone_mode">
           <option value="append" ${repo.tone_mode === "append" ? "selected" : ""}>append (add to inherited)</option>
@@ -86,4 +86,9 @@ export function handleRepoEditPost(
     message: `repo ${slug} edited (tone: ${toneOverride === null ? "inherits" : `${toneMode} ${toneOverride.length}c`})`,
   });
   return redirect("/config");
+}
+
+function splitSlug(slug: string): string {
+  const [owner, name] = slug.split("/");
+  return `${encodeURIComponent(owner ?? "")}/${encodeURIComponent(name ?? "")}`;
 }
