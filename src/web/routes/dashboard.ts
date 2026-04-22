@@ -38,7 +38,15 @@ export function dashboardRoute(args: {
         <div class="stat"><div class="k">Approvals / hr (rolling)</div><div class="v" id="stat-approvals">${approvalsHour} / ${cfg.review.max_approvals_per_hour}</div></div>
         <div class="stat"><div class="k">Watched</div><div class="v">${watched} ${watched === 1 ? "entry" : "entries"}</div></div>
         <div class="stat"><div class="k">Poll interval</div><div class="v">${cfg.poll.interval_seconds}s</div></div>
-        <div class="stat"><div class="k">Last tick</div><div class="v" id="stat-last-tick" data-at="${runtime.lastTickEnd ?? ""}">${fmtRel(runtime.lastTickEnd)}</div></div>
+        <div class="stat">
+          <div class="k">Currently</div>
+          <div class="v"
+               id="stat-current"
+               data-repo="${runtime.currentRepo ?? ""}"
+               data-pr="${runtime.currentPrNumber ?? ""}"
+               data-started="${runtime.currentPrStartedAt ?? ""}">${fmtCurrent(runtime)}</div>
+        </div>
+        <div class="stat"><div class="k">Last activity</div><div class="v" id="stat-last-activity" data-at="${runtime.lastActivityAt ?? ""}">${fmtRel(runtime.lastActivityAt)}</div></div>
         <div class="stat"><div class="k">Next tick</div><div class="v" id="stat-next-tick" data-at="${runtime.nextTickAt ?? ""}">${runtime.nextTickAt ? "…" : "running"}</div></div>
         <div class="stat"><div class="k">Bot user</div><div class="v">${cfg.github.bot_username || "—"}</div></div>
       </div>
@@ -117,7 +125,8 @@ export function dashboardRoute(args: {
 const DASHBOARD_SCRIPT = `
 (function(){
   var nextEl = document.getElementById('stat-next-tick');
-  var lastEl = document.getElementById('stat-last-tick');
+  var lastEl = document.getElementById('stat-last-activity');
+  var currentEl = document.getElementById('stat-current');
   var errEl = document.getElementById('stat-tick-error');
   var modeEl = document.getElementById('stat-mode');
   var approvalsEl = document.getElementById('stat-approvals');
@@ -148,6 +157,24 @@ const DASHBOARD_SCRIPT = `
     nextEl.textContent = fmtCountdown(Math.ceil((targetMs - Date.now()) / 1000));
   }
 
+  function fmtCurrent(repo, pr, startedIso){
+    if (!repo || !pr) return 'idle';
+    var elapsed = 0;
+    if (startedIso) {
+      var t = Date.parse(startedIso);
+      if (!isNaN(t)) elapsed = Math.max(0, Math.floor((Date.now() - t) / 1000));
+    }
+    return repo + '#' + pr + ' (' + elapsed + 's)';
+  }
+
+  function renderCurrent(){
+    if (!currentEl) return;
+    var repo = currentEl.dataset.repo;
+    var pr = currentEl.dataset.pr;
+    var started = currentEl.dataset.started;
+    currentEl.textContent = fmtCurrent(repo, pr, started);
+  }
+
   function applyStatus(s){
     if (nextEl) {
       targetMs = s.nextTickAt ? Date.parse(s.nextTickAt) : null;
@@ -156,8 +183,14 @@ const DASHBOARD_SCRIPT = `
     }
     renderNextTick();
     if (lastEl) {
-      lastEl.dataset.at = s.lastTickEnd || '';
-      lastEl.textContent = fmtRel(s.lastTickEnd);
+      lastEl.dataset.at = s.lastActivityAt || '';
+      lastEl.textContent = fmtRel(s.lastActivityAt);
+    }
+    if (currentEl) {
+      currentEl.dataset.repo = s.currentRepo || '';
+      currentEl.dataset.pr = s.currentPrNumber == null ? '' : String(s.currentPrNumber);
+      currentEl.dataset.started = s.currentPrStartedAt || '';
+      renderCurrent();
     }
     if (errEl) errEl.textContent = s.lastTickError ? 'last tick error: ' + s.lastTickError : '';
     if (modeEl) modeEl.textContent = s.mode;
@@ -180,11 +213,12 @@ const DASHBOARD_SCRIPT = `
   }
   renderNextTick();
 
-  // 1s local ticks for the countdown text; lastTick is re-formatted too so
-  // "32s ago" keeps drifting between polls.
+  // 1s local ticks for the countdown text; lastActivity and the current-PR
+  // elapsed counter are re-formatted too so they keep drifting between polls.
   setInterval(function(){
     renderNextTick();
     if (lastEl && lastEl.dataset.at) lastEl.textContent = fmtRel(lastEl.dataset.at);
+    renderCurrent();
   }, 1000);
 
   async function poll(){
@@ -217,4 +251,12 @@ function fmtRel(iso: string | null): string {
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
+}
+
+function fmtCurrent(runtime: Runtime): string {
+  if (!runtime.currentRepo || runtime.currentPrNumber === null) return "idle";
+  const elapsed = runtime.currentPrStartedAt
+    ? Math.max(0, Math.floor((Date.now() - Date.parse(runtime.currentPrStartedAt)) / 1000))
+    : 0;
+  return `${runtime.currentRepo}#${runtime.currentPrNumber} (${elapsed}s)`;
 }

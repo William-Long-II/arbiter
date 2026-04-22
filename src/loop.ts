@@ -11,16 +11,31 @@ import { validateReview } from "./review/validate.ts";
 import { postReview } from "./review/post.ts";
 import { resolveTone } from "./review/tone.ts";
 import { log } from "./log.ts";
+import type { Runtime } from "./web/runtime.ts";
 
-export async function runTick(args: { gh: GH; cfg: Config; store: Store }): Promise<void> {
-  const { gh, cfg, store } = args;
+/**
+ * Progress-reporting subset of the loop's Runtime. Taking only this slice
+ * keeps runTick testable without pulling in every unrelated runtime field.
+ */
+type Progress = Pick<
+  Runtime,
+  "currentRepo" | "currentPrNumber" | "currentPrStartedAt" | "lastActivityAt"
+>;
+
+export async function runTick(args: {
+  gh: GH;
+  cfg: Config;
+  store: Store;
+  progress: Progress;
+}): Promise<void> {
+  const { gh, cfg, store, progress } = args;
 
   const repos = await resolveWatchedRepos(gh, cfg);
   log.info("tick.repos", { count: repos.length });
 
   for (const repo of repos) {
     try {
-      await processRepo(gh, cfg, store, repo);
+      await processRepo(gh, cfg, store, repo, progress);
     } catch (e) {
       const msg = (e as Error).message;
       log.error("repo.failed", { repo: slug(repo), error: msg });
@@ -34,18 +49,54 @@ export async function runTick(args: { gh: GH; cfg: Config; store: Store }): Prom
   }
 }
 
-async function processRepo(gh: GH, cfg: Config, store: Store, repo: RepoRef): Promise<void> {
+async function processRepo(
+  gh: GH,
+  cfg: Config,
+  store: Store,
+  repo: RepoRef,
+  progress: Progress,
+): Promise<void> {
   const prs = filterReviewable(await listOpenPulls(gh, repo), cfg);
   for (const pr of prs) {
     if (store.hasReviewed(slug(repo), pr.number, pr.head_sha)) continue;
-    await processPr(gh, cfg, store, pr);
+    await processPr(gh, cfg, store, pr, progress);
   }
 }
 
-async function processPr(gh: GH, cfg: Config, store: Store, pr: PullRef): Promise<void> {
+async function processPr(
+  gh: GH,
+  cfg: Config,
+  store: Store,
+  pr: PullRef,
+  progress: Progress,
+): Promise<void> {
   const repoSlug = slug(pr.repo);
   const tag = { repo: repoSlug, pr: pr.number, sha: pr.head_sha.slice(0, 7) };
 
+  // Progress window: the dashboard's "Currently reviewing" + "Last activity"
+  // cards read these. Set on entry, cleared in finally so an exception can't
+  // leave the UI stuck pointing at a PR that's no longer being processed.
+  progress.currentRepo = repoSlug;
+  progress.currentPrNumber = pr.number;
+  progress.currentPrStartedAt = new Date().toISOString();
+  try {
+    await processPrInner(gh, cfg, store, pr, repoSlug, tag);
+  } finally {
+    progress.currentRepo = null;
+    progress.currentPrNumber = null;
+    progress.currentPrStartedAt = null;
+    progress.lastActivityAt = new Date().toISOString();
+  }
+}
+
+async function processPrInner(
+  gh: GH,
+  cfg: Config,
+  store: Store,
+  pr: PullRef,
+  repoSlug: string,
+  tag: { repo: string; pr: number; sha: string },
+): Promise<void> {
   if (cfg.review.require_ci_green) {
     const ci = await evaluateCi(gh, pr.repo, pr.head_sha);
     if (ci.kind === "pending") {

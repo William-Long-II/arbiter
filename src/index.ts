@@ -115,7 +115,7 @@ while (!stopping) {
   runtime.nextTickAt = null; // tick in progress
   const started = Date.now();
   try {
-    await runTick({ gh, cfg, store });
+    await runTick({ gh, cfg, store, progress: runtime });
   } catch (e) {
     const msg = (e as Error).message;
     runtime.lastTickError = msg;
