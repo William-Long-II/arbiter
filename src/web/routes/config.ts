@@ -46,7 +46,7 @@ export function configRoute(args: {
             </select>
           </div>
           <div>
-            <label>Skip bots (dependabot, renovate, github-actions, …)</label>
+            <label title="Skip PRs authored by GitHub-flagged bot accounts: dependabot, renovate, github-actions, etc.">Skip bots</label>
             <select name="skip_bots">
               <option value="true" ${cfg.review.skip_bots ? "selected" : ""}>true</option>
               <option value="false" ${!cfg.review.skip_bots ? "selected" : ""}>false</option>

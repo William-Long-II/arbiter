@@ -18,6 +18,14 @@ main{max-width:1100px;margin:20px auto;padding:0 16px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-bottom:16px}
 .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin:0 0 10px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+/* Make each grid cell a flex column so the label sits at the top and the
+   control pins to the bottom. When one label in a row wraps (e.g. "Include
+   (comma-separated, used when mode=include)"), the whole row grows to match,
+   and inputs still line up across the row instead of one dropping below the
+   others by a line-height. */
+.grid > div{display:flex;flex-direction:column}
+.grid > div > label:first-child{margin-top:0}
+.grid > div > input,.grid > div > select,.grid > div > textarea{margin-top:auto}
 .stat{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:10px 12px}
 .stat .k{color:var(--muted);font-size:12px}
 .stat .v{font-size:18px;font-weight:600;margin-top:4px}
