@@ -33,19 +33,19 @@ export function dashboardRoute(args: {
     <section class="card">
       <h2>Status</h2>
       <div class="grid">
-        <div class="stat"><div class="k">Mode</div><div class="v">${cfg.review.dry_run ? "dry-run" : "live"}</div></div>
-        <div class="stat"><div class="k">Approvals / hr (rolling)</div><div class="v">${approvalsHour} / ${cfg.review.max_approvals_per_hour}</div></div>
+        <div class="stat"><div class="k">Mode</div><div class="v" id="stat-mode">${cfg.review.dry_run ? "dry-run" : "live"}</div></div>
+        <div class="stat"><div class="k">Approvals / hr (rolling)</div><div class="v" id="stat-approvals">${approvalsHour} / ${cfg.review.max_approvals_per_hour}</div></div>
         <div class="stat"><div class="k">Watched</div><div class="v">${watched} ${watched === 1 ? "entry" : "entries"}</div></div>
         <div class="stat"><div class="k">Poll interval</div><div class="v">${cfg.poll.interval_seconds}s</div></div>
-        <div class="stat"><div class="k">Last tick</div><div class="v">${fmtRel(runtime.lastTickEnd)}</div></div>
-        <div class="stat"><div class="k">Next tick</div><div class="v" id="next-tick" data-at="${runtime.nextTickAt ?? ""}">${runtime.nextTickAt ? "…" : "running"}</div></div>
+        <div class="stat"><div class="k">Last tick</div><div class="v" id="stat-last-tick" data-at="${runtime.lastTickEnd ?? ""}">${fmtRel(runtime.lastTickEnd)}</div></div>
+        <div class="stat"><div class="k">Next tick</div><div class="v" id="stat-next-tick" data-at="${runtime.nextTickAt ?? ""}">${runtime.nextTickAt ? "…" : "running"}</div></div>
         <div class="stat"><div class="k">Bot user</div><div class="v">${cfg.github.bot_username || "—"}</div></div>
       </div>
       <div class="space flex">
         <form method="post" action="/actions/toggle-dry-run" class="inline">
           <button type="submit">Flip dry-run → ${cfg.review.dry_run ? "live" : "dry-run"}</button>
         </form>
-        ${runtime.lastTickError ? html`<span class="lvl-error">last tick error: ${runtime.lastTickError}</span>` : ""}
+        <span class="lvl-error" id="stat-tick-error">${runtime.lastTickError ? `last tick error: ${runtime.lastTickError}` : ""}</span>
       </div>
     </section>
 
@@ -81,27 +81,35 @@ export function dashboardRoute(args: {
       active: "dashboard",
       banner,
       body,
-      footScript: raw(COUNTDOWN_SCRIPT),
+      footScript: raw(DASHBOARD_SCRIPT),
     }),
   );
 }
 
 /**
- * Counts down to the time encoded in `data-at` on #next-tick, rewriting the
- * element's text every second. On reaching zero (or past it) shows "running"
- * so the user sees something is happening even if the next paint is delayed.
- * Passes through any bindings the layout doesn't define — noop if the element
- * isn't present.
+ * Keeps the dashboard stat cards fresh without a page reload.
+ *
+ *   - #stat-next-tick: 1s local countdown based on the latest nextTickAt.
+ *   - #stat-last-tick and other cards: refreshed every 5s by polling
+ *     /api/status. This is what stops the UI getting stuck on "running"
+ *     when a tick finishes server-side — previously the page had no way
+ *     to know the tick was over until the user reloaded.
+ *
+ * When a tick is in progress the server sends nextTickAt=null; the UI
+ * shows "running" and the local timer pauses. When the tick completes
+ * and the server sets a new nextTickAt, the next poll picks it up and
+ * the countdown resumes.
  */
-const COUNTDOWN_SCRIPT = `
+const DASHBOARD_SCRIPT = `
 (function(){
-  var el = document.getElementById('next-tick');
-  if (!el) return;
-  var iso = el.dataset.at;
-  if (!iso) return;
-  var target = Date.parse(iso);
-  if (isNaN(target)) return;
-  function fmt(s){
+  var nextEl = document.getElementById('stat-next-tick');
+  var lastEl = document.getElementById('stat-last-tick');
+  var errEl = document.getElementById('stat-tick-error');
+  var modeEl = document.getElementById('stat-mode');
+  var approvalsEl = document.getElementById('stat-approvals');
+  var targetMs = null;
+
+  function fmtCountdown(s){
     if (s <= 0) return 'now';
     if (s < 60) return s + 's';
     var m = Math.floor(s / 60), r = s % 60;
@@ -109,12 +117,63 @@ const COUNTDOWN_SCRIPT = `
     var h = Math.floor(m / 60), rm = m % 60;
     return h + 'h ' + rm + 'm';
   }
-  function tick(){
-    var secs = Math.ceil((target - Date.now()) / 1000);
-    el.textContent = fmt(secs);
+  function fmtRel(iso){
+    if (!iso) return '—';
+    var t = Date.parse(iso);
+    if (isNaN(t)) return '—';
+    var s = Math.max(1, Math.floor((Date.now() - t) / 1000));
+    if (s < 60) return s + 's ago';
+    if (s < 3600) return Math.floor(s/60) + 'm ago';
+    if (s < 86400) return Math.floor(s/3600) + 'h ago';
+    return Math.floor(s/86400) + 'd ago';
   }
-  tick();
-  setInterval(tick, 1000);
+
+  function renderNextTick(){
+    if (!nextEl) return;
+    if (targetMs === null) { nextEl.textContent = 'running'; return; }
+    nextEl.textContent = fmtCountdown(Math.ceil((targetMs - Date.now()) / 1000));
+  }
+
+  function applyStatus(s){
+    if (nextEl) {
+      targetMs = s.nextTickAt ? Date.parse(s.nextTickAt) : null;
+      if (isNaN(targetMs)) targetMs = null;
+      nextEl.dataset.at = s.nextTickAt || '';
+    }
+    renderNextTick();
+    if (lastEl) {
+      lastEl.dataset.at = s.lastTickEnd || '';
+      lastEl.textContent = fmtRel(s.lastTickEnd);
+    }
+    if (errEl) errEl.textContent = s.lastTickError ? 'last tick error: ' + s.lastTickError : '';
+    if (modeEl) modeEl.textContent = s.mode;
+    if (approvalsEl) approvalsEl.textContent = s.approvalsInLastHour + ' / ' + s.approvalCap;
+  }
+
+  // Seed from the server-rendered data-at so the countdown starts immediately,
+  // without waiting for the first poll.
+  if (nextEl && nextEl.dataset.at) {
+    var t0 = Date.parse(nextEl.dataset.at);
+    targetMs = isNaN(t0) ? null : t0;
+  }
+  renderNextTick();
+
+  // 1s local ticks for the countdown text; lastTick is re-formatted too so
+  // "32s ago" keeps drifting between polls.
+  setInterval(function(){
+    renderNextTick();
+    if (lastEl && lastEl.dataset.at) lastEl.textContent = fmtRel(lastEl.dataset.at);
+  }, 1000);
+
+  async function poll(){
+    try {
+      var r = await fetch('/api/status', { credentials: 'same-origin', cache: 'no-store' });
+      if (!r.ok) return;
+      applyStatus(await r.json());
+    } catch (e) { /* transient — try again next interval */ }
+  }
+  poll();
+  setInterval(poll, 5000);
 })();
 `;
 

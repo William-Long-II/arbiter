@@ -13,6 +13,7 @@ import {
 import { orgEditRoute, handleOrgEditPost } from "./routes/org-edit.ts";
 import { repoEditRoute, handleRepoEditPost } from "./routes/repo-edit.ts";
 import { handleRecheck, handleToggleDryRun } from "./routes/actions.ts";
+import { statusApiRoute } from "./routes/status-api.ts";
 import { redirect } from "./html.ts";
 import { log } from "../log.ts";
 import { requireAuth } from "./auth.ts";
@@ -75,6 +76,9 @@ export function startWebServer(deps: ServerDeps) {
         }
         if (method === "GET" && url.pathname === "/events") {
           return eventsRoute({ store });
+        }
+        if (method === "GET" && url.pathname === "/api/status") {
+          return statusApiRoute({ store, runtime });
         }
 
         // /reviews/:owner/:name/:pr
