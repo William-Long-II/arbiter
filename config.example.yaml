@@ -1,0 +1,61 @@
+# Auto-Reviewer config.
+# Copy to config.yaml and edit. Hot-reload is not supported — restart the container after changes.
+
+github:
+  # The bot's GitHub login (NOT your personal account). This is whose PAT lives in GITHUB_TOKEN
+  # and whose approving review counts toward branch protection.
+  bot_username: my-review-bot
+  # PRs authored by any of these users will be SKIPPED. Include your own login here so the bot
+  # never reviews your own work. Add teammates if you want to skip theirs too.
+  skip_authors:
+    - my-github-login
+
+watch:
+  # Whole orgs: every repo you have access to under this org gets watched.
+  # Use `include` to restrict to a subset, or `exclude` to blocklist a few.
+  orgs:
+    - name: my-org
+      mode: all
+      # exclude: [archived-repo, legacy-thing]
+    - name: partner-org
+      mode: include
+      include:
+        - shared-library
+        - deployment-scripts
+
+  # Ad-hoc individual repos (works for personal repos and for orgs where you only want one repo).
+  # Format: owner/name.
+  repos:
+    - my-github-login/side-project
+    - some-other-org/one-specific-repo
+
+review:
+  # Dry run: compute the review and log it, but DO NOT post to GitHub. Flip to false when you trust it.
+  dry_run: true
+
+  # Safety cap. Refuses to post more than N approving reviews per rolling hour.
+  max_approvals_per_hour: 10
+
+  # Guidance passed to Claude. Tune the voice of reviews here.
+  tone: |
+    Be constructive and specific. For every issue you raise, explain WHY it matters
+    and describe HOW to fix it — ideally with a concrete code suggestion. Skip trivial
+    nitpicks unless they compound. Treat the PR author as a capable teammate.
+
+  # Skip PRs still in draft.
+  skip_drafts: true
+
+  # Only review after all non-approval CI checks are green. If any required check is failing,
+  # the PR is ignored until CI is fixed.
+  require_ci_green: true
+
+poll:
+  # Seconds between discovery ticks.
+  interval_seconds: 60
+
+claude:
+  # Path to the `claude` binary inside the runtime environment.
+  # In docker-compose.yml this resolves via `npm i -g @anthropic-ai/claude-code`.
+  command: claude
+  # Per-review wall clock limit. Long diffs get more; this is the ceiling.
+  timeout_seconds: 600

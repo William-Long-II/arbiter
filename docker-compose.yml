@@ -1,0 +1,23 @@
+services:
+  auto-reviewer:
+    build: .
+    image: auto-reviewer:latest
+    container_name: auto-reviewer
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Configuration. Edit locally and restart the container to apply.
+      - ./config.yaml:/app/config.yaml:ro
+
+      # The Claude Max session lives in ~/.claude on the host. Mount it so the
+      # containerized `claude -p` runs against your logged-in Max subscription
+      # instead of trying to start an OAuth flow it can't complete.
+      #
+      # IMPORTANT: the container runs as UID 1000. If your host ~/.claude
+      # directory is owned by a different UID, either chown it to 1000 or
+      # change UID/GID in the Dockerfile to match.
+      - ${HOME}/.claude:/home/reviewer/.claude
+
+      # Persistent state: reviewed-PR dedupe + per-hour approval counter.
+      - ./data:/app/data
