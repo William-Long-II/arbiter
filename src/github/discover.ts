@@ -67,6 +67,8 @@ export type PullRef = {
   number: number;
   head_sha: string;
   author: string;
+  /** True when GitHub marks the PR author as a bot account (dependabot, renovate, github-actions, custom bots). */
+  author_is_bot: boolean;
   draft: boolean;
   title: string;
 };
@@ -88,6 +90,7 @@ export async function listOpenPulls(gh: GH, repo: RepoRef): Promise<PullRef[]> {
         number: pr.number,
         head_sha: pr.head.sha,
         author: pr.user?.login ?? "",
+        author_is_bot: pr.user?.type === "Bot",
         draft: pr.draft ?? false,
         title: pr.title,
       });
@@ -103,6 +106,7 @@ export function filterReviewable(prs: PullRef[], cfg: Config): PullRef[] {
   skip.add(cfg.github.bot_username.toLowerCase());
   return prs.filter((p) => {
     if (cfg.review.skip_drafts && p.draft) return false;
+    if (cfg.review.skip_bots && p.author_is_bot) return false;
     if (skip.has(p.author.toLowerCase())) return false;
     return true;
   });
