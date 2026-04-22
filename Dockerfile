@@ -16,16 +16,21 @@ COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production
 
 FROM base
-# Run as a non-root user. UID 1000 matches the typical host user so the
-# mounted ~/.claude directory stays readable without extra chown gymnastics.
-RUN groupadd -g 1000 reviewer \
- && useradd  -u 1000 -g 1000 -m -s /bin/bash reviewer
+# The oven/bun base image already provides a `bun` user at UID/GID 1000.
+# Reuse it instead of creating a second UID-1000 user (which fails with
+# `groupadd: GID 1000 not unique`, exit code 4). UID 1000 still matches a
+# typical host user, so the mounted ~/.claude directory stays readable.
+#
+# /app is root-owned by default after WORKDIR, and /app/data doesn't exist
+# yet — pre-create it and hand both to `bun` so the non-root process can
+# open the sqlite file (and create the dir when no host volume is mounted).
+RUN mkdir -p /app/data && chown -R bun:bun /app
 
-COPY --from=deps --chown=reviewer:reviewer /app/node_modules ./node_modules
-COPY --chown=reviewer:reviewer package.json bun.lock tsconfig.json ./
-COPY --chown=reviewer:reviewer src ./src
+COPY --from=deps --chown=bun:bun /app/node_modules ./node_modules
+COPY --chown=bun:bun package.json bun.lock tsconfig.json ./
+COPY --chown=bun:bun src ./src
 
-USER reviewer
+USER bun
 ENV NODE_ENV=production
 ENV AUTO_REVIEWER_CONFIG=/app/config.yaml
 ENV AUTO_REVIEWER_DB=/app/data/state.sqlite

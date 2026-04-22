@@ -24,10 +24,10 @@ services:
       # containerized `claude -p` runs against your logged-in Max subscription
       # instead of trying to start an OAuth flow it can't complete.
       #
-      # IMPORTANT: the container runs as UID 1000. If your host ~/.claude
-      # directory is owned by a different UID, either chown it to 1000 or
-      # change UID/GID in the Dockerfile to match.
-      - ${HOME}/.claude:/home/reviewer/.claude
+      # IMPORTANT: the container runs as the `bun` user (UID/GID 1000) that
+      # ships with oven/bun:1-debian. If your host ~/.claude is owned by a
+      # different UID, chown it to 1000 on the host.
+      - ${HOME}/.claude:/home/bun/.claude
 
       # Persistent state: reviews + events + config lives here.
       - ./data:/app/data
