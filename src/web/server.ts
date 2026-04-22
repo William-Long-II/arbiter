@@ -13,16 +13,18 @@ import {
 import { handleRecheck, handleToggleDryRun } from "./routes/actions.ts";
 import { redirect } from "./html.ts";
 import { log } from "../log.ts";
+import { requireAuth } from "./auth.ts";
 
 export type ServerDeps = {
   store: Store;
   runtime: Runtime;
   host: string;
   port: number;
+  password: string;
 };
 
 export function startWebServer(deps: ServerDeps) {
-  const { store, runtime, host, port } = deps;
+  const { store, runtime, host, port, password } = deps;
 
   const selfOrigin = `http://${host}:${port}`;
 
@@ -36,6 +38,14 @@ export function startWebServer(deps: ServerDeps) {
     async fetch(req) {
       const url = new URL(req.url);
       const method = req.method.toUpperCase();
+
+      // /healthz is always open so Docker healthchecks and reverse proxies work
+      // without needing credentials. Everything else goes through basic auth
+      // when AUTO_REVIEWER_PASSWORD is set.
+      if (url.pathname !== "/healthz") {
+        const unauthorized = requireAuth(req, password);
+        if (unauthorized) return unauthorized;
+      }
 
       // Same-origin guard for state-changing requests.
       if (method !== "GET" && method !== "HEAD") {
@@ -105,7 +115,7 @@ export function startWebServer(deps: ServerDeps) {
     },
   });
 
-  log.info("web.listening", { host, port });
+  log.info("web.listening", { host, port, authEnabled: password.length > 0 });
   return server;
 }
 

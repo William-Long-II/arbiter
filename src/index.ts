@@ -11,6 +11,8 @@ const YAML_PATH = process.env.AUTO_REVIEWER_CONFIG ?? "./config.yaml";
 const TOKEN = process.env.GITHUB_TOKEN;
 const WEB_HOST = process.env.AUTO_REVIEWER_WEB_HOST ?? "127.0.0.1";
 const WEB_PORT = Number(process.env.AUTO_REVIEWER_WEB_PORT ?? "8787");
+const WEB_PASSWORD = process.env.AUTO_REVIEWER_PASSWORD ?? "";
+const EVENT_RETENTION_DAYS = Number(process.env.AUTO_REVIEWER_EVENT_RETENTION_DAYS ?? "30");
 
 if (!TOKEN) {
   log.error("startup.missing_token", { hint: "set GITHUB_TOKEN in the environment" });
@@ -42,7 +44,24 @@ try {
 const runtime = createRuntime(bootstrapped);
 const gh = makeClient(TOKEN);
 
-startWebServer({ store, runtime, host: WEB_HOST, port: WEB_PORT });
+const pruned = store.pruneEvents(EVENT_RETENTION_DAYS);
+if (pruned > 0) {
+  log.info("startup.events_pruned", { removed: pruned, retentionDays: EVENT_RETENTION_DAYS });
+}
+
+startWebServer({ store, runtime, host: WEB_HOST, port: WEB_PORT, password: WEB_PASSWORD });
+
+if (!WEB_PASSWORD && WEB_HOST !== "127.0.0.1" && WEB_HOST !== "localhost") {
+  log.warn("startup.insecure_bind", {
+    host: WEB_HOST,
+    hint: "bound to non-loopback without AUTO_REVIEWER_PASSWORD — anyone who can reach the port has full admin",
+  });
+  store.recordEvent({
+    level: "warn",
+    kind: "startup.insecure",
+    message: `Listening on ${WEB_HOST} without a password. Set AUTO_REVIEWER_PASSWORD or bind to 127.0.0.1.`,
+  });
+}
 
 log.info("startup.ok", { db: DB_PATH, web: `${WEB_HOST}:${WEB_PORT}` });
 store.recordEvent({

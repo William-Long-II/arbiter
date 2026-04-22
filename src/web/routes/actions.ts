@@ -17,16 +17,20 @@ export function handleRecheck(store: Store, form: FormData): Response {
   const repo = String(form.get("repo") ?? "").trim();
   const prStr = String(form.get("pr") ?? "").trim();
   const pr = Number(prStr);
+  const sha = String(form.get("head_sha") ?? "").trim() || undefined;
   if (!repo || !Number.isFinite(pr) || !Number.isInteger(pr)) {
     return redirect("/");
   }
-  const removed = store.clearDedupe(repo, pr);
+  const removed = store.clearDedupe(repo, pr, sha);
   store.recordEvent({
     level: "info",
     kind: "action.recheck",
-    message: `cleared ${removed} dedupe row(s); will re-review on next tick`,
+    message: sha
+      ? `cleared dedupe for SHA ${sha.slice(0, 7)}; will re-review this commit on next tick`
+      : `cleared ${removed} dedupe row(s) for PR; will re-review on next tick`,
     repo,
     prNumber: pr,
+    headSha: sha,
   });
   return redirect(`/reviews/${encodeURIComponent(repo)}/${pr}`);
 }

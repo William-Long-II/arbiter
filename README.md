@@ -62,7 +62,7 @@ Three pages:
 
 Each review row links to a detail page showing the full summary, every per-line comment with severity, and any comments that had to be dropped because Claude attached them to lines outside the diff hunks. A "Clear dedupe" button on the detail page makes the next tick re-review the same SHA.
 
-The server binds to `127.0.0.1:8787` on the host by default. No auth is implemented; the expectation is that you put it behind your VPN or leave it bound to loopback.
+The server binds to `127.0.0.1:8787` on the host by default. If you leave it on loopback, no auth is needed. If you bind to anything else (reverse-proxy it for remote access, expose it on a VPN, etc.), set `AUTO_REVIEWER_PASSWORD=something` to enable HTTP Basic auth — the browser will prompt automatically. Username is fixed to `admin`. `/healthz` is always open so Docker healthchecks and reverse proxies work without credentials.
 
 ## Safety rails
 
@@ -72,6 +72,8 @@ The server binds to `127.0.0.1:8787` on the host by default. No auth is implemen
 - **Self-skip.** The bot username is always excluded from review targets. Add your own login to `skip_authors` so it doesn't review your PRs either.
 - **Drafts.** Skipped by default.
 - **Same-origin POST guard.** The UI refuses POSTs whose `Origin` header isn't the server itself, which blunts most CSRF even without auth.
+- **Optional Basic auth.** Set `AUTO_REVIEWER_PASSWORD` to require a password before any UI route works. Unset means loopback-only trust.
+- **Events retention.** `AUTO_REVIEWER_EVENT_RETENTION_DAYS` (default 30) prunes old event rows at startup so the table stays bounded.
 
 ## Development
 

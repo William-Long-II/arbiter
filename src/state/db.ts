@@ -47,7 +47,12 @@ export type Store = {
   approvalsInLastHour(): number;
   recentReviews(limit: number): ReviewRow[];
   getReview(repo: string, prNumber: number): ReviewRow | null;
-  clearDedupe(repo: string, prNumber: number): number;
+  /**
+   * Delete dedupe rows for a PR. If `headSha` is provided, only that row is
+   * removed — prior SHA history stays — and the next tick will re-review that
+   * specific commit. If omitted, every row for the PR is deleted.
+   */
+  clearDedupe(repo: string, prNumber: number, headSha?: string): number;
 
   // events
   recordEvent(args: {
@@ -60,6 +65,7 @@ export type Store = {
     payload?: Record<string, unknown>;
   }): void;
   recentEvents(limit: number): EventRow[];
+  pruneEvents(olderThanDays: number): number;
 
   // config scalars (dotted keys like "review.dry_run", "poll.interval_seconds")
   getScalar(key: string): string | null;
@@ -157,7 +163,10 @@ export function openStore(path: string): Store {
        FROM reviews WHERE repo=? AND pr_number=?
        ORDER BY reviewed_at DESC LIMIT 1`,
     ),
-    clearDedupe: db.prepare(`DELETE FROM reviews WHERE repo=? AND pr_number=?`),
+    clearDedupeAll: db.prepare(`DELETE FROM reviews WHERE repo=? AND pr_number=?`),
+    clearDedupeSha: db.prepare(
+      `DELETE FROM reviews WHERE repo=? AND pr_number=? AND head_sha=?`,
+    ),
 
     insertEvent: db.prepare(
       `INSERT INTO events(ts, level, kind, repo, pr_number, head_sha, message, payload)
@@ -167,6 +176,7 @@ export function openStore(path: string): Store {
       `SELECT id, ts, level, kind, repo, pr_number, head_sha, message, payload
        FROM events ORDER BY id DESC LIMIT ?`,
     ),
+    pruneEvents: db.prepare(`DELETE FROM events WHERE ts < ?`),
 
     getScalar: db.prepare(`SELECT value FROM config_scalars WHERE key=?`),
     setScalar: db.prepare(
@@ -233,8 +243,10 @@ export function openStore(path: string): Store {
       const row = stmts.getReview.get(repo, prNumber) as ReviewRow | undefined;
       return row ?? null;
     },
-    clearDedupe(repo, prNumber) {
-      const res = stmts.clearDedupe.run(repo, prNumber);
+    clearDedupe(repo, prNumber, headSha) {
+      const res = headSha
+        ? stmts.clearDedupeSha.run(repo, prNumber, headSha)
+        : stmts.clearDedupeAll.run(repo, prNumber);
       return Number(res.changes);
     },
 
@@ -252,6 +264,12 @@ export function openStore(path: string): Store {
     },
     recentEvents(limit) {
       return stmts.recentEvents.all(limit) as EventRow[];
+    },
+    pruneEvents(olderThanDays) {
+      if (!Number.isFinite(olderThanDays) || olderThanDays <= 0) return 0;
+      const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
+      const res = stmts.pruneEvents.run(cutoff);
+      return Number(res.changes);
     },
 
     getScalar(key) {
