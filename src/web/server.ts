@@ -28,8 +28,6 @@ export type ServerDeps = {
 export function startWebServer(deps: ServerDeps) {
   const { store, runtime, host, port, password } = deps;
 
-  const selfOrigin = `http://${host}:${port}`;
-
   const server = Bun.serve({
     hostname: host,
     port,
@@ -50,9 +48,14 @@ export function startWebServer(deps: ServerDeps) {
       }
 
       // Same-origin guard for state-changing requests.
+      //
+      // Compare the Origin header against the request's OWN authority (from
+      // its Host header, via req.url), not the configured bind host. Inside
+      // Docker we bind to 0.0.0.0 but browsers hit us on 127.0.0.1:8787 — the
+      // configured-host comparison would spuriously reject every POST with a
+      // "cross-origin" 403 because "http://0.0.0.0:8787" !== the real origin.
       if (method !== "GET" && method !== "HEAD") {
-        const origin = req.headers.get("origin") ?? req.headers.get("referer") ?? "";
-        if (origin && !origin.startsWith(selfOrigin)) {
+        if (!isSameOrigin(req, url)) {
           return new Response("Cross-origin POST refused", { status: 403 });
         }
       }
@@ -154,4 +157,22 @@ function errorPage(msg: string): Response {
     status: 400,
     headers: { "content-type": "text/plain; charset=utf-8" },
   });
+}
+
+/**
+ * Accept a POST only if the browser-supplied Origin (or Referer) matches the
+ * authority the request itself is targeting. Absent Origin/Referer = allow
+ * (typical for non-browser clients like curl/Docker healthchecks), which is
+ * fine because CSRF requires a browser.
+ */
+export function isSameOrigin(req: Request, url: URL): boolean {
+  const header = req.headers.get("origin") ?? req.headers.get("referer");
+  if (!header) return true;
+  let claimed: URL;
+  try {
+    claimed = new URL(header);
+  } catch {
+    return false;
+  }
+  return claimed.host === url.host && claimed.protocol === url.protocol;
 }
