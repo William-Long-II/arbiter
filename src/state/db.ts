@@ -25,11 +25,21 @@ export type EventRow = {
   payload: string | null;
 };
 
+export type ToneMode = "append" | "replace";
+
 export type OrgRow = {
   name: string;
   mode: "all" | "include";
   include_json: string; // JSON array of strings
   exclude_json: string; // JSON array of strings
+  tone_override: string | null;
+  tone_mode: ToneMode;
+};
+
+export type RepoRow = {
+  slug: string;
+  tone_override: string | null;
+  tone_mode: ToneMode;
 };
 
 export type Store = {
@@ -74,12 +84,16 @@ export type Store = {
 
   // watch.orgs
   listOrgs(): OrgRow[];
+  getOrg(name: string): OrgRow | null;
   upsertOrg(row: OrgRow): void;
   deleteOrg(name: string): void;
 
   // watch.repos
   listWatchedRepos(): string[];
+  listWatchedRepoRows(): RepoRow[];
+  getRepo(slug: string): RepoRow | null;
   addWatchedRepo(slug: string): void;
+  setRepoTone(slug: string, tone: string | null, mode: ToneMode): void;
   removeWatchedRepo(slug: string): void;
 
   // github.skip_authors
@@ -89,6 +103,19 @@ export type Store = {
 
   close(): void;
 };
+
+function migrateAddColumn(
+  db: Database,
+  table: string,
+  column: string,
+  typeDecl: string,
+): void {
+  const cols = db
+    .prepare(`PRAGMA table_info(${table})`)
+    .all() as { name: string }[];
+  if (cols.some((c) => c.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${typeDecl}`);
+}
 
 export function openStore(path: string): Store {
   mkdirSync(dirname(path), { recursive: true });
@@ -130,17 +157,39 @@ export function openStore(path: string): Store {
       name TEXT PRIMARY KEY,
       mode TEXT NOT NULL CHECK(mode IN ('all','include')),
       include_json TEXT NOT NULL DEFAULT '[]',
-      exclude_json TEXT NOT NULL DEFAULT '[]'
+      exclude_json TEXT NOT NULL DEFAULT '[]',
+      tone_override TEXT,
+      tone_mode TEXT NOT NULL DEFAULT 'append' CHECK(tone_mode IN ('append','replace'))
     );
 
     CREATE TABLE IF NOT EXISTS config_watch_repos (
-      slug TEXT PRIMARY KEY
+      slug TEXT PRIMARY KEY,
+      tone_override TEXT,
+      tone_mode TEXT NOT NULL DEFAULT 'append' CHECK(tone_mode IN ('append','replace'))
     );
 
     CREATE TABLE IF NOT EXISTS config_skip_authors (
       username TEXT PRIMARY KEY
     );
   `);
+
+  // Migration for DBs created before per-repo tones: add the tone columns if
+  // they don't already exist. sqlite can't IF NOT EXISTS a column, so probe
+  // and tolerate the duplicate-column error.
+  migrateAddColumn(db, "config_watch_orgs", "tone_override", "TEXT");
+  migrateAddColumn(
+    db,
+    "config_watch_orgs",
+    "tone_mode",
+    "TEXT NOT NULL DEFAULT 'append'",
+  );
+  migrateAddColumn(db, "config_watch_repos", "tone_override", "TEXT");
+  migrateAddColumn(
+    db,
+    "config_watch_repos",
+    "tone_mode",
+    "TEXT NOT NULL DEFAULT 'append'",
+  );
 
   // Prepared statements
   const stmts = {
@@ -186,21 +235,39 @@ export function openStore(path: string): Store {
     allScalars: db.prepare(`SELECT key, value FROM config_scalars`),
 
     listOrgs: db.prepare(
-      `SELECT name, mode, include_json, exclude_json
+      `SELECT name, mode, include_json, exclude_json, tone_override, tone_mode
        FROM config_watch_orgs ORDER BY name`,
     ),
+    getOrg: db.prepare(
+      `SELECT name, mode, include_json, exclude_json, tone_override, tone_mode
+       FROM config_watch_orgs WHERE name = ?`,
+    ),
     upsertOrg: db.prepare(
-      `INSERT INTO config_watch_orgs(name, mode, include_json, exclude_json)
-       VALUES (?, ?, ?, ?)
+      `INSERT INTO config_watch_orgs(name, mode, include_json, exclude_json, tone_override, tone_mode)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(name) DO UPDATE SET
          mode=excluded.mode,
          include_json=excluded.include_json,
-         exclude_json=excluded.exclude_json`,
+         exclude_json=excluded.exclude_json,
+         tone_override=excluded.tone_override,
+         tone_mode=excluded.tone_mode`,
     ),
     deleteOrg: db.prepare(`DELETE FROM config_watch_orgs WHERE name=?`),
 
     listWatchedRepos: db.prepare(`SELECT slug FROM config_watch_repos ORDER BY slug`),
-    addRepo: db.prepare(`INSERT OR IGNORE INTO config_watch_repos(slug) VALUES (?)`),
+    listWatchedRepoRows: db.prepare(
+      `SELECT slug, tone_override, tone_mode FROM config_watch_repos ORDER BY slug`,
+    ),
+    getRepoRow: db.prepare(
+      `SELECT slug, tone_override, tone_mode FROM config_watch_repos WHERE slug=?`,
+    ),
+    addRepo: db.prepare(
+      `INSERT OR IGNORE INTO config_watch_repos(slug, tone_override, tone_mode)
+       VALUES (?, NULL, 'append')`,
+    ),
+    setRepoTone: db.prepare(
+      `UPDATE config_watch_repos SET tone_override=?, tone_mode=? WHERE slug=?`,
+    ),
     removeRepo: db.prepare(`DELETE FROM config_watch_repos WHERE slug=?`),
 
     listSkipAuthors: db.prepare(
@@ -289,8 +356,19 @@ export function openStore(path: string): Store {
     listOrgs() {
       return stmts.listOrgs.all() as OrgRow[];
     },
+    getOrg(name) {
+      const row = stmts.getOrg.get(name) as OrgRow | undefined;
+      return row ?? null;
+    },
     upsertOrg(row) {
-      stmts.upsertOrg.run(row.name, row.mode, row.include_json, row.exclude_json);
+      stmts.upsertOrg.run(
+        row.name,
+        row.mode,
+        row.include_json,
+        row.exclude_json,
+        row.tone_override,
+        row.tone_mode,
+      );
     },
     deleteOrg(name) {
       stmts.deleteOrg.run(name);
@@ -300,8 +378,18 @@ export function openStore(path: string): Store {
       const rows = stmts.listWatchedRepos.all() as { slug: string }[];
       return rows.map((r) => r.slug);
     },
+    listWatchedRepoRows() {
+      return stmts.listWatchedRepoRows.all() as RepoRow[];
+    },
+    getRepo(slug) {
+      const row = stmts.getRepoRow.get(slug) as RepoRow | undefined;
+      return row ?? null;
+    },
     addWatchedRepo(slug) {
       stmts.addRepo.run(slug);
+    },
+    setRepoTone(slug, tone, mode) {
+      stmts.setRepoTone.run(tone, mode, slug);
     },
     removeWatchedRepo(slug) {
       stmts.removeRepo.run(slug);

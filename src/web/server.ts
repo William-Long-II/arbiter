@@ -10,6 +10,8 @@ import {
   handleOrgsPost,
   handleReposPost,
 } from "./routes/config.ts";
+import { orgEditRoute, handleOrgEditPost } from "./routes/org-edit.ts";
+import { repoEditRoute, handleRepoEditPost } from "./routes/repo-edit.ts";
 import { handleRecheck, handleToggleDryRun } from "./routes/actions.ts";
 import { redirect } from "./html.ts";
 import { log } from "../log.ts";
@@ -79,6 +81,34 @@ export function startWebServer(deps: ServerDeps) {
           const name = decodeURIComponent(rm[2]!);
           const pr = Number(rm[3]);
           return reviewDetailRoute({ store, repo: `${owner}/${name}`, pr });
+        }
+
+        // Org edit: GET /config/orgs/:name/edit, POST /config/orgs/:name
+        const orgEditMatch = url.pathname.match(/^\/config\/orgs\/([^/]+)\/edit$/);
+        if (method === "GET" && orgEditMatch) {
+          return orgEditRoute({
+            store,
+            cfg,
+            name: decodeURIComponent(orgEditMatch[1]!),
+          });
+        }
+        const orgPostMatch = url.pathname.match(/^\/config\/orgs\/([^/]+)$/);
+        if (method === "POST" && orgPostMatch) {
+          const form = await req.formData();
+          return handleOrgEditPost(store, decodeURIComponent(orgPostMatch[1]!), form);
+        }
+
+        // Repo edit: GET /config/repos/:owner/:name/edit, POST /config/repos/:owner/:name
+        const repoEditMatch = url.pathname.match(/^\/config\/repos\/([^/]+)\/([^/]+)\/edit$/);
+        if (method === "GET" && repoEditMatch) {
+          const slug = `${decodeURIComponent(repoEditMatch[1]!)}/${decodeURIComponent(repoEditMatch[2]!)}`;
+          return repoEditRoute({ store, cfg, slug });
+        }
+        const repoPostMatch = url.pathname.match(/^\/config\/repos\/([^/]+)\/([^/]+)$/);
+        if (method === "POST" && repoPostMatch) {
+          const slug = `${decodeURIComponent(repoPostMatch[1]!)}/${decodeURIComponent(repoPostMatch[2]!)}`;
+          const form = await req.formData();
+          return handleRepoEditPost(store, slug, form);
         }
 
         if (method === "POST" && url.pathname === "/config/general") {

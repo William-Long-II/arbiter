@@ -9,6 +9,7 @@ import { buildReviewPrompt } from "./claude/prompt.ts";
 import { invokeClaude } from "./claude/invoke.ts";
 import { validateReview } from "./review/validate.ts";
 import { postReview } from "./review/post.ts";
+import { resolveTone } from "./review/tone.ts";
 import { log } from "./log.ts";
 
 export async function runTick(args: { gh: GH; cfg: Config; store: Store }): Promise<void> {
@@ -85,14 +86,24 @@ async function processPr(gh: GH, cfg: Config, store: Store, pr: PullRef): Promis
   }
 
   const ctx = await fetchPrContext(gh, pr.repo, pr.number);
+  const resolvedTone = resolveTone({
+    cfg,
+    owner: pr.repo.owner,
+    name: pr.repo.name,
+  });
   const prompt = buildReviewPrompt({
     pr: ctx,
     repo: repoSlug,
     pullNumber: pr.number,
-    tone: cfg.review.tone,
+    tone: resolvedTone,
   });
 
-  log.info("claude.invoke", { ...tag, files: ctx.files.length, promptBytes: prompt.length });
+  log.info("claude.invoke", {
+    ...tag,
+    files: ctx.files.length,
+    promptBytes: prompt.length,
+    toneBytes: resolvedTone.length,
+  });
 
   const result = await invokeClaude({
     command: cfg.claude.command,
@@ -174,7 +185,7 @@ async function processPr(gh: GH, cfg: Config, store: Store, pr: PullRef): Promis
     prNumber: pr.number,
     headSha: pr.head_sha,
     verdict: persisted,
-    note: buildReviewNote(validated),
+    note: buildReviewNote(validated, resolvedTone),
   });
 
   store.recordEvent({
@@ -201,20 +212,24 @@ async function processPr(gh: GH, cfg: Config, store: Store, pr: PullRef): Promis
   });
 }
 
-function buildReviewNote(v: {
-  summary: string;
-  valid: unknown[];
-  dropped: unknown[];
-  verdict: string;
-}): string {
+function buildReviewNote(
+  v: {
+    summary: string;
+    valid: unknown[];
+    dropped: unknown[];
+    verdict: string;
+  },
+  toneUsed: string,
+): string {
   const payload = {
     verdict: v.verdict,
     valid: v.valid,
     dropped: v.dropped,
     summary: v.summary,
+    tone_used: toneUsed,
   };
   const json = JSON.stringify(payload);
-  // Note is indexed by sqlite but not size-constrained; cap at 512KB to be safe.
+  // Note is not size-constrained by sqlite; cap at 512KB to be safe.
   return json.slice(0, 512 * 1024);
 }
 
