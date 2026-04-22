@@ -193,18 +193,54 @@ claude:
     }
   });
 
-  test("clearDedupe removes reviews for a PR", () => {
+  test("clearDedupe without sha removes all rows for a PR, with sha only that one", () => {
     const { path, cleanup } = tmpDb();
     try {
       const store = openStore(path);
       store.recordReview({ repo: "a/b", prNumber: 1, headSha: "sha1", verdict: "approve" });
       store.recordReview({ repo: "a/b", prNumber: 1, headSha: "sha2", verdict: "dry_run" });
       store.recordReview({ repo: "a/b", prNumber: 2, headSha: "sha3", verdict: "approve" });
-      expect(store.hasReviewed("a/b", 1, "sha1")).toBe(true);
-      const removed = store.clearDedupe("a/b", 1);
-      expect(removed).toBe(2);
+
+      // SHA-scoped: only sha1 is removed; sha2 on the same PR survives.
+      const removedOne = store.clearDedupe("a/b", 1, "sha1");
+      expect(removedOne).toBe(1);
       expect(store.hasReviewed("a/b", 1, "sha1")).toBe(false);
+      expect(store.hasReviewed("a/b", 1, "sha2")).toBe(true);
+
+      // PR-wide: both remaining rows for PR 1 are removed; PR 2 untouched.
+      const removedAll = store.clearDedupe("a/b", 1);
+      expect(removedAll).toBe(1);
+      expect(store.hasReviewed("a/b", 1, "sha2")).toBe(false);
       expect(store.hasReviewed("a/b", 2, "sha3")).toBe(true);
+
+      store.close();
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("pruneEvents removes rows older than the window", () => {
+    const { path, cleanup } = tmpDb();
+    try {
+      const store = openStore(path);
+      const insert = store.db.prepare(
+        `INSERT INTO events(ts, level, kind, message) VALUES (?, 'info', 'x', ?)`,
+      );
+      const now = Date.now();
+      const day = 24 * 60 * 60 * 1000;
+      insert.run(new Date(now - 45 * day).toISOString(), "old-45d");
+      insert.run(new Date(now - 20 * day).toISOString(), "mid-20d");
+      insert.run(new Date(now - 1 * day).toISOString(), "fresh-1d");
+
+      expect(store.pruneEvents(30)).toBe(1); // only 45d row
+      const remaining = store.recentEvents(10).map((e) => e.message);
+      expect(remaining).toContain("mid-20d");
+      expect(remaining).toContain("fresh-1d");
+      expect(remaining).not.toContain("old-45d");
+
+      expect(store.pruneEvents(0)).toBe(0); // zero days = no-op guard
+      expect(store.pruneEvents(-5)).toBe(0);
+
       store.close();
     } finally {
       cleanup();

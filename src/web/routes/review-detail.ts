@@ -54,7 +54,8 @@ export function reviewDetailRoute(args: {
         <form method="post" action="/actions/recheck" class="inline">
           <input type="hidden" name="repo" value="${args.repo}">
           <input type="hidden" name="pr" value="${args.pr}">
-          <button type="submit" class="danger">Clear dedupe → re-review on next tick</button>
+          <input type="hidden" name="head_sha" value="${review.head_sha}">
+          <button type="submit" class="danger">Re-review this SHA</button>
         </form>
       </div>
     </section>
