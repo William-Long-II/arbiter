@@ -49,6 +49,7 @@ export const ConfigSchema = z.object({
       "Be constructive and specific. Explain WHY and HOW for every issue.",
     ),
     skip_drafts: z.boolean().default(true),
+    skip_bots: z.boolean().default(true),
     require_ci_green: z.boolean().default(true),
   }),
   poll: z.object({
@@ -78,6 +79,7 @@ export const SCALAR_DEFAULTS: Record<string, string> = {
   "review.tone":
     "Be constructive and specific. Explain WHY and HOW for every issue.",
   "review.skip_drafts": "true",
+  "review.skip_bots": "true",
   "review.require_ci_green": "true",
   "poll.interval_seconds": "60",
   "claude.command": "claude",
@@ -114,6 +116,7 @@ export function loadConfigFromStore(store: Store): Config {
       max_approvals_per_hour: asInt(scalars["review.max_approvals_per_hour"], 10),
       tone: scalars["review.tone"] ?? "",
       skip_drafts: asBool(scalars["review.skip_drafts"], true),
+      skip_bots: asBool(scalars["review.skip_bots"], true),
       require_ci_green: asBool(scalars["review.require_ci_green"], true),
     },
     poll: {
@@ -159,6 +162,7 @@ export function bootstrapFromYaml(store: Store, yamlPath: string): boolean {
   store.setScalar("review.max_approvals_per_hour", String(cfg.review.max_approvals_per_hour));
   store.setScalar("review.tone", cfg.review.tone);
   store.setScalar("review.skip_drafts", String(cfg.review.skip_drafts));
+  store.setScalar("review.skip_bots", String(cfg.review.skip_bots));
   store.setScalar("review.require_ci_green", String(cfg.review.require_ci_green));
   store.setScalar("poll.interval_seconds", String(cfg.poll.interval_seconds));
   store.setScalar("claude.command", cfg.claude.command);

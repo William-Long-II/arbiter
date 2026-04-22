@@ -46,6 +46,13 @@ export function configRoute(args: {
             </select>
           </div>
           <div>
+            <label>Skip bots (dependabot, renovate, github-actions, …)</label>
+            <select name="skip_bots">
+              <option value="true" ${cfg.review.skip_bots ? "selected" : ""}>true</option>
+              <option value="false" ${!cfg.review.skip_bots ? "selected" : ""}>false</option>
+            </select>
+          </div>
+          <div>
             <label>Require CI green</label>
             <select name="require_ci_green">
               <option value="true" ${cfg.review.require_ci_green ? "selected" : ""}>true</option>
@@ -172,6 +179,7 @@ export async function handleGeneralPost(
   const dryRun = String(form.get("dry_run") ?? "true") === "true";
   const cap = clampInt(form.get("max_approvals_per_hour"), 1, 1000, 10);
   const skipDrafts = String(form.get("skip_drafts") ?? "true") === "true";
+  const skipBots = String(form.get("skip_bots") ?? "true") === "true";
   const requireCi = String(form.get("require_ci_green") ?? "true") === "true";
   const interval = clampInt(form.get("interval_seconds"), 10, 86400, 60);
   const claudeCmd = String(form.get("claude_command") ?? "claude").trim() || "claude";
@@ -182,6 +190,7 @@ export async function handleGeneralPost(
   store.setScalar("review.max_approvals_per_hour", String(cap));
   store.setScalar("review.tone", tone);
   store.setScalar("review.skip_drafts", String(skipDrafts));
+  store.setScalar("review.skip_bots", String(skipBots));
   store.setScalar("review.require_ci_green", String(requireCi));
   store.setScalar("poll.interval_seconds", String(interval));
   store.setScalar("claude.command", claudeCmd);
