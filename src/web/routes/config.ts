@@ -130,7 +130,7 @@ export function configRoute(args: {
                   <td class="mono">${r.slug}</td>
                   <td class="muted">${r.tone_override === null ? "inherits" : html`${r.tone_mode}s ${r.tone_override.length}c`}</td>
                   <td class="right">
-                    <a href="/config/repos/${encodeURIComponent(r.slug)}/edit">edit</a>
+                    <a href="/config/repos/${repoEditPath(r.slug)}/edit">edit</a>
                     &nbsp;
                     <form method="post" action="/config/repos" class="inline">
                       <input type="hidden" name="_action" value="delete">
@@ -271,6 +271,16 @@ function clampInt(v: FormDataEntryValue | null, min: number, max: number, fallba
   const n = Number(v);
   if (!Number.isFinite(n) || !Number.isInteger(n)) return fallback;
   return Math.max(min, Math.min(max, n));
+}
+
+/**
+ * Turn an "owner/name" slug into the two encoded path segments the server's
+ * route matcher expects. encodeURIComponent on the whole slug turns `/` into
+ * `%2F`, which then doesn't match the `:owner/:name` route pattern.
+ */
+function repoEditPath(slug: string): string {
+  const [owner, name] = slug.split("/");
+  return `${encodeURIComponent(owner ?? "")}/${encodeURIComponent(name ?? "")}`;
 }
 
 function parseArr(json: string): string[] {

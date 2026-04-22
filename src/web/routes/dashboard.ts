@@ -80,7 +80,12 @@ export function dashboardRoute(args: {
 }
 
 function reviewUrl(repo: string, pr: number): string {
-  return `/reviews/${encodeURIComponent(repo)}/${pr}`;
+  // Emit owner and name as SEPARATE path segments. Encoding the whole
+  // "owner/name" with encodeURIComponent produces "owner%2Fname" which
+  // the route matcher reads as a single segment and fails to match the
+  // three-segment :owner/:name/:pr pattern.
+  const [owner, name] = repo.split("/");
+  return `/reviews/${encodeURIComponent(owner ?? "")}/${encodeURIComponent(name ?? "")}/${pr}`;
 }
 
 function fmtRel(iso: string | null): string {
