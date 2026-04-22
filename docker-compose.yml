@@ -1,21 +1,23 @@
 services:
-  review-me:
+  auto-reviewer:
     build: .
-    image: review-me:latest
-    container_name: review-me
+    image: auto-reviewer:latest
+    container_name: auto-reviewer
     restart: unless-stopped
-    # The reverse proxy should terminate HTTPS and forward to this port.
-    ports:
-      - "127.0.0.1:3000:3000"
     env_file:
       - .env
-    # Mount repos.yaml so operators can update the allowlist without
-    # rebuilding the image. Restart the container after editing.
     volumes:
-      - ./repos.yaml:/app/repos.yaml:ro
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
-      start_period: 10s
+      # Configuration. Edit locally and restart the container to apply.
+      - ./config.yaml:/app/config.yaml:ro
+
+      # The Claude Max session lives in ~/.claude on the host. Mount it so the
+      # containerized `claude -p` runs against your logged-in Max subscription
+      # instead of trying to start an OAuth flow it can't complete.
+      #
+      # IMPORTANT: the container runs as UID 1000. If your host ~/.claude
+      # directory is owned by a different UID, either chown it to 1000 or
+      # change UID/GID in the Dockerfile to match.
+      - ${HOME}/.claude:/home/reviewer/.claude
+
+      # Persistent state: reviewed-PR dedupe + per-hour approval counter.
+      - ./data:/app/data

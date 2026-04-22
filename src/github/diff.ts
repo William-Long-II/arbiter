@@ -1,121 +1,122 @@
-import type { Octokit } from "./client";
+import type { GH } from "./client.ts";
+import type { RepoRef } from "./discover.ts";
 
-export type PullRequestFile = {
-  filename: string;
-  status: "added" | "removed" | "modified" | "renamed" | "copied" | "changed" | "unchanged";
-  additions: number;
-  deletions: number;
-  changes: number;
-  patch?: string;
-  previous_filename?: string;
-  /** Estimated similarity percentage (0–100) for renamed files; absent for other statuses. */
-  similarity?: number;
+export type FileDiff = {
+  path: string;
+  /** Set of line numbers (on the RIGHT/new file) that appear as added or context in some hunk. */
+  rightLines: Set<number>;
+  /** Set of line numbers (on the LEFT/old file) that appear as deleted or context in some hunk. */
+  leftLines: Set<number>;
+  /** Raw unified-diff patch (for feeding to Claude). */
+  patch: string;
+  status: "added" | "modified" | "removed" | "renamed" | "copied" | "changed" | "unchanged";
 };
 
-export type PullRequestDiff = {
-  owner: string;
-  repo: string;
-  number: number;
-  headSha: string;
-  baseSha: string;
+export type PrContext = {
   title: string;
   body: string;
-  files: PullRequestFile[];
-  totals: { additions: number; deletions: number; changedFiles: number };
+  base_ref: string;
+  head_ref: string;
+  head_sha: string;
+  files: FileDiff[];
 };
 
-/**
- * Estimate rename similarity from a unified diff patch.
- *
- * Counts lines that begin with ' ' (context/unchanged), '+', or '-'.
- * Similarity = unchanged / (unchanged + changed).
- * Returns undefined when the patch is absent or has no measurable lines
- * (e.g. pure rename with no diff body beyond the hunk header).
- */
-function estimateSimilarity(patch: string | undefined, additions: number, deletions: number): number | undefined {
-  // Pure rename — no content change at all.
-  if (additions === 0 && deletions === 0) return 100;
+export async function fetchPrContext(
+  gh: GH,
+  repo: RepoRef,
+  pull_number: number,
+): Promise<PrContext> {
+  const pr = await gh.pulls.get({ owner: repo.owner, repo: repo.name, pull_number });
+  const files = await paginate(gh, repo, pull_number);
 
-  if (!patch) return undefined;
-
-  let unchanged = 0;
-  for (const line of patch.split("\n")) {
-    if (line.startsWith(" ")) unchanged++;
-  }
-
-  const changed = additions + deletions;
-  const total = unchanged + changed;
-  // Guard against degenerate patches with no measurable lines.
-  if (total === 0) return undefined;
-
-  return Math.round((unchanged / total) * 100);
-}
-
-/**
- * Build the `RENAMED:` header line that is prepended to the patch for renamed
- * files so downstream consumers (prompt builder) carry rename context without
- * requiring changes to src/review/prompt.ts.
- */
-function buildRenameHeader(previousPath: string, newPath: string, similarity: number | undefined): string {
-  const simPart = similarity !== undefined ? `${similarity}%` : "unknown";
-  return `RENAMED: ${previousPath} -> ${newPath} (similarity ${simPart})`;
-}
-
-export async function fetchPullRequestDiff(
-  octokit: Octokit,
-  owner: string,
-  repo: string,
-  number: number,
-): Promise<PullRequestDiff> {
-  const pr = await octokit.pulls.get({ owner, repo, pull_number: number });
-
-  const files: PullRequestFile[] = [];
-  for await (const page of octokit.paginate.iterator(octokit.pulls.listFiles, {
-    owner,
-    repo,
-    pull_number: number,
-    per_page: 100,
-  })) {
-    for (const f of page.data) {
-      let patch = f.patch;
-      let similarity: number | undefined;
-
-      if (f.status === "renamed") {
-        // previous_filename is guaranteed by the GitHub API for renamed files;
-        // fall back to treating the file as modified if it is somehow absent.
-        const previousPath = f.previous_filename ?? f.filename;
-        similarity = estimateSimilarity(patch, f.additions, f.deletions);
-        const header = buildRenameHeader(previousPath, f.filename, similarity);
-        // For pure renames the patch is undefined; the header becomes the full patch.
-        patch = patch ? `${header}\n\n${patch}` : header;
-      }
-
-      files.push({
-        filename: f.filename,
-        status: f.status,
-        additions: f.additions,
-        deletions: f.deletions,
-        changes: f.changes,
+  return {
+    title: pr.data.title,
+    body: pr.data.body ?? "",
+    base_ref: pr.data.base.ref,
+    head_ref: pr.data.head.ref,
+    head_sha: pr.data.head.sha,
+    files: files.map((f) => {
+      const patch = f.patch ?? "";
+      const { rightLines, leftLines } = parseHunks(patch);
+      return {
+        path: f.filename,
         patch,
-        previous_filename: f.previous_filename,
-        ...(similarity !== undefined ? { similarity } : {}),
-      });
+        rightLines,
+        leftLines,
+        status: f.status as FileDiff["status"],
+      };
+    }),
+  };
+}
+
+async function paginate(gh: GH, repo: RepoRef, pull_number: number) {
+  const all: Awaited<ReturnType<GH["pulls"]["listFiles"]>>["data"] = [];
+  let page = 1;
+  while (true) {
+    const res = await gh.pulls.listFiles({
+      owner: repo.owner,
+      repo: repo.name,
+      pull_number,
+      per_page: 100,
+      page,
+    });
+    all.push(...res.data);
+    if (res.data.length < 100) break;
+    page += 1;
+  }
+  return all;
+}
+
+/**
+ * Parse a unified-diff patch (as returned by GitHub) into the sets of line
+ * numbers GitHub will accept for review comments.
+ *
+ * Hunk header format:  @@ -<oldStart>,<oldCount> +<newStart>,<newCount> @@ ...
+ * Counts are optional (default 1). Within a hunk:
+ *   ' '  = context  (advances both sides)
+ *   '+'  = addition (advances RIGHT only)
+ *   '-'  = deletion (advances LEFT only)
+ *   '\'  = "No newline at end of file" marker — ignore
+ */
+export function parseHunks(patch: string): { rightLines: Set<number>; leftLines: Set<number> } {
+  const rightLines = new Set<number>();
+  const leftLines = new Set<number>();
+  if (!patch) return { rightLines, leftLines };
+
+  const lines = patch.split("\n");
+  let oldLine = 0;
+  let newLine = 0;
+  let inHunk = false;
+
+  for (const raw of lines) {
+    const header = raw.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    if (header) {
+      oldLine = Number(header[1]);
+      newLine = Number(header[2]);
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk) continue;
+    if (raw.startsWith("\\")) continue;
+
+    const marker = raw[0];
+    if (marker === "+") {
+      rightLines.add(newLine);
+      newLine += 1;
+    } else if (marker === "-") {
+      leftLines.add(oldLine);
+      oldLine += 1;
+    } else if (marker === " " || marker === undefined) {
+      // context line (or a completely blank line, which is still context)
+      rightLines.add(newLine);
+      leftLines.add(oldLine);
+      newLine += 1;
+      oldLine += 1;
+    } else {
+      // Unexpected marker — bail out of the hunk to be safe.
+      inHunk = false;
     }
   }
 
-  return {
-    owner,
-    repo,
-    number,
-    headSha: pr.data.head.sha,
-    baseSha: pr.data.base.sha,
-    title: pr.data.title,
-    body: pr.data.body ?? "",
-    files,
-    totals: {
-      additions: pr.data.additions,
-      deletions: pr.data.deletions,
-      changedFiles: pr.data.changed_files,
-    },
-  };
+  return { rightLines, leftLines };
 }

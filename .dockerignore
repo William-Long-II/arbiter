@@ -1,13 +1,14 @@
 .git
 .github
+.claude
 node_modules
 tests
-fixtures
-scripts
+data
 dist
 out
 coverage
 *.log
+*.sqlite*
 .env
 .env.*
 !.env.example
