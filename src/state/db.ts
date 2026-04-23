@@ -88,6 +88,20 @@ export type WebhookDeliveryRow = {
   received_at: string;
 };
 
+/**
+ * Per-bot-comment thread watermark. One row exists for every bot-authored
+ * review comment the bot has ever responded to a reply on. Used by #136
+ * to prevent re-answering the same human reply after the next tick's
+ * comment listing returns before the bot's response is visible.
+ */
+export type ReviewThreadRow = {
+  repo: string;
+  pr_number: number;
+  root_comment_id: number;
+  last_responded_to_reply_id: number;
+  last_responded_at: string;
+};
+
 export type StoreCounts = {
   reviews: number;
   events: number;
@@ -199,6 +213,18 @@ export type Store = {
   listSkipAuthors(): string[];
   addSkipAuthor(username: string): void;
   removeSkipAuthor(username: string): void;
+
+  // review_threads (threaded reply watermark per bot comment)
+  /** Every stored thread for a given PR. Empty list if the bot hasn't
+   *  replied to anything on this PR yet. */
+  listReviewThreads(repo: string, prNumber: number): ReviewThreadRow[];
+  /** Upsert the watermark for (repo, pr, root_comment_id). */
+  upsertReviewThread(args: {
+    repo: string;
+    pr_number: number;
+    root_comment_id: number;
+    last_responded_to_reply_id: number;
+  }): void;
 
   // webhook deliveries (dedup by GitHub's X-GitHub-Delivery UUID)
   /** Returns true if this delivery_id was already seen (no insert performed). */
@@ -351,6 +377,21 @@ export function openStore(path: string): Store {
       received_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_received_at ON webhook_deliveries(received_at);
+
+    -- Per-bot-comment watermark for threaded reply iteration. One row is
+    -- upserted for every bot-authored review comment the bot responds on.
+    -- "last_responded_to_reply_id" is the greatest reply id the bot has
+    -- already answered; the loop skips threads whose latest reply id is
+    -- <= this value, preventing the bot from answering the same human
+    -- message twice across ticks.
+    CREATE TABLE IF NOT EXISTS review_threads (
+      repo TEXT NOT NULL,
+      pr_number INTEGER NOT NULL,
+      root_comment_id INTEGER NOT NULL,
+      last_responded_to_reply_id INTEGER NOT NULL,
+      last_responded_at TEXT NOT NULL,
+      PRIMARY KEY (repo, pr_number, root_comment_id)
+    );
   `);
 
   // Migration for DBs created before per-repo tones: add the tone columns if
@@ -550,6 +591,18 @@ export function openStore(path: string): Store {
     ),
     pruneWebhookDeliveries: db.prepare(
       `DELETE FROM webhook_deliveries WHERE received_at < ?`,
+    ),
+
+    listReviewThreads: db.prepare(
+      `SELECT repo, pr_number, root_comment_id, last_responded_to_reply_id, last_responded_at
+       FROM review_threads WHERE repo=? AND pr_number=?`,
+    ),
+    upsertReviewThread: db.prepare(
+      `INSERT INTO review_threads(repo, pr_number, root_comment_id, last_responded_to_reply_id, last_responded_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(repo, pr_number, root_comment_id) DO UPDATE SET
+         last_responded_to_reply_id=excluded.last_responded_to_reply_id,
+         last_responded_at=excluded.last_responded_at`,
     ),
   };
 
@@ -809,6 +862,15 @@ export function openStore(path: string): Store {
       const info = stmts.pruneWebhookDeliveries.run(cutoff) as { changes: number };
       bump();
       return info.changes;
+    },
+
+    listReviewThreads(repo, prNumber) {
+      return stmts.listReviewThreads.all(repo, prNumber) as ReviewThreadRow[];
+    },
+    upsertReviewThread({ repo, pr_number, root_comment_id, last_responded_to_reply_id }) {
+      const now = new Date().toISOString();
+      stmts.upsertReviewThread.run(repo, pr_number, root_comment_id, last_responded_to_reply_id, now);
+      bump();
     },
 
     close() {
