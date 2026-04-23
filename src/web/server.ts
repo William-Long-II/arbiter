@@ -30,6 +30,7 @@ import { webhookRoute } from "./routes/webhook.ts";
 import { authLoginRoute, authCallbackRoute, authLogoutRoute } from "./routes/auth.ts";
 import { usersRoute, handleUserRolePost, handleUserDeletePost } from "./routes/users.ts";
 import { healthRoute, versionRoute, setCurrentVersionInfo, type VersionInfo } from "./routes/health.ts";
+import { backupRoute } from "./routes/backup.ts";
 import { hashSessionToken, parseCookies, SESSION_COOKIE_NAME } from "../auth/session.ts";
 import { redirect } from "./html.ts";
 import { log } from "../log.ts";
@@ -125,6 +126,17 @@ function buildRoutes(opts: {
       method: "GET",
       pattern: "/api/version",
       handler: () => versionRoute({ info: versionInfo }),
+    },
+    // Online SQLite snapshot download. Admin-only: a backup file IS the
+    // entire config + audit trail + session tokens (hashed) + review
+    // note bodies. Not something to hand to a viewer. The same VACUUM
+    // INTO mechanism scripts/backup.sh uses, exposed here so an operator
+    // with only UI access can still get a backup.
+    {
+      method: "GET",
+      pattern: "/api/backup",
+      requireAdmin: true,
+      handler: ({ store }) => backupRoute({ store }),
     },
 
     // Dashboard + JSON status feed.
