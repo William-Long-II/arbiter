@@ -54,6 +54,9 @@ export function configRoute(args: {
         <label>Bot GitHub username (the account whose PAT posts reviews)</label>
         <input type="text" name="bot_username" value="${cfg.github.bot_username}" placeholder="my-review-bot" required>
 
+        <label title="When set alongside GITHUB_OAUTH_CLIENT_SECRET env, switches from basic auth to session-based GitHub login. Leave empty to keep basic auth.">GitHub OAuth App client id (optional)</label>
+        <input type="text" name="oauth_client_id" value="${cfg.github.oauth_client_id}" placeholder="Iv23li0... (leave empty for basic auth)">
+
         <label>Skip authors (one per line) — PRs by these users are ignored</label>
         <textarea name="skip_authors" placeholder="your-github-login&#10;teammate-to-skip">${skipAuthors.join("\n")}</textarea>
 
@@ -204,6 +207,23 @@ export function configRoute(args: {
     </section>
 
     <section class="card">
+      <h2>GitHub OAuth</h2>
+      <p><a href="/config/users">→ Manage users and roles</a> (admin only; visible only when OAuth is configured and a valid session exists).</p>
+      <p class="muted">
+        When both <code>github.oauth_client_id</code> (in the General form
+        above) AND the <code>GITHUB_OAUTH_CLIENT_SECRET</code> env var are
+        set, the UI switches from basic auth to session-based GitHub
+        login. The first person to successfully sign in is auto-promoted
+        to admin; subsequent logins come in as viewers. Admins manage
+        roles on <a href="/config/users">/config/users</a>. Register the
+        OAuth app at github.com/settings/developers with callback URL
+        <code>&lt;your-host&gt;/auth/github/callback</code>. The client
+        secret belongs in <code>.env</code> — it would be a mistake to
+        store it in the DB where a snapshot could leak it.
+      </p>
+    </section>
+
+    <section class="card">
       <h2>Webhook ingest</h2>
       <p class="muted">
         When a webhook secret is configured, GitHub can POST to
@@ -327,6 +347,7 @@ export async function handleGeneralPost(
     github: {
       bot_username: String(form.get("bot_username") ?? "").trim(),
       skip_authors: skip,
+      oauth_client_id: String(form.get("oauth_client_id") ?? "").trim(),
     },
     review: {
       ...currentCfg.review,
@@ -373,6 +394,7 @@ export async function handleGeneralPost(
 
   const cfg = validated.cfg;
   store.setScalar("github.bot_username", cfg.github.bot_username);
+  store.setScalar("github.oauth_client_id", cfg.github.oauth_client_id);
   store.setScalar("review.dry_run", String(cfg.review.dry_run));
   store.setScalar("review.max_approvals_per_hour", String(cfg.review.max_approvals_per_hour));
   store.setScalar("review.tone", cfg.review.tone);

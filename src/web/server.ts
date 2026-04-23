@@ -27,6 +27,9 @@ import {
 import { statusApiRoute } from "./routes/status-api.ts";
 import { metricsApiRoute } from "./routes/metrics-api.ts";
 import { webhookRoute } from "./routes/webhook.ts";
+import { authLoginRoute, authCallbackRoute, authLogoutRoute } from "./routes/auth.ts";
+import { usersRoute, handleUserRolePost, handleUserDeletePost } from "./routes/users.ts";
+import { hashSessionToken, parseCookies, SESSION_COOKIE_NAME } from "../auth/session.ts";
 import { redirect } from "./html.ts";
 import { log } from "../log.ts";
 import { requireAuth } from "./auth.ts";
@@ -42,6 +45,13 @@ export type ServerDeps = {
    * means webhook ingest is disabled; /webhook/github will respond 503.
    */
   webhookSecret: string;
+  /**
+   * GitHub OAuth. When both clientId and clientSecret are non-empty,
+   * session-based auth takes precedence over basic auth; otherwise the
+   * existing basic-auth behavior is unchanged.
+   */
+  oauthClientId: string;
+  oauthClientSecret: string;
 };
 
 /**
@@ -56,9 +66,22 @@ type RouteContext = {
   match: RegExpMatchArray | null;
   store: Store;
   runtime: Runtime;
+  /** Session user when OAuth is configured AND a valid session exists. Null otherwise. */
+  user: { login: string; role: "admin" | "viewer" } | null;
 };
 type Handler = (ctx: RouteContext) => Response | Promise<Response>;
-type Route = { method: Method; pattern: string | RegExp; handler: Handler };
+/**
+ * `requireAdmin` marks routes that mutate state. When OAuth is configured,
+ * the dispatcher 403s a non-admin user here before the handler runs.
+ * When OAuth is NOT configured (basic-auth fallback), the single basic-auth
+ * principal is treated as admin.
+ */
+type Route = {
+  method: Method;
+  pattern: string | RegExp;
+  handler: Handler;
+  requireAdmin?: boolean;
+};
 
 /**
  * Build the route table. Passed store + runtime here so handlers don't have
@@ -66,8 +89,11 @@ type Route = { method: Method; pattern: string | RegExp; handler: Handler };
  * Tested order: more-specific patterns first when shapes could collide (none
  * do today, but keep it defensive).
  */
-function buildRoutes(opts: { webhookSecret: string }): Route[] {
-  const { webhookSecret } = opts;
+function buildRoutes(opts: {
+  webhookSecret: string;
+  oauth: { clientId: string; clientSecret: string };
+}): Route[] {
+  const { webhookSecret, oauth } = opts;
   return [
     // Health check is always open (the auth middleware bypasses it too).
     { method: "GET", pattern: "/healthz", handler: () => new Response("ok", { status: 200 }) },
@@ -134,6 +160,38 @@ function buildRoutes(opts: { webhookSecret: string }): Route[] {
     // Events.
     { method: "GET", pattern: "/events", handler: ({ store }) => eventsRoute({ store }) },
 
+    // User management (admin-only).
+    {
+      method: "GET",
+      pattern: "/config/users",
+      requireAdmin: true,
+      handler: ({ store, user }) =>
+        usersRoute({
+          store,
+          currentLogin: user?.login ?? "",
+          currentRole: user?.role ?? "admin",
+        }),
+    },
+
+    // GitHub OAuth entry points. These are OPEN (no auth required) —
+    // that's kind of the point. They're also not admin-gated.
+    {
+      method: "GET",
+      pattern: "/auth/github/login",
+      handler: ({ req, url }) => authLoginRoute({ req, url, oauth }),
+    },
+    {
+      method: "GET",
+      pattern: "/auth/github/callback",
+      handler: ({ req, url, store }) =>
+        authCallbackRoute({ req, url, store, oauth }),
+    },
+    {
+      method: "POST",
+      pattern: "/auth/logout",
+      handler: ({ req, url, store }) => authLogoutRoute({ req, url, store }),
+    },
+
     // Review detail. Placed AFTER /config/* GETs — the three-segment
     // pattern couldn't match any of them, but keeping the order
     // semantically route-specific -> route-specific -> review fallback
@@ -149,10 +207,14 @@ function buildRoutes(opts: { webhookSecret: string }): Route[] {
       },
     },
 
-    // Config POSTs — form submissions from the UI.
+    // Config POSTs — form submissions from the UI. All require admin
+    // role when OAuth is configured (viewers get a 403 from the
+    // dispatcher). Basic-auth deployments are single-principal so this
+    // flag is effectively ignored there.
     {
       method: "POST",
       pattern: "/config/general",
+      requireAdmin: true,
       handler: async ({ req, store }) => {
         const form = await req.formData();
         const currentCfg = loadConfigFromStore(store);
@@ -173,6 +235,7 @@ function buildRoutes(opts: { webhookSecret: string }): Route[] {
     {
       method: "POST",
       pattern: "/config/orgs",
+      requireAdmin: true,
       handler: async ({ req, store }) => {
         const form = await req.formData();
         const res = handleOrgsPost(store, form);
@@ -183,6 +246,7 @@ function buildRoutes(opts: { webhookSecret: string }): Route[] {
     {
       method: "POST",
       pattern: /^\/config\/orgs\/([^/]+)$/,
+      requireAdmin: true,
       handler: async ({ req, store, match }) => {
         const form = await req.formData();
         return handleOrgEditPost(store, decodeURIComponent(match![1]!), form);
@@ -191,6 +255,7 @@ function buildRoutes(opts: { webhookSecret: string }): Route[] {
     {
       method: "POST",
       pattern: /^\/config\/orgs\/([^/]+)\/intent\/jira$/,
+      requireAdmin: true,
       handler: async ({ req, store, match }) => {
         const form = await req.formData();
         return handleOrgJiraPost(store, decodeURIComponent(match![1]!), form);
@@ -199,6 +264,7 @@ function buildRoutes(opts: { webhookSecret: string }): Route[] {
     {
       method: "POST",
       pattern: /^\/config\/orgs\/([^/]+)\/intent\/linear$/,
+      requireAdmin: true,
       handler: async ({ req, store, match }) => {
         const form = await req.formData();
         return handleOrgLinearPost(store, decodeURIComponent(match![1]!), form);
@@ -207,6 +273,7 @@ function buildRoutes(opts: { webhookSecret: string }): Route[] {
     {
       method: "POST",
       pattern: "/config/repos",
+      requireAdmin: true,
       handler: async ({ req, store }) => {
         const form = await req.formData();
         const res = handleReposPost(store, form);
@@ -217,6 +284,7 @@ function buildRoutes(opts: { webhookSecret: string }): Route[] {
     {
       method: "POST",
       pattern: /^\/config\/repos\/([^/]+)\/([^/]+)$/,
+      requireAdmin: true,
       handler: async ({ req, store, match }) => {
         const slug = `${decodeURIComponent(match![1]!)}/${decodeURIComponent(match![2]!)}`;
         const form = await req.formData();
@@ -226,6 +294,7 @@ function buildRoutes(opts: { webhookSecret: string }): Route[] {
     {
       method: "POST",
       pattern: "/config/tone-templates",
+      requireAdmin: true,
       handler: async ({ req, store }) => {
         const form = await req.formData();
         return handleToneTemplatePost({ store, id: null, form });
@@ -234,21 +303,51 @@ function buildRoutes(opts: { webhookSecret: string }): Route[] {
     {
       method: "POST",
       pattern: /^\/config\/tone-templates\/(\d+)$/,
+      requireAdmin: true,
       handler: async ({ req, store, match }) => {
         const form = await req.formData();
         return handleToneTemplatePost({ store, id: Number(match![1]), form });
       },
     },
 
+    // User management POSTs (admin-only).
+    {
+      method: "POST",
+      pattern: /^\/config\/users\/([^/]+)\/role$/,
+      requireAdmin: true,
+      handler: async ({ req, store, match, user }) => {
+        const form = await req.formData();
+        return handleUserRolePost({
+          store,
+          login: decodeURIComponent(match![1]!),
+          currentLogin: user?.login ?? "",
+          form,
+        });
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/config\/users\/([^/]+)\/delete$/,
+      requireAdmin: true,
+      handler: ({ store, match, user }) =>
+        handleUserDeletePost({
+          store,
+          login: decodeURIComponent(match![1]!),
+          currentLogin: user?.login ?? "",
+        }),
+    },
+
     // One-shot actions.
     {
       method: "POST",
       pattern: "/actions/toggle-dry-run",
+      requireAdmin: true,
       handler: ({ store }) => handleToggleDryRun(store),
     },
     {
       method: "POST",
       pattern: "/actions/recheck",
+      requireAdmin: true,
       handler: async ({ req, store }) => {
         const form = await req.formData();
         return handleRecheck(store, form);
@@ -257,6 +356,7 @@ function buildRoutes(opts: { webhookSecret: string }): Route[] {
     {
       method: "POST",
       pattern: "/actions/retry-failure",
+      requireAdmin: true,
       handler: async ({ req, store }) => {
         const form = await req.formData();
         return handleRetryFailure(store, form);
@@ -265,6 +365,7 @@ function buildRoutes(opts: { webhookSecret: string }): Route[] {
     {
       method: "POST",
       pattern: "/actions/dismiss-failure",
+      requireAdmin: true,
       handler: async ({ req, store }) => {
         const form = await req.formData();
         return handleDismissFailure(store, form);
@@ -287,8 +388,12 @@ function matchRoute(routes: Route[], method: string, pathname: string) {
 }
 
 export function startWebServer(deps: ServerDeps) {
-  const { store, runtime, host, port, password, webhookSecret } = deps;
-  const routes = buildRoutes({ webhookSecret });
+  const { store, runtime, host, port, password, webhookSecret, oauthClientId, oauthClientSecret } = deps;
+  const oauthConfigured = oauthClientId.length > 0 && oauthClientSecret.length > 0;
+  const routes = buildRoutes({
+    webhookSecret,
+    oauth: { clientId: oauthClientId, clientSecret: oauthClientSecret },
+  });
 
   const server = Bun.serve({
     hostname: host,
@@ -310,12 +415,56 @@ export function startWebServer(deps: ServerDeps) {
         return await webhookRoute({ req, store, runtime, secret: webhookSecret });
       }
 
-      // /healthz is always open so Docker healthchecks and reverse proxies work
-      // without needing credentials. Everything else goes through basic auth
-      // when AUTO_REVIEWER_PASSWORD is set.
-      if (url.pathname !== "/healthz") {
-        const unauthorized = requireAuth(req, password);
-        if (unauthorized) return unauthorized;
+      // Paths that bypass every auth guard entirely. /healthz for proxies
+      // and the /auth/github/* OAuth dance which is how un-logged-in users
+      // become logged-in users (chicken/egg).
+      const isOpenPath =
+        url.pathname === "/healthz" ||
+        url.pathname.startsWith("/auth/github/");
+
+      // Session resolution. Cheap lookup when OAuth is configured and a
+      // cookie is present; no-op when not.
+      let user: { login: string; role: "admin" | "viewer" } | null = null;
+      if (oauthConfigured) {
+        const cookies = parseCookies(req.headers.get("cookie"));
+        const raw = cookies[SESSION_COOKIE_NAME];
+        if (raw) {
+          const session = store.getSession(hashSessionToken(raw));
+          if (session) {
+            if (new Date(session.expires_at).getTime() <= Date.now()) {
+              // Expired. Drop it defensively — next pruneExpiredSessions
+              // would do the same, but we want immediate.
+              store.deleteSession(session.token_hash);
+            } else {
+              const u = store.getUser(session.user_login);
+              if (u) {
+                store.touchSession(session.token_hash);
+                user = { login: u.login, role: u.role };
+              }
+            }
+          }
+        }
+      }
+
+      if (!isOpenPath) {
+        if (oauthConfigured) {
+          // OAuth mode: require a valid session. Redirect GETs to the
+          // login flow; 401 everything else so scripted clients don't
+          // silently follow the redirect.
+          if (!user) {
+            if (method === "GET") {
+              return new Response(null, {
+                status: 302,
+                headers: { location: "/auth/github/login" },
+              });
+            }
+            return new Response("Unauthorized", { status: 401 });
+          }
+        } else {
+          // Basic-auth fallback (single principal, pre-OAuth behavior).
+          const unauthorized = requireAuth(req, password);
+          if (unauthorized) return unauthorized;
+        }
       }
 
       // Same-origin guard for state-changing requests. Compare Origin against
@@ -331,12 +480,24 @@ export function startWebServer(deps: ServerDeps) {
       try {
         const hit = matchRoute(routes, method, url.pathname);
         if (!hit) return new Response("Not found", { status: 404 });
+
+        // Admin gate. In OAuth mode viewers get 403 on state-mutating
+        // routes; in basic-auth mode the single principal is treated
+        // as admin (so the flag is a no-op there).
+        if (hit.route.requireAdmin && oauthConfigured && user?.role !== "admin") {
+          return new Response("Forbidden: admin role required", {
+            status: 403,
+            headers: { "content-type": "text/plain; charset=utf-8" },
+          });
+        }
+
         return await hit.route.handler({
           req,
           url,
           match: hit.match,
           store,
           runtime,
+          user,
         });
       } catch (e) {
         log.error("web.unhandled", { error: (e as Error).message, path: url.pathname });

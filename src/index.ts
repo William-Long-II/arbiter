@@ -14,6 +14,7 @@ const WEB_HOST = process.env.AUTO_REVIEWER_WEB_HOST ?? "127.0.0.1";
 const WEB_PORT = Number(process.env.AUTO_REVIEWER_WEB_PORT ?? "8787");
 const WEB_PASSWORD = process.env.AUTO_REVIEWER_PASSWORD ?? "";
 const WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET ?? "";
+const OAUTH_CLIENT_SECRET = process.env.GITHUB_OAUTH_CLIENT_SECRET ?? "";
 const WEBHOOK_RETENTION_DAYS = Number(process.env.AUTO_REVIEWER_WEBHOOK_RETENTION_DAYS ?? "14");
 const EVENT_RETENTION_DAYS = Number(process.env.AUTO_REVIEWER_EVENT_RETENTION_DAYS ?? "30");
 const BREAKER_THRESHOLD = Number(process.env.AUTO_REVIEWER_BREAKER_THRESHOLD ?? "5");
@@ -86,6 +87,10 @@ const pruned = store.pruneEvents(EVENT_RETENTION_DAYS);
 if (pruned > 0) {
   log.info("startup.events_pruned", { removed: pruned, retentionDays: EVENT_RETENTION_DAYS });
 }
+const prunedSessions = store.pruneExpiredSessions();
+if (prunedSessions > 0) {
+  log.info("startup.sessions_pruned", { removed: prunedSessions });
+}
 const prunedDeliveries = store.pruneWebhookDeliveries(WEBHOOK_RETENTION_DAYS);
 if (prunedDeliveries > 0) {
   log.info("startup.webhook_deliveries_pruned", {
@@ -94,6 +99,11 @@ if (prunedDeliveries > 0) {
   });
 }
 
+// OAuth client_id is persisted in the store (operator editable via Config UI),
+// so we fetch it here instead of through an env var. The secret stays in env
+// because it's, well, a secret — the DB snapshot concern.
+const oauthClientId = store.getScalar("github.oauth_client_id") ?? "";
+
 startWebServer({
   store,
   runtime,
@@ -101,6 +111,8 @@ startWebServer({
   port: WEB_PORT,
   password: WEB_PASSWORD,
   webhookSecret: WEBHOOK_SECRET,
+  oauthClientId,
+  oauthClientSecret: OAUTH_CLIENT_SECRET,
 });
 
 if (!WEB_PASSWORD && WEB_HOST !== "127.0.0.1" && WEB_HOST !== "localhost") {

@@ -34,7 +34,22 @@ describe("config store", () => {
       expect(cfg.review.max_approvals_per_hour).toBe(10);
       expect(cfg.poll.interval_seconds).toBe(60);
       expect(cfg.claude.command).toBe("claude");
+      // OAuth client id defaults to empty (OAuth off) on a fresh DB.
+      expect(cfg.github.oauth_client_id).toBe("");
       expect(isConfigured(cfg)).toBe(false);
+      store.close();
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("github.oauth_client_id round-trips through the store", () => {
+    const { path, cleanup } = tmpDb();
+    try {
+      const store = openStore(path);
+      store.setScalar("github.oauth_client_id", "Iv23liTEST");
+      const cfg = loadConfigFromStore(store);
+      expect(cfg.github.oauth_client_id).toBe("Iv23liTEST");
       store.close();
     } finally {
       cleanup();

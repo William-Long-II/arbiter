@@ -41,6 +41,8 @@ td.mono,th.mono,code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,mono
 .tag.suggestion{background:rgba(88,166,255,.15);color:var(--accent)}
 .tag.issue{background:rgba(210,153,34,.18);color:var(--warn)}
 .tag.blocker{background:rgba(248,81,73,.18);color:var(--err)}
+.tag.admin{background:rgba(88,166,255,.15);color:var(--accent)}
+.tag.viewer{background:rgba(139,148,158,.18);color:var(--nit)}
 .tag.high{background:rgba(248,81,73,.18);color:var(--err)}
 .tag.medium{background:rgba(210,153,34,.18);color:var(--warn)}
 .tag.low{background:rgba(139,148,158,.18);color:var(--nit)}
@@ -110,6 +112,8 @@ export function layout(args: {
   body: RawHtml;
   /** Inline script injected before </body>. Use raw() — content is not escaped. */
   footScript?: RawHtml;
+  /** Logged-in session user — shows name + logout in the header. Null when OAuth isn't in use. */
+  sessionUser?: { login: string; role: "admin" | "viewer" } | null;
 }): RawHtml {
   const active = args.active;
   const cls = (k: typeof active) => (active === k ? "active" : "");
@@ -129,6 +133,15 @@ export function layout(args: {
       <a class="${cls("config")}" href="/config">Config</a>
       <a class="${cls("events")}" href="/events">Events</a>
     </nav>
+    ${args.sessionUser ? html`
+      <div style="margin-left:auto;display:flex;gap:10px;align-items:center;font-size:12px">
+        <span class="muted">${args.sessionUser.login}</span>
+        <span class="tag ${args.sessionUser.role}">${args.sessionUser.role}</span>
+        <form method="post" action="/auth/logout" class="inline">
+          <button type="submit" class="metrics-win">logout</button>
+        </form>
+      </div>
+    ` : ""}
   </div></header>
   <main>
     ${args.banner ? html`<div class="banner ${args.banner.kind}">${args.banner.message}</div>` : ""}

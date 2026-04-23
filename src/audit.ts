@@ -24,7 +24,9 @@ export type AuditAction =
   | "config.repo.delete"
   | "config.repo.edit"
   | "action.toggle_dry_run"
-  | "action.recheck";
+  | "action.recheck"
+  | "auth.role_change"
+  | "auth.user_delete";
 
 export type AuditChange = {
   /** Dotted field path (e.g. "review.concurrency", "watch.repos"). */
@@ -35,7 +37,15 @@ export type AuditChange = {
   to: string | null;
 };
 
-export function currentActor(): string {
+/**
+ * Resolve the identity to record in audit events. When a GitHub OAuth
+ * session is in play, the session's login wins. Otherwise we fall back
+ * to the AUTO_REVIEWER_OPERATOR env var, then the generic "operator"
+ * string. Accept an optional override so we don't have to wire async
+ * local storage just for this.
+ */
+export function currentActor(opts?: { sessionLogin?: string | null }): string {
+  if (opts?.sessionLogin) return opts.sessionLogin;
   return process.env.AUTO_REVIEWER_OPERATOR ?? "operator";
 }
 
@@ -107,6 +117,10 @@ function actionLabel(a: AuditAction): string {
       return "toggled dry-run";
     case "action.recheck":
       return "requested recheck for";
+    case "auth.role_change":
+      return "changed role of";
+    case "auth.user_delete":
+      return "removed user";
   }
 }
 
@@ -129,6 +143,7 @@ export function diffGeneralConfig(before: Config, after: Config): AuditChange[] 
   };
 
   scalar("github.bot_username", before.github.bot_username, after.github.bot_username);
+  scalar("github.oauth_client_id", before.github.oauth_client_id, after.github.oauth_client_id);
   scalar("review.dry_run", before.review.dry_run, after.review.dry_run);
   scalar(
     "review.max_approvals_per_hour",

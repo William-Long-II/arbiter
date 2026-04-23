@@ -88,6 +88,25 @@ export type WebhookDeliveryRow = {
   received_at: string;
 };
 
+export type UserRole = "admin" | "viewer";
+
+export type UserRow = {
+  login: string;
+  email: string | null;
+  role: UserRole;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SessionRow = {
+  /** SHA-256 of the raw cookie value. The raw token is only in the cookie. */
+  token_hash: string;
+  user_login: string;
+  created_at: string;
+  expires_at: string;
+  last_seen_at: string;
+};
+
 /**
  * Per-bot-comment thread watermark. One row exists for every bot-authored
  * review comment the bot has ever responded to a reply on. Used by #136
@@ -213,6 +232,30 @@ export type Store = {
   listSkipAuthors(): string[];
   addSkipAuthor(username: string): void;
   removeSkipAuthor(username: string): void;
+
+  // users + sessions (GitHub OAuth)
+  countUsers(): number;
+  listUsers(): UserRow[];
+  getUser(login: string): UserRow | null;
+  /** Insert on first sight, update email on subsequent. Role is preserved
+   *  on update; use setUserRole to change it explicitly. Returns true when
+   *  the row was newly inserted. */
+  upsertUser(args: { login: string; email: string | null; roleIfNew: UserRole }): boolean;
+  setUserRole(login: string, role: UserRole): void;
+  /** Remove a user and every session they own. */
+  deleteUser(login: string): void;
+
+  createSession(args: {
+    token_hash: string;
+    user_login: string;
+    expires_at: string;
+  }): void;
+  getSession(token_hash: string): SessionRow | null;
+  touchSession(token_hash: string): void;
+  deleteSession(token_hash: string): void;
+  /** Delete every session belonging to one user (used on role demotion / delete). */
+  deleteSessionsForUser(user_login: string): void;
+  pruneExpiredSessions(): number;
 
   // review_threads (threaded reply watermark per bot comment)
   /** Every stored thread for a given PR. Empty list if the bot hasn't
@@ -377,6 +420,32 @@ export function openStore(path: string): Store {
       received_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_received_at ON webhook_deliveries(received_at);
+
+    -- GitHub OAuth users. Populated on first successful callback. Role is
+    -- admin for whoever completes the first-ever login (when the table is
+    -- empty), viewer for everyone after. Admins can promote/demote via
+    -- the /config/users page.
+    CREATE TABLE IF NOT EXISTS users (
+      login TEXT PRIMARY KEY,
+      email TEXT,
+      role TEXT NOT NULL CHECK(role IN ('admin','viewer')),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    -- Server-side session store. token_hash is SHA-256(cookie value) so a
+    -- DB dump doesn't yield usable session cookies. expires_at enforces
+    -- the TTL; pruneExpiredSessions sweeps on boot.
+    CREATE TABLE IF NOT EXISTS sessions (
+      token_hash TEXT PRIMARY KEY,
+      user_login TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      FOREIGN KEY (user_login) REFERENCES users(login) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_login);
+    CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
 
     -- Per-bot-comment watermark for threaded reply iteration. One row is
     -- upserted for every bot-authored review comment the bot responds on.
@@ -592,6 +661,39 @@ export function openStore(path: string): Store {
     pruneWebhookDeliveries: db.prepare(
       `DELETE FROM webhook_deliveries WHERE received_at < ?`,
     ),
+
+    countUsers: db.prepare(`SELECT COUNT(*) AS n FROM users`),
+    listUsers: db.prepare(
+      `SELECT login, email, role, created_at, updated_at FROM users ORDER BY login`,
+    ),
+    getUser: db.prepare(
+      `SELECT login, email, role, created_at, updated_at FROM users WHERE login=?`,
+    ),
+    insertUser: db.prepare(
+      `INSERT INTO users(login, email, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+    ),
+    updateUserEmail: db.prepare(
+      `UPDATE users SET email=?, updated_at=? WHERE login=?`,
+    ),
+    setUserRole: db.prepare(
+      `UPDATE users SET role=?, updated_at=? WHERE login=?`,
+    ),
+    deleteUser: db.prepare(`DELETE FROM users WHERE login=?`),
+
+    createSession: db.prepare(
+      `INSERT INTO sessions(token_hash, user_login, created_at, expires_at, last_seen_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    ),
+    getSession: db.prepare(
+      `SELECT token_hash, user_login, created_at, expires_at, last_seen_at
+       FROM sessions WHERE token_hash=?`,
+    ),
+    touchSession: db.prepare(
+      `UPDATE sessions SET last_seen_at=? WHERE token_hash=?`,
+    ),
+    deleteSession: db.prepare(`DELETE FROM sessions WHERE token_hash=?`),
+    deleteSessionsForUser: db.prepare(`DELETE FROM sessions WHERE user_login=?`),
+    pruneExpiredSessions: db.prepare(`DELETE FROM sessions WHERE expires_at < ?`),
 
     listReviewThreads: db.prepare(
       `SELECT repo, pr_number, root_comment_id, last_responded_to_reply_id, last_responded_at
@@ -861,6 +963,70 @@ export function openStore(path: string): Store {
       const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
       const info = stmts.pruneWebhookDeliveries.run(cutoff) as { changes: number };
       bump();
+      return info.changes;
+    },
+
+    countUsers() {
+      const row = stmts.countUsers.get() as { n: number } | undefined;
+      return row?.n ?? 0;
+    },
+    listUsers() {
+      return stmts.listUsers.all() as UserRow[];
+    },
+    getUser(login) {
+      return (stmts.getUser.get(login) as UserRow | undefined) ?? null;
+    },
+    upsertUser({ login, email, roleIfNew }) {
+      const existing = stmts.getUser.get(login) as UserRow | undefined;
+      const now = new Date().toISOString();
+      if (existing) {
+        if (existing.email !== email) {
+          stmts.updateUserEmail.run(email, now, login);
+          bump();
+        }
+        return false;
+      }
+      stmts.insertUser.run(login, email, roleIfNew, now, now);
+      bump();
+      return true;
+    },
+    setUserRole(login, role) {
+      const now = new Date().toISOString();
+      stmts.setUserRole.run(role, now, login);
+      bump();
+    },
+    deleteUser(login) {
+      // ON DELETE CASCADE on sessions handles cleanup.
+      stmts.deleteUser.run(login);
+      bump();
+    },
+
+    createSession({ token_hash, user_login, expires_at }) {
+      const now = new Date().toISOString();
+      stmts.createSession.run(token_hash, user_login, now, expires_at, now);
+      bump();
+    },
+    getSession(token_hash) {
+      return (stmts.getSession.get(token_hash) as SessionRow | undefined) ?? null;
+    },
+    touchSession(token_hash) {
+      const now = new Date().toISOString();
+      stmts.touchSession.run(now, token_hash);
+      // No bump() — last_seen_at updates happen on every request and
+      // would invalidate the counts() cache unnecessarily.
+    },
+    deleteSession(token_hash) {
+      stmts.deleteSession.run(token_hash);
+      bump();
+    },
+    deleteSessionsForUser(user_login) {
+      stmts.deleteSessionsForUser.run(user_login);
+      bump();
+    },
+    pruneExpiredSessions() {
+      const now = new Date().toISOString();
+      const info = stmts.pruneExpiredSessions.run(now) as { changes: number };
+      if (info.changes > 0) bump();
       return info.changes;
     },
 
