@@ -41,6 +41,9 @@ td.mono,th.mono,code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,mono
 .tag.suggestion{background:rgba(88,166,255,.15);color:var(--accent)}
 .tag.issue{background:rgba(210,153,34,.18);color:var(--warn)}
 .tag.blocker{background:rgba(248,81,73,.18);color:var(--err)}
+.tag.high{background:rgba(248,81,73,.18);color:var(--err)}
+.tag.medium{background:rgba(210,153,34,.18);color:var(--warn)}
+.tag.low{background:rgba(139,148,158,.18);color:var(--nit)}
 .lvl-info{color:var(--muted)}.lvl-warn{color:var(--warn)}.lvl-error{color:var(--err)}
 form.inline{display:inline}
 button,input[type=submit]{

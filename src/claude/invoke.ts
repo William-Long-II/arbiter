@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { ReviewResult } from "./schema.ts";
 
 /**
@@ -20,7 +21,25 @@ export type InvokeResult =
   | { ok: true; review: ReviewResult; rawBytes: number }
   | { ok: false; error: string; stderr?: string; stdoutSample?: string };
 
+/** Thin wrapper over the generic invoker for the normal review prompt. */
 export async function invokeClaude(args: InvokeArgs): Promise<InvokeResult> {
+  const r = await invokeClaudeJson({ ...args, schema: ReviewResult });
+  if (r.ok) return { ok: true, review: r.data, rawBytes: r.rawBytes };
+  return r;
+}
+
+/**
+ * Spawn claude -p, enforce timeouts + stdout size caps, parse one JSON
+ * object from stdout, validate against the supplied zod schema. Shared by
+ * every Claude invocation (review, triage, future prompts) so the
+ * infrastructure doesn't drift between callers.
+ */
+export async function invokeClaudeJson<T>(args: InvokeArgs & {
+  schema: z.ZodType<T>;
+}): Promise<
+  | { ok: true; data: T; rawBytes: number }
+  | { ok: false; error: string; stderr?: string; stdoutSample?: string }
+> {
   const proc = Bun.spawn({
     cmd: [args.command, "-p", "--output-format", "text"],
     stdin: "pipe",
@@ -95,7 +114,7 @@ export async function invokeClaude(args: InvokeArgs): Promise<InvokeResult> {
     };
   }
 
-  const result = ReviewResult.safeParse(parsed);
+  const result = args.schema.safeParse(parsed);
   if (!result.success) {
     return {
       ok: false,
@@ -104,7 +123,7 @@ export async function invokeClaude(args: InvokeArgs): Promise<InvokeResult> {
     };
   }
 
-  return { ok: true, review: result.data, rawBytes: stdout.length };
+  return { ok: true, data: result.data, rawBytes: stdout.length };
 }
 
 /**

@@ -108,10 +108,25 @@ export function configRoute(args: {
             <label title="How many PRs to review in parallel. Claude Max is sized for interactive use, not heavy concurrency. Start at 1; raise cautiously. Max 4.">Concurrency (1–4)</label>
             <input type="number" name="concurrency" min="1" max="4" value="${cfg.review.concurrency}">
           </div>
+          <div>
+            <label title="When a PR exceeds this file count, a lightweight triage pass runs to pick which files deserve deep review. Set very high to disable.">Large-PR file threshold</label>
+            <input type="number" name="large_pr_threshold_files" min="5" max="500" value="${cfg.review.large_pr_threshold_files}">
+          </div>
+          <div>
+            <label title="When total diff bytes exceeds this, triage also triggers. Short-circuits during accumulation, so 500KB+ PRs always trip it regardless of exact size.">Large-PR byte threshold</label>
+            <input type="number" name="large_pr_threshold_bytes" min="10000" max="10000000" value="${cfg.review.large_pr_threshold_bytes}">
+          </div>
+          <div>
+            <label title="After triage, this many top-priority files get the full review prompt. The rest are summarized as 'deferred' in the review summary.">Large-PR deep-review files</label>
+            <input type="number" name="large_pr_deep_review_files" min="1" max="50" value="${cfg.review.large_pr_deep_review_files}">
+          </div>
         </div>
 
         <p class="muted space" style="font-size:12px">
           <strong>Concurrency note:</strong> Claude Max isn't built for many parallel sessions. 1 is the safe default. If you raise it, watch Events for a burst of <code>claude.failed</code> — that's the session hitting a burst limit, and you should drop back.
+        </p>
+        <p class="muted" style="font-size:12px">
+          <strong>Large-PR triage:</strong> either threshold triggers an extra Claude call to triage files first, then a normal review on the top-priority subset. Two calls per large PR instead of one generic review on 50+ files.
         </p>
 
         <div class="space"><button type="submit">Save general</button></div>
@@ -238,6 +253,9 @@ export async function handleGeneralPost(
       require_ci_green: String(form.get("require_ci_green") ?? "true") === "true",
       concurrency: clampInt(form.get("concurrency"), 1, 4, 1),
       dead_letter_threshold: clampInt(form.get("dead_letter_threshold"), 0, 20, 3),
+      large_pr_threshold_files: clampInt(form.get("large_pr_threshold_files"), 5, 500, 25),
+      large_pr_threshold_bytes: clampInt(form.get("large_pr_threshold_bytes"), 10_000, 10_000_000, 100_000),
+      large_pr_deep_review_files: clampInt(form.get("large_pr_deep_review_files"), 1, 50, 15),
       include_paths: splitLines(form.get("include_paths")),
       exclude_paths: splitLines(form.get("exclude_paths")),
     },
@@ -279,6 +297,9 @@ export async function handleGeneralPost(
   store.setScalar("claude.timeout_seconds", String(cfg.claude.timeout_seconds));
   store.setScalar("review.concurrency", String(cfg.review.concurrency));
   store.setScalar("review.dead_letter_threshold", String(cfg.review.dead_letter_threshold));
+  store.setScalar("review.large_pr_threshold_files", String(cfg.review.large_pr_threshold_files));
+  store.setScalar("review.large_pr_threshold_bytes", String(cfg.review.large_pr_threshold_bytes));
+  store.setScalar("review.large_pr_deep_review_files", String(cfg.review.large_pr_deep_review_files));
   store.setScalar("review.include_paths", JSON.stringify(cfg.review.include_paths));
   store.setScalar("review.exclude_paths", JSON.stringify(cfg.review.exclude_paths));
 

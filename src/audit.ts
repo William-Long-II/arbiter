@@ -143,6 +143,26 @@ export function diffGeneralConfig(before: Config, after: Config): AuditChange[] 
     after.review.require_ci_green,
   );
   scalar("review.concurrency", before.review.concurrency, after.review.concurrency);
+  scalar(
+    "review.dead_letter_threshold",
+    before.review.dead_letter_threshold,
+    after.review.dead_letter_threshold,
+  );
+  scalar(
+    "review.large_pr_threshold_files",
+    before.review.large_pr_threshold_files,
+    after.review.large_pr_threshold_files,
+  );
+  scalar(
+    "review.large_pr_threshold_bytes",
+    before.review.large_pr_threshold_bytes,
+    after.review.large_pr_threshold_bytes,
+  );
+  scalar(
+    "review.large_pr_deep_review_files",
+    before.review.large_pr_deep_review_files,
+    after.review.large_pr_deep_review_files,
+  );
   scalar("poll.interval_seconds", before.poll.interval_seconds, after.poll.interval_seconds);
   scalar("claude.command", before.claude.command, after.claude.command);
   scalar("claude.timeout_seconds", before.claude.timeout_seconds, after.claude.timeout_seconds);
