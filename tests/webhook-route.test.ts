@@ -235,4 +235,180 @@ describe("webhookRoute", () => {
       cleanup();
     }
   });
+
+  describe("pull_request_review_comment", () => {
+    function commentBody(overrides: Record<string, unknown> = {}): string {
+      return JSON.stringify({
+        action: "created",
+        comment: { in_reply_to_id: 100, user: { login: "alice" } },
+        pull_request: { number: 42 },
+        repository: { name: "my-repo", owner: { login: "my-org" } },
+        ...overrides,
+      });
+    }
+
+    test("reply from non-bot user → thread-scan queue + wake", async () => {
+      const { path, cleanup } = tmpDb();
+      try {
+        const store = openStore(path);
+        const runtime = makeRuntime();
+        const body = commentBody();
+        const req = new Request("http://localhost/webhook/github", {
+          method: "POST",
+          body,
+          headers: {
+            "x-hub-signature-256": sign(body, SECRET),
+            "x-github-event": "pull_request_review_comment",
+            "x-github-delivery": "comment-0001",
+          },
+        });
+        const res = await webhookRoute({ req, store, runtime, secret: SECRET });
+        expect(res.status).toBe(200);
+        expect(await res.text()).toBe("thread_enqueued");
+        expect(runtime.webhookThreadQueue).toHaveLength(1);
+        expect(runtime.webhookThreadQueue[0]!.repo).toEqual({ owner: "my-org", name: "my-repo" });
+        expect(runtime.webhookThreadQueue[0]!.number).toBe(42);
+        expect(runtime.wakeRequested).toBe(true);
+        // pull_request queue stays empty — this path doesn't re-review.
+        expect(runtime.webhookQueue).toHaveLength(0);
+        store.close();
+      } finally {
+        cleanup();
+      }
+    });
+
+    test("reply authored by the bot itself → ignored (no thread queue push)", async () => {
+      const { path, cleanup } = tmpDb();
+      try {
+        const store = openStore(path);
+        store.setScalar("github.bot_username", "review-bot");
+        const runtime = makeRuntime();
+        const body = commentBody({
+          action: "created",
+          comment: { in_reply_to_id: 100, user: { login: "review-bot" } },
+          pull_request: { number: 42 },
+          repository: { name: "my-repo", owner: { login: "my-org" } },
+        });
+        const req = new Request("http://localhost/webhook/github", {
+          method: "POST",
+          body,
+          headers: {
+            "x-hub-signature-256": sign(body, SECRET),
+            "x-github-event": "pull_request_review_comment",
+            "x-github-delivery": "self-comment-0001",
+          },
+        });
+        const res = await webhookRoute({ req, store, runtime, secret: SECRET });
+        expect(res.status).toBe(200);
+        expect(await res.text()).toBe("ignored");
+        expect(runtime.webhookThreadQueue).toHaveLength(0);
+        expect(runtime.wakeRequested).toBe(false);
+        store.close();
+      } finally {
+        cleanup();
+      }
+    });
+
+    test("bot login match is case-insensitive", async () => {
+      const { path, cleanup } = tmpDb();
+      try {
+        const store = openStore(path);
+        store.setScalar("github.bot_username", "Review-Bot");
+        const runtime = makeRuntime();
+        const body = commentBody({
+          action: "created",
+          comment: { in_reply_to_id: 100, user: { login: "review-bot" } },
+          pull_request: { number: 42 },
+          repository: { name: "my-repo", owner: { login: "my-org" } },
+        });
+        const req = new Request("http://localhost/webhook/github", {
+          method: "POST",
+          body,
+          headers: {
+            "x-hub-signature-256": sign(body, SECRET),
+            "x-github-event": "pull_request_review_comment",
+            "x-github-delivery": "casing-0001",
+          },
+        });
+        const res = await webhookRoute({ req, store, runtime, secret: SECRET });
+        expect(await res.text()).toBe("ignored");
+        store.close();
+      } finally {
+        cleanup();
+      }
+    });
+  });
+
+  describe("check_suite", () => {
+    function checkBody(overrides: Record<string, unknown> = {}): string {
+      return JSON.stringify({
+        action: "completed",
+        check_suite: {
+          conclusion: "success",
+          pull_requests: [
+            { number: 1, head: { sha: "sha1" } },
+            { number: 2, head: { sha: "sha2" } },
+          ],
+        },
+        repository: { name: "my-repo", owner: { login: "my-org" } },
+        ...overrides,
+      });
+    }
+
+    test("completed + success with PRs → each goes on the review queue, wake is set", async () => {
+      const { path, cleanup } = tmpDb();
+      try {
+        const store = openStore(path);
+        const runtime = makeRuntime();
+        const body = checkBody();
+        const req = new Request("http://localhost/webhook/github", {
+          method: "POST",
+          body,
+          headers: {
+            "x-hub-signature-256": sign(body, SECRET),
+            "x-github-event": "check_suite",
+            "x-github-delivery": "check-0001",
+          },
+        });
+        const res = await webhookRoute({ req, store, runtime, secret: SECRET });
+        expect(res.status).toBe(200);
+        expect(await res.text()).toBe("ci_enqueued");
+        expect(runtime.webhookQueue).toHaveLength(2);
+        expect(runtime.webhookQueue[0]!.number).toBe(1);
+        expect(runtime.webhookQueue[0]!.head_sha).toBe("sha1");
+        expect(runtime.webhookQueue[1]!.number).toBe(2);
+        expect(runtime.wakeRequested).toBe(true);
+        expect(runtime.webhookThreadQueue).toHaveLength(0);
+        store.close();
+      } finally {
+        cleanup();
+      }
+    });
+
+    test("failure conclusion → ignored (no queue push)", async () => {
+      const { path, cleanup } = tmpDb();
+      try {
+        const store = openStore(path);
+        const runtime = makeRuntime();
+        const body = checkBody({
+          check_suite: { conclusion: "failure", pull_requests: [{ number: 1, head: { sha: "x" } }] },
+        });
+        const req = new Request("http://localhost/webhook/github", {
+          method: "POST",
+          body,
+          headers: {
+            "x-hub-signature-256": sign(body, SECRET),
+            "x-github-event": "check_suite",
+            "x-github-delivery": "check-fail-0001",
+          },
+        });
+        const res = await webhookRoute({ req, store, runtime, secret: SECRET });
+        expect(await res.text()).toBe("ignored");
+        expect(runtime.webhookQueue).toHaveLength(0);
+        store.close();
+      } finally {
+        cleanup();
+      }
+    });
+  });
 });

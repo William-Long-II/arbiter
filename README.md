@@ -91,7 +91,7 @@ If you prefer to seed settings from a file on first boot, drop a `config.yaml` n
 ### Optional: webhook ingest for instant reviews
 
 1. Set `GITHUB_WEBHOOK_SECRET` in `.env` to any long random string.
-2. In the GitHub repo (or App) webhook config: URL = `https://<your-host>/webhook/github`, content-type = `application/json`, secret = same value, events = **Pull requests**.
+2. In the GitHub repo (or App) webhook config: URL = `https://<your-host>/webhook/github`, content-type = `application/json`, secret = same value. Subscribe to **Pull requests**, **Pull request review comments**, and **Check suites** (first is required; the other two enable instant threaded-reply iteration and immediate re-review when CI turns green).
 3. Expose the endpoint. Easiest path: uncomment the `cloudflared` sidecar in `docker-compose.yml`, set `CLOUDFLARE_TUNNEL_TOKEN` in `.env`, and route the tunnel at `auto-reviewer:8787` in the Cloudflare dashboard.
 
 The endpoint 401s on a bad signature, 200-no-ops on duplicate deliveries, and 503s if the secret isn't set — so it fails closed when misconfigured. Polling keeps running regardless; webhooks just wake the loop early instead of waiting out the poll interval.

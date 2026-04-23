@@ -1,5 +1,6 @@
 import type { Store } from "../../state/db.ts";
-import type { Runtime, WebhookPullRef } from "../runtime.ts";
+import type { Runtime, WebhookPullRef, WebhookThreadRef } from "../runtime.ts";
+import { loadConfigFromStore } from "../../config.ts";
 import { verifyWebhookSignature } from "../../webhook/verify.ts";
 import { extractWebhookTarget } from "../../webhook/extract.ts";
 import { log } from "../../log.ts";
@@ -94,34 +95,109 @@ export async function webhookRoute(args: {
     return plain(200, "ignored");
   }
 
-  // pull_request opened / synchronize / reopened — enqueue and nudge the loop.
-  const ref: WebhookPullRef = {
-    repo: target.repo,
-    number: target.number,
-    head_sha: target.head_sha,
-    source: "webhook",
-  };
-  runtime.webhookQueue.push(ref);
-  runtime.wakeRequested = true;
+  if (target.kind === "pull_request") {
+    // opened / synchronize / reopened — enqueue for review and nudge the loop.
+    const ref: WebhookPullRef = {
+      repo: target.repo,
+      number: target.number,
+      head_sha: target.head_sha,
+      source: "webhook",
+    };
+    runtime.webhookQueue.push(ref);
+    runtime.wakeRequested = true;
 
+    const repoSlug = `${target.repo.owner}/${target.repo.name}`;
+    log.info("webhook.enqueued", {
+      deliveryId,
+      event,
+      action: target.action,
+      repo: repoSlug,
+      pr: target.number,
+    });
+    store.recordEvent({
+      level: "info",
+      kind: "webhook.enqueued",
+      message: `Webhook enqueued ${repoSlug}#${target.number} for review (${target.action})`,
+      repo: repoSlug,
+      prNumber: target.number,
+      headSha: target.head_sha,
+      payload: { deliveryId, event, action: target.action },
+    });
+    return plain(200, "enqueued");
+  }
+
+  if (target.kind === "thread_scan") {
+    // Review-comment reply. Fast-path: if the commenter IS the bot, the
+    // delivery is us echoing our own reply back — never queue. Saves a
+    // tick of work and avoids any chance of a self-trigger loop, even
+    // though findPendingReplies would also catch this.
+    const cfg = loadConfigFromStore(store);
+    const botLogin = cfg.github.bot_username.toLowerCase();
+    if (target.comment_author.toLowerCase() === botLogin) {
+      log.info("webhook.ignored", { deliveryId, event, reason: "reply authored by the bot itself" });
+      store.recordEvent({
+        level: "info",
+        kind: "webhook.ignored",
+        message: `Webhook ignored: reply authored by the bot itself (${target.comment_author})`,
+        payload: { deliveryId, event },
+      });
+      return plain(200, "ignored");
+    }
+
+    const ref: WebhookThreadRef = { repo: target.repo, number: target.number };
+    runtime.webhookThreadQueue.push(ref);
+    runtime.wakeRequested = true;
+
+    const repoSlug = `${target.repo.owner}/${target.repo.name}`;
+    log.info("webhook.thread_enqueued", {
+      deliveryId,
+      event,
+      repo: repoSlug,
+      pr: target.number,
+      commentAuthor: target.comment_author,
+    });
+    store.recordEvent({
+      level: "info",
+      kind: "webhook.thread_enqueued",
+      message: `Webhook queued ${repoSlug}#${target.number} for thread-reply sweep (${target.comment_author} replied)`,
+      repo: repoSlug,
+      prNumber: target.number,
+      payload: { deliveryId, event, commentAuthor: target.comment_author },
+    });
+    return plain(200, "thread_enqueued");
+  }
+
+  // check_suite_success — fan out every attached PR onto the normal
+  // review queue. Dedupe against already-reviewed SHAs is done by the
+  // loop; here we just surface the signal.
   const repoSlug = `${target.repo.owner}/${target.repo.name}`;
-  log.info("webhook.enqueued", {
+  for (const pr of target.pull_requests) {
+    runtime.webhookQueue.push({
+      repo: target.repo,
+      number: pr.number,
+      head_sha: pr.head_sha,
+      source: "webhook",
+    });
+  }
+  runtime.wakeRequested = true;
+  log.info("webhook.ci_enqueued", {
     deliveryId,
     event,
-    action: target.action,
     repo: repoSlug,
-    pr: target.number,
+    count: target.pull_requests.length,
   });
   store.recordEvent({
     level: "info",
-    kind: "webhook.enqueued",
-    message: `Webhook enqueued ${repoSlug}#${target.number} for review (${target.action})`,
+    kind: "webhook.ci_enqueued",
+    message: `Webhook queued ${target.pull_requests.length} PR(s) in ${repoSlug} after a successful check_suite`,
     repo: repoSlug,
-    prNumber: target.number,
-    headSha: target.head_sha,
-    payload: { deliveryId, event, action: target.action },
+    payload: {
+      deliveryId,
+      event,
+      prs: target.pull_requests.map((p) => ({ number: p.number, head_sha: p.head_sha })),
+    },
   });
-  return plain(200, "enqueued");
+  return plain(200, "ci_enqueued");
 }
 
 function plain(status: number, text: string): Response {
