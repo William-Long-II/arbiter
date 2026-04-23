@@ -26,6 +26,7 @@ import {
 } from "./routes/actions.ts";
 import { statusApiRoute } from "./routes/status-api.ts";
 import { metricsApiRoute } from "./routes/metrics-api.ts";
+import { webhookRoute } from "./routes/webhook.ts";
 import { redirect } from "./html.ts";
 import { log } from "../log.ts";
 import { requireAuth } from "./auth.ts";
@@ -36,6 +37,11 @@ export type ServerDeps = {
   host: string;
   port: number;
   password: string;
+  /**
+   * Shared secret used to verify GitHub webhook signatures. Empty string
+   * means webhook ingest is disabled; /webhook/github will respond 503.
+   */
+  webhookSecret: string;
 };
 
 /**
@@ -60,7 +66,8 @@ type Route = { method: Method; pattern: string | RegExp; handler: Handler };
  * Tested order: more-specific patterns first when shapes could collide (none
  * do today, but keep it defensive).
  */
-function buildRoutes(): Route[] {
+function buildRoutes(opts: { webhookSecret: string }): Route[] {
+  const { webhookSecret } = opts;
   return [
     // Health check is always open (the auth middleware bypasses it too).
     { method: "GET", pattern: "/healthz", handler: () => new Response("ok", { status: 200 }) },
@@ -87,7 +94,12 @@ function buildRoutes(): Route[] {
     {
       method: "GET",
       pattern: "/config",
-      handler: ({ store }) => configRoute({ store, cfg: loadConfigFromStore(store) }),
+      handler: ({ store }) =>
+        configRoute({
+          store,
+          cfg: loadConfigFromStore(store),
+          webhook: { configured: webhookSecret.length > 0 },
+        }),
     },
     {
       method: "GET",
@@ -148,7 +160,12 @@ function buildRoutes(): Route[] {
         if (!res.ok) {
           // Re-render /config with the submitted candidate + error banner,
           // so the user keeps their edits and sees every field issue at once.
-          return configRoute({ store, cfg: res.candidate, errors: res.errors });
+          return configRoute({
+            store,
+            cfg: res.candidate,
+            errors: res.errors,
+            webhook: { configured: webhookSecret.length > 0 },
+          });
         }
         return redirect("/config");
       },
@@ -270,8 +287,8 @@ function matchRoute(routes: Route[], method: string, pathname: string) {
 }
 
 export function startWebServer(deps: ServerDeps) {
-  const { store, runtime, host, port, password } = deps;
-  const routes = buildRoutes();
+  const { store, runtime, host, port, password, webhookSecret } = deps;
+  const routes = buildRoutes({ webhookSecret });
 
   const server = Bun.serve({
     hostname: host,
@@ -283,6 +300,15 @@ export function startWebServer(deps: ServerDeps) {
     async fetch(req) {
       const url = new URL(req.url);
       const method = req.method.toUpperCase();
+
+      // /webhook/github authenticates via HMAC, not session password; and
+      // GitHub would never send a same-origin Origin header, so it's also
+      // exempt from the CSRF check. Handle it here before the auth guards
+      // run so legitimate webhook deliveries aren't rejected by /healthz-
+      // style probes.
+      if (url.pathname === "/webhook/github" && method === "POST") {
+        return await webhookRoute({ req, store, runtime, secret: webhookSecret });
+      }
 
       // /healthz is always open so Docker healthchecks and reverse proxies work
       // without needing credentials. Everything else goes through basic auth

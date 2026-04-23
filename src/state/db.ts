@@ -82,6 +82,12 @@ export type ToneTemplateRow = {
   created_at: string;
 };
 
+export type WebhookDeliveryRow = {
+  delivery_id: string;
+  event_type: string;
+  received_at: string;
+};
+
 export type StoreCounts = {
   reviews: number;
   events: number;
@@ -193,6 +199,13 @@ export type Store = {
   listSkipAuthors(): string[];
   addSkipAuthor(username: string): void;
   removeSkipAuthor(username: string): void;
+
+  // webhook deliveries (dedup by GitHub's X-GitHub-Delivery UUID)
+  /** Returns true if this delivery_id was already seen (no insert performed). */
+  recordWebhookDelivery(args: { delivery_id: string; event_type: string }): boolean;
+  hasWebhookDelivery(delivery_id: string): boolean;
+  /** Drop rows older than `olderThanDays`. 0 or negative → no-op. Returns rows removed. */
+  pruneWebhookDeliveries(olderThanDays: number): number;
 
   // review.tone_templates (file-type specific tone addendums)
   listToneTemplates(): ToneTemplateRow[];
@@ -327,6 +340,17 @@ export function openStore(path: string): Store {
       created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_tone_templates_priority ON config_tone_templates(priority);
+
+    -- Webhook deduplication. GitHub retries on 5xx / timeouts, so the same
+    -- X-GitHub-Delivery UUID can land multiple times. We insert-or-ignore
+    -- on arrival; a row whose UNIQUE constraint tripped means we already
+    -- processed this delivery and should return 200 without re-queueing.
+    CREATE TABLE IF NOT EXISTS webhook_deliveries (
+      delivery_id TEXT PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      received_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_received_at ON webhook_deliveries(received_at);
   `);
 
   // Migration for DBs created before per-repo tones: add the tone columns if
@@ -516,6 +540,17 @@ export function openStore(path: string): Store {
       `UPDATE config_tone_templates SET pattern=?, tone_addendum=?, priority=? WHERE id=?`,
     ),
     deleteToneTemplate: db.prepare(`DELETE FROM config_tone_templates WHERE id=?`),
+
+    insertWebhookDelivery: db.prepare(
+      `INSERT OR IGNORE INTO webhook_deliveries(delivery_id, event_type, received_at)
+       VALUES (?, ?, ?)`,
+    ),
+    hasWebhookDelivery: db.prepare(
+      `SELECT 1 FROM webhook_deliveries WHERE delivery_id=? LIMIT 1`,
+    ),
+    pruneWebhookDeliveries: db.prepare(
+      `DELETE FROM webhook_deliveries WHERE received_at < ?`,
+    ),
   };
 
   const meta: StoreMeta = {
@@ -753,6 +788,27 @@ export function openStore(path: string): Store {
     deleteToneTemplate(id) {
       stmts.deleteToneTemplate.run(id);
       bump();
+    },
+
+    recordWebhookDelivery({ delivery_id, event_type }) {
+      const now = new Date().toISOString();
+      const info = stmts.insertWebhookDelivery.run(delivery_id, event_type, now) as {
+        changes: number;
+      };
+      // changes === 0 means the PRIMARY KEY already existed → duplicate.
+      bump();
+      return info.changes === 0;
+    },
+    hasWebhookDelivery(delivery_id) {
+      const row = stmts.hasWebhookDelivery.get(delivery_id);
+      return row !== null && row !== undefined;
+    },
+    pruneWebhookDeliveries(olderThanDays) {
+      if (olderThanDays <= 0) return 0;
+      const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
+      const info = stmts.pruneWebhookDeliveries.run(cutoff) as { changes: number };
+      bump();
+      return info.changes;
     },
 
     close() {

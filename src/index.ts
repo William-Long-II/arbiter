@@ -13,6 +13,8 @@ const TOKEN = process.env.GITHUB_TOKEN;
 const WEB_HOST = process.env.AUTO_REVIEWER_WEB_HOST ?? "127.0.0.1";
 const WEB_PORT = Number(process.env.AUTO_REVIEWER_WEB_PORT ?? "8787");
 const WEB_PASSWORD = process.env.AUTO_REVIEWER_PASSWORD ?? "";
+const WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET ?? "";
+const WEBHOOK_RETENTION_DAYS = Number(process.env.AUTO_REVIEWER_WEBHOOK_RETENTION_DAYS ?? "14");
 const EVENT_RETENTION_DAYS = Number(process.env.AUTO_REVIEWER_EVENT_RETENTION_DAYS ?? "30");
 const BREAKER_THRESHOLD = Number(process.env.AUTO_REVIEWER_BREAKER_THRESHOLD ?? "5");
 const BREAKER_COOLDOWN_SECONDS = Number(process.env.AUTO_REVIEWER_BREAKER_COOLDOWN_SECONDS ?? "900");
@@ -84,8 +86,22 @@ const pruned = store.pruneEvents(EVENT_RETENTION_DAYS);
 if (pruned > 0) {
   log.info("startup.events_pruned", { removed: pruned, retentionDays: EVENT_RETENTION_DAYS });
 }
+const prunedDeliveries = store.pruneWebhookDeliveries(WEBHOOK_RETENTION_DAYS);
+if (prunedDeliveries > 0) {
+  log.info("startup.webhook_deliveries_pruned", {
+    removed: prunedDeliveries,
+    retentionDays: WEBHOOK_RETENTION_DAYS,
+  });
+}
 
-startWebServer({ store, runtime, host: WEB_HOST, port: WEB_PORT, password: WEB_PASSWORD });
+startWebServer({
+  store,
+  runtime,
+  host: WEB_HOST,
+  port: WEB_PORT,
+  password: WEB_PASSWORD,
+  webhookSecret: WEBHOOK_SECRET,
+});
 
 if (!WEB_PASSWORD && WEB_HOST !== "127.0.0.1" && WEB_HOST !== "localhost") {
   log.warn("startup.insecure_bind", {
@@ -124,13 +140,16 @@ while (!stopping) {
     });
     const waitMs = cfg.poll.interval_seconds * 1_000;
     runtime.nextTickAt = new Date(Date.now() + waitMs).toISOString();
-    await sleepInterruptible(waitMs, () => stopping);
+    await sleepInterruptible(waitMs, () => stopping || runtime.wakeRequested);
     continue;
   }
 
   runtime.lastTickStart = new Date().toISOString();
   runtime.lastTickError = null;
   runtime.nextTickAt = null; // tick in progress
+  // Consume the wake signal at tick start. If another webhook lands during
+  // this tick, the flag will be re-set and the post-tick sleep sees it.
+  runtime.wakeRequested = false;
   const started = Date.now();
   try {
     await runTick({ gh, cfg, store, progress: runtime, breaker });
@@ -145,7 +164,7 @@ while (!stopping) {
   const remainingMs = Math.max(0, cfg.poll.interval_seconds * 1_000 - elapsedMs);
   runtime.nextTickAt = new Date(Date.now() + remainingMs).toISOString();
   if (stopping) break;
-  await sleepInterruptible(remainingMs, () => stopping);
+  await sleepInterruptible(remainingMs, () => stopping || runtime.wakeRequested);
 }
 
 store.close();

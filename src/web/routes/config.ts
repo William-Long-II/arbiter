@@ -6,6 +6,14 @@ import { currentActor, diffGeneralConfig, recordAudit } from "../../audit.ts";
 import { html, htmlResponse, redirect } from "../html.ts";
 import { layout, type Banner } from "../layout.ts";
 
+/**
+ * Runtime status of the webhook ingest path. Passed in from the server
+ * layer because the config handler doesn't otherwise see process.env.
+ * When `configured` is false, /webhook/github responds 503 and the UI
+ * should make it clear why.
+ */
+export type WebhookStatus = { configured: boolean };
+
 export function configRoute(args: {
   store: Store;
   cfg: Config;
@@ -16,8 +24,10 @@ export function configRoute(args: {
    * plus an error banner so they can fix and resubmit without retyping.
    */
   errors?: FieldError[];
+  /** Webhook status passed through from the server; optional for backward-compat tests. */
+  webhook?: WebhookStatus;
 }): Response {
-  const { store, cfg, errors } = args;
+  const { store, cfg, errors, webhook } = args;
   const orgs = store.listOrgs();
   const repos = store.listWatchedRepoRows();
   const toneTemplates = store.listToneTemplates();
@@ -180,6 +190,33 @@ export function configRoute(args: {
         </div>
         <div class="space"><button type="submit">Add / update org</button></div>
       </form>
+    </section>
+
+    <section class="card">
+      <h2>Webhook ingest</h2>
+      <p class="muted">
+        When a webhook secret is configured, GitHub can POST to
+        <code>/webhook/github</code> to trigger a review immediately instead
+        of waiting for the next poll. Pair with a Cloudflare Tunnel (or
+        equivalent) to expose the endpoint without opening firewall ports.
+        The signing secret is read from the <code>GITHUB_WEBHOOK_SECRET</code>
+        environment variable and must match what's configured in the GitHub
+        App / repository webhook.
+      </p>
+      ${webhook?.configured
+        ? html`
+          <div class="banner ok">Webhook signing secret is configured. POST <code>/webhook/github</code> with a valid signature to trigger an immediate review.</div>
+        `
+        : html`
+          <div class="banner warn">Webhook ingest is disabled. Set <code>GITHUB_WEBHOOK_SECRET</code> in the environment to enable the <code>/webhook/github</code> endpoint.</div>
+        `}
+      <p class="muted" style="font-size:12px">
+        Supported events: <code>pull_request</code> with action
+        <code>opened</code>, <code>synchronize</code>, or <code>reopened</code>.
+        Everything else (including <code>ping</code>) returns 200 but is
+        ignored. Duplicate delivery IDs (GitHub retries) are absorbed by an
+        internal dedup table.
+      </p>
     </section>
 
     <section class="card">
