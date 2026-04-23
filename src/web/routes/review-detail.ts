@@ -1,6 +1,6 @@
 import type { Store } from "../../state/db.ts";
 import { html, htmlResponse } from "../html.ts";
-import { layout } from "../layout.ts";
+import { layout, type SessionUser } from "../layout.ts";
 
 type StoredNote = {
   verdict: "approve" | "request_changes" | "dry_run" | "skipped";
@@ -52,6 +52,7 @@ export function reviewDetailRoute(args: {
   store: Store;
   repo: string;
   pr: number;
+  user?: SessionUser | null;
 }): Response {
   const review = args.store.getReview(args.repo, args.pr);
   if (!review) {
@@ -59,6 +60,7 @@ export function reviewDetailRoute(args: {
       layout({
         title: "Review not found",
         body: html`<section class="card"><p>No review recorded for <code>${args.repo}#${args.pr}</code>.</p></section>`,
+        sessionUser: args.user,
       }),
       404,
     );
@@ -220,7 +222,7 @@ export function reviewDetailRoute(args: {
     `}
   `;
 
-  return htmlResponse(layout({ title: `${args.repo}#${args.pr}`, body }));
+  return htmlResponse(layout({ title: `${args.repo}#${args.pr}`, body, sessionUser: args.user }));
 }
 
 function tryParseNote(s: string | null): StoredNote | null {

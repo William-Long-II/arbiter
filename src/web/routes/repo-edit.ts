@@ -4,12 +4,13 @@ import { resolveTone } from "../../review/tone.ts";
 import { parseSlug, sluggedPath } from "../../github/slug.ts";
 import { currentActor, recordAudit } from "../../audit.ts";
 import { html, htmlResponse, redirect } from "../html.ts";
-import { layout } from "../layout.ts";
+import { layout, type SessionUser } from "../layout.ts";
 
 export function repoEditRoute(args: {
   store: Store;
   cfg: Config;
   slug: string;
+  user?: SessionUser | null;
 }): Response {
   const repo = args.store.getRepo(args.slug);
   if (!repo) {
@@ -66,7 +67,7 @@ export function repoEditRoute(args: {
     </section>
   `;
 
-  return htmlResponse(layout({ title: `Edit ${args.slug}`, active: "config", body }));
+  return htmlResponse(layout({ title: `Edit ${args.slug}`, active: "config", body, sessionUser: args.user }));
 }
 
 export function handleRepoEditPost(

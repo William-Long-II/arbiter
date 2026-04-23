@@ -4,7 +4,7 @@ import { validateConfig } from "../../config.ts";
 import { sluggedPath } from "../../github/slug.ts";
 import { currentActor, diffGeneralConfig, recordAudit } from "../../audit.ts";
 import { html, htmlResponse, redirect } from "../html.ts";
-import { layout, type Banner } from "../layout.ts";
+import { layout, type Banner, type SessionUser } from "../layout.ts";
 
 /**
  * Runtime status of the webhook ingest path. Passed in from the server
@@ -26,8 +26,9 @@ export function configRoute(args: {
   errors?: FieldError[];
   /** Webhook status passed through from the server; optional for backward-compat tests. */
   webhook?: WebhookStatus;
+  user?: SessionUser | null;
 }): Response {
-  const { store, cfg, errors, webhook } = args;
+  const { store, cfg, errors, webhook, user } = args;
   const orgs = store.listOrgs();
   const repos = store.listWatchedRepoRows();
   const toneTemplates = store.listToneTemplates();
@@ -327,6 +328,7 @@ export function configRoute(args: {
       active: "config",
       banner: errorBanner ?? args.banner ?? null,
       body,
+      sessionUser: user,
     }),
   );
 }

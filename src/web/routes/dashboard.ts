@@ -5,14 +5,15 @@ import { isConfigured } from "../../config.ts";
 import { sluggedPath } from "../../github/slug.ts";
 import { computeMetrics } from "../../metrics.ts";
 import { html, htmlResponse, raw } from "../html.ts";
-import { layout, type Banner } from "../layout.ts";
+import { layout, type Banner, type SessionUser } from "../layout.ts";
 
 export function dashboardRoute(args: {
   store: Store;
   cfg: Config;
   runtime: Runtime;
+  user?: SessionUser | null;
 }): Response {
-  const { store, cfg, runtime } = args;
+  const { store, cfg, runtime, user } = args;
   const reviews = store.recentReviews(50);
   const approvalsHour = store.approvalsInLastHour();
   const watched = cfg.watch.orgs.length + cfg.watch.repos.length;
@@ -197,6 +198,7 @@ export function dashboardRoute(args: {
       banner,
       body,
       footScript: raw(DASHBOARD_SCRIPT),
+      sessionUser: user,
     }),
   );
 }
