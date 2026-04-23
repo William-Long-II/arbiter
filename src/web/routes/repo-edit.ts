@@ -2,6 +2,7 @@ import type { Store } from "../../state/db.ts";
 import type { Config } from "../../config.ts";
 import { resolveTone } from "../../review/tone.ts";
 import { parseSlug, sluggedPath } from "../../github/slug.ts";
+import { currentActor, recordAudit } from "../../audit.ts";
 import { html, htmlResponse, redirect } from "../html.ts";
 import { layout } from "../layout.ts";
 
@@ -84,11 +85,24 @@ export function handleRepoEditPost(
   const toneRaw = String(form.get("tone_override") ?? "");
   const toneOverride = toneRaw.trim().length === 0 ? null : toneRaw;
 
+  const changes = [];
+  if (existing.tone_override !== toneOverride) {
+    changes.push({
+      path: "tone_override",
+      from: existing.tone_override === null ? "null" : `(${existing.tone_override.length} chars)`,
+      to: toneOverride === null ? "null" : `(${toneOverride.length} chars)`,
+    });
+  }
+  if (existing.tone_mode !== toneMode) {
+    changes.push({ path: "tone_mode", from: existing.tone_mode, to: toneMode });
+  }
+
   store.setRepoTone(slug, toneOverride, toneMode);
-  store.recordEvent({
-    level: "info",
-    kind: "config.update",
-    message: `repo ${slug} edited (tone: ${toneOverride === null ? "inherits" : `${toneMode} ${toneOverride.length}c`})`,
+  recordAudit(store, {
+    actor: currentActor(),
+    action: "config.repo.edit",
+    target: slug,
+    changes,
   });
   return redirect("/config");
 }
