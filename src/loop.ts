@@ -12,6 +12,8 @@ import { postReview } from "./review/post.ts";
 import { resolveTone } from "./review/tone.ts";
 import { filterFiles } from "./review/file-filter.ts";
 import type { Breaker } from "./review/breaker.ts";
+import { resolveIntent } from "./intent/resolve.ts";
+import type { TicketContext } from "./intent/types.ts";
 import { log } from "./log.ts";
 import type { ActivePr, Runtime } from "./web/runtime.ts";
 
@@ -221,11 +223,52 @@ async function processPrInner(
     owner: pr.repo.owner,
     name: pr.repo.name,
   });
+
+  // Pull intent context (linked GitHub issues/PRs) from the title+body so the
+  // prompt grounds review against what the ticket asked for, not just
+  // "does the code look OK." A resolution failure just means the review
+  // proceeds without that ticket — never aborts.
+  let intent: { tickets: TicketContext[] } = { tickets: [] };
+  try {
+    const resolved = await resolveIntent({
+      gh,
+      title: ctx.title,
+      body: ctx.body,
+      ownRepo: pr.repo,
+    });
+    intent = { tickets: resolved.tickets };
+    if (resolved.misses.length > 0 || resolved.dropped.length > 0) {
+      store.recordEvent({
+        level: "info",
+        kind: "intent.partial",
+        message: `intent resolution partial: ${resolved.tickets.length} fetched, ${resolved.misses.length} missed, ${resolved.dropped.length} dropped (max refs)`,
+        repo: repoSlug,
+        prNumber: pr.number,
+        headSha: pr.head_sha,
+        payload: {
+          missedKeys: resolved.misses.map((r) => r.key),
+          droppedKeys: resolved.dropped.map((r) => r.key),
+        },
+      });
+    }
+  } catch (e) {
+    log.warn("intent.failed", { ...tag, error: (e as Error).message });
+    store.recordEvent({
+      level: "warn",
+      kind: "intent.failed",
+      message: `intent resolution failed: ${(e as Error).message}`,
+      repo: repoSlug,
+      prNumber: pr.number,
+      headSha: pr.head_sha,
+    });
+  }
+
   const prompt = buildReviewPrompt({
     pr: ctx,
     repo: repoSlug,
     pullNumber: pr.number,
     tone: resolvedTone,
+    tickets: intent.tickets,
   });
 
   // Breaker gate: if Claude has failed enough times in a row the breaker is
@@ -392,7 +435,7 @@ async function processPrInner(
     prNumber: pr.number,
     headSha: pr.head_sha,
     verdict: persisted,
-    note: buildReviewNote(validated, resolvedTone),
+    note: buildReviewNote(validated, resolvedTone, intent.tickets),
   });
   // Any prior failure counter for this SHA is now stale — a successful review
   // means we've recovered.
@@ -430,6 +473,7 @@ function buildReviewNote(
     verdict: string;
   },
   toneUsed: string,
+  tickets: TicketContext[],
 ): string {
   const payload = {
     verdict: v.verdict,
@@ -437,6 +481,15 @@ function buildReviewNote(
     dropped: v.dropped,
     summary: v.summary,
     tone_used: toneUsed,
+    // Stripped down — the review detail page wants the reference + title +
+    // url, but the full body is already in the event timeline.
+    tickets: tickets.map((t) => ({
+      kind: t.kind,
+      key: t.key,
+      title: t.title,
+      url: t.url,
+      isPullRequest: t.isPullRequest ?? false,
+    })),
   };
   const json = JSON.stringify(payload);
   return json.slice(0, 512 * 1024);
