@@ -36,8 +36,18 @@ const RepoEntry = z.preprocess(
 
 export const ConfigSchema = z.object({
   github: z.object({
-    bot_username: z.string().default(""),
-    skip_authors: z.array(z.string()).default([]),
+    // GitHub logins: 1-39 chars, alphanumeric + hyphen, no consecutive
+    // hyphens, can't start with one. "" is allowed because the first-boot
+    // state has no bot yet; isConfigured() checks separately.
+    bot_username: z
+      .string()
+      .max(39)
+      .refine(
+        (s) => s === "" || /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/.test(s),
+        { message: "must be a valid GitHub login (1-39 chars, alphanumeric + hyphens)" },
+      )
+      .default(""),
+    skip_authors: z.array(z.string().min(1).max(39)).max(200).default([]),
   }),
   watch: z.object({
     orgs: z.array(OrgWatch).default([]),
@@ -45,8 +55,10 @@ export const ConfigSchema = z.object({
   }),
   review: z.object({
     dry_run: z.boolean().default(true),
-    max_approvals_per_hour: z.number().int().positive().default(10),
-    tone: z.string().default(
+    max_approvals_per_hour: z.number().int().positive().max(1000).default(10),
+    // Tone is concatenated into every Claude prompt. Cap to keep a runaway
+    // paste from blowing up prompt budget across many concurrent reviews.
+    tone: z.string().max(10_000).default(
       "Be constructive and specific. Explain WHY and HOW for every issue.",
     ),
     skip_drafts: z.boolean().default(true),
@@ -64,10 +76,12 @@ export const ConfigSchema = z.object({
      * Glob-list filters applied to the diff before Claude sees it.
      * include_paths empty = every file passes the include check. Non-empty
      * acts as a whitelist. exclude_paths drops any match after include.
-     * Both accept Bun.Glob (minimatch-compatible) patterns.
+     * Both accept Bun.Glob (minimatch-compatible) patterns. Per-entry cap
+     * stops ridiculous patterns; list cap stops someone pasting a repo's
+     * entire find-tree output into the textarea.
      */
-    include_paths: z.array(z.string()).default([]),
-    exclude_paths: z.array(z.string()).default([]),
+    include_paths: z.array(z.string().min(1).max(500)).max(200).default([]),
+    exclude_paths: z.array(z.string().min(1).max(500)).max(200).default([]),
   }),
   poll: z.object({
     interval_seconds: z.number().int().positive().default(60),
@@ -80,6 +94,28 @@ export const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema>;
 export type OrgWatchEntry = z.infer<typeof OrgWatch>;
+
+/** A single validation failure tied to a dotted field path. */
+export type FieldError = { path: string; message: string };
+
+/**
+ * Validate a candidate config at SAVE time, before it hits the DB. Returns
+ * the parsed Config on success, or a list of field-scoped error messages
+ * on failure. Prevents the "save a broken tone, next tick crashes" path.
+ */
+export function validateConfig(
+  candidate: unknown,
+): { ok: true; cfg: Config } | { ok: false; errors: FieldError[] } {
+  const r = ConfigSchema.safeParse(candidate);
+  if (r.success) return { ok: true, cfg: r.data };
+  return {
+    ok: false,
+    errors: r.error.issues.map((i) => ({
+      path: i.path.join(".") || "<root>",
+      message: i.message,
+    })),
+  };
+}
 
 /** Whether the config is sufficient for the loop to run. */
 export function isConfigured(cfg: Config): boolean {

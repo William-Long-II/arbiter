@@ -1,5 +1,6 @@
 import type { Store } from "../../state/db.ts";
-import type { Config } from "../../config.ts";
+import type { Config, FieldError } from "../../config.ts";
+import { validateConfig } from "../../config.ts";
 import { sluggedPath } from "../../github/slug.ts";
 import { html, htmlResponse, redirect } from "../html.ts";
 import { layout, type Banner } from "../layout.ts";
@@ -8,11 +9,31 @@ export function configRoute(args: {
   store: Store;
   cfg: Config;
   banner?: Banner | null;
+  /**
+   * Validation errors from a failed save. When present the form re-renders
+   * with `cfg` = the user's submitted candidate (not the persisted values),
+   * plus an error banner so they can fix and resubmit without retyping.
+   */
+  errors?: FieldError[];
 }): Response {
-  const { store, cfg } = args;
+  const { store, cfg, errors } = args;
   const orgs = store.listOrgs();
   const repos = store.listWatchedRepoRows();
-  const skipAuthors = store.listSkipAuthors();
+  // When rendering a failed save, skip_authors comes from the submitted
+  // cfg (so the user keeps their edits). On a fresh GET we read from DB.
+  const skipAuthors = errors && errors.length > 0
+    ? cfg.github.skip_authors
+    : store.listSkipAuthors();
+
+  const errorBanner: Banner | null =
+    errors && errors.length > 0
+      ? {
+          kind: "err",
+          message:
+            "Couldn't save — fix the following and try again: " +
+            errors.map((e) => `${e.path} (${e.message})`).join("; "),
+        }
+      : null;
 
   const body = html`
     <section class="card">
@@ -175,55 +196,95 @@ export function configRoute(args: {
     </section>
   `;
 
-  return htmlResponse(layout({ title: "Config", active: "config", banner: args.banner ?? null, body }));
+  return htmlResponse(
+    layout({
+      title: "Config",
+      active: "config",
+      banner: errorBanner ?? args.banner ?? null,
+      body,
+    }),
+  );
 }
 
 export async function handleGeneralPost(
   store: Store,
   form: FormData,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const bot = String(form.get("bot_username") ?? "").trim();
-  if (!bot) return { ok: false, error: "bot_username is required" };
+  currentCfg: Config,
+): Promise<
+  | { ok: true }
+  | { ok: false; errors: FieldError[]; candidate: Config }
+> {
+  // Form → candidate Config. clampInt keeps obvious numeric garbage out,
+  // but zod does the final authoritative check via validateConfig.
+  const skip = splitLines(form.get("skip_authors"));
+  const candidate: Config = {
+    ...currentCfg,
+    github: {
+      bot_username: String(form.get("bot_username") ?? "").trim(),
+      skip_authors: skip,
+    },
+    review: {
+      ...currentCfg.review,
+      tone: String(form.get("tone") ?? ""),
+      dry_run: String(form.get("dry_run") ?? "true") === "true",
+      max_approvals_per_hour: clampInt(form.get("max_approvals_per_hour"), 1, 1000, 10),
+      skip_drafts: String(form.get("skip_drafts") ?? "true") === "true",
+      skip_bots: String(form.get("skip_bots") ?? "true") === "true",
+      require_ci_green: String(form.get("require_ci_green") ?? "true") === "true",
+      concurrency: clampInt(form.get("concurrency"), 1, 4, 1),
+      include_paths: splitLines(form.get("include_paths")),
+      exclude_paths: splitLines(form.get("exclude_paths")),
+    },
+    poll: {
+      interval_seconds: clampInt(form.get("interval_seconds"), 10, 86400, 60),
+    },
+    claude: {
+      command: String(form.get("claude_command") ?? "claude").trim() || "claude",
+      timeout_seconds: clampInt(form.get("claude_timeout_seconds"), 30, 3600, 600),
+    },
+  };
 
-  const skip = String(form.get("skip_authors") ?? "")
-    .split(/\r?\n/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  // bot_username is allowed to be "" at the schema level (first-boot state),
+  // but save-time we require it — users shouldn't be able to un-configure
+  // the bot through the form.
+  if (!candidate.github.bot_username) {
+    return {
+      ok: false,
+      errors: [{ path: "github.bot_username", message: "required" }],
+      candidate,
+    };
+  }
 
-  const tone = String(form.get("tone") ?? "").trim();
-  const dryRun = String(form.get("dry_run") ?? "true") === "true";
-  const cap = clampInt(form.get("max_approvals_per_hour"), 1, 1000, 10);
-  const skipDrafts = String(form.get("skip_drafts") ?? "true") === "true";
-  const skipBots = String(form.get("skip_bots") ?? "true") === "true";
-  const requireCi = String(form.get("require_ci_green") ?? "true") === "true";
-  const interval = clampInt(form.get("interval_seconds"), 10, 86400, 60);
-  const claudeCmd = String(form.get("claude_command") ?? "claude").trim() || "claude";
-  const claudeTimeout = clampInt(form.get("claude_timeout_seconds"), 30, 3600, 600);
-  const concurrency = clampInt(form.get("concurrency"), 1, 4, 1);
-  const includePaths = splitLines(form.get("include_paths"));
-  const excludePaths = splitLines(form.get("exclude_paths"));
+  const validated = validateConfig(candidate);
+  if (!validated.ok) {
+    return { ok: false, errors: validated.errors, candidate };
+  }
 
-  store.setScalar("github.bot_username", bot);
-  store.setScalar("review.dry_run", String(dryRun));
-  store.setScalar("review.max_approvals_per_hour", String(cap));
-  store.setScalar("review.tone", tone);
-  store.setScalar("review.skip_drafts", String(skipDrafts));
-  store.setScalar("review.skip_bots", String(skipBots));
-  store.setScalar("review.require_ci_green", String(requireCi));
-  store.setScalar("poll.interval_seconds", String(interval));
-  store.setScalar("claude.command", claudeCmd);
-  store.setScalar("claude.timeout_seconds", String(claudeTimeout));
-  store.setScalar("review.concurrency", String(concurrency));
-  store.setScalar("review.include_paths", JSON.stringify(includePaths));
-  store.setScalar("review.exclude_paths", JSON.stringify(excludePaths));
+  const cfg = validated.cfg;
+  store.setScalar("github.bot_username", cfg.github.bot_username);
+  store.setScalar("review.dry_run", String(cfg.review.dry_run));
+  store.setScalar("review.max_approvals_per_hour", String(cfg.review.max_approvals_per_hour));
+  store.setScalar("review.tone", cfg.review.tone);
+  store.setScalar("review.skip_drafts", String(cfg.review.skip_drafts));
+  store.setScalar("review.skip_bots", String(cfg.review.skip_bots));
+  store.setScalar("review.require_ci_green", String(cfg.review.require_ci_green));
+  store.setScalar("poll.interval_seconds", String(cfg.poll.interval_seconds));
+  store.setScalar("claude.command", cfg.claude.command);
+  store.setScalar("claude.timeout_seconds", String(cfg.claude.timeout_seconds));
+  store.setScalar("review.concurrency", String(cfg.review.concurrency));
+  store.setScalar("review.include_paths", JSON.stringify(cfg.review.include_paths));
+  store.setScalar("review.exclude_paths", JSON.stringify(cfg.review.exclude_paths));
 
-  // Replace the skip-authors set (add new, remove missing).
   const existing = new Set(store.listSkipAuthors());
-  const next = new Set(skip);
+  const next = new Set(cfg.github.skip_authors);
   for (const u of existing) if (!next.has(u)) store.removeSkipAuthor(u);
   for (const u of next) if (!existing.has(u)) store.addSkipAuthor(u);
 
-  store.recordEvent({ level: "info", kind: "config.update", message: "general settings saved" });
+  store.recordEvent({
+    level: "info",
+    kind: "config.update",
+    message: "general settings saved",
+  });
   return { ok: true };
 }
 

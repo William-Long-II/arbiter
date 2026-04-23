@@ -115,8 +115,13 @@ function buildRoutes(): Route[] {
       pattern: "/config/general",
       handler: async ({ req, store }) => {
         const form = await req.formData();
-        const res = await handleGeneralPost(store, form);
-        if (!res.ok) return errorPage(res.error);
+        const currentCfg = loadConfigFromStore(store);
+        const res = await handleGeneralPost(store, form, currentCfg);
+        if (!res.ok) {
+          // Re-render /config with the submitted candidate + error banner,
+          // so the user keeps their edits and sees every field issue at once.
+          return configRoute({ store, cfg: res.candidate, errors: res.errors });
+        }
         return redirect("/config");
       },
     },
