@@ -1,4 +1,5 @@
 import { html, raw, type RawHtml } from "./html.ts";
+import { getCurrentVersionInfo } from "./routes/health.ts";
 
 const CSS = `
 *,*::before,*::after{box-sizing:border-box}
@@ -101,6 +102,12 @@ pre{
 .right{text-align:right}
 .flex{display:flex;gap:10px;align-items:center}
 .space{margin-top:14px}
+footer.app{
+  max-width:1100px;margin:0 auto 20px;padding:0 16px;
+  color:var(--muted);font-size:11px;
+  display:flex;gap:12px;align-items:center;justify-content:flex-end;
+}
+footer.app code{font-size:11px}
 `;
 
 export type Banner = { kind: "ok" | "warn" | "err"; message: string };
@@ -150,7 +157,26 @@ export function layout(args: {
     ${args.banner ? html`<div class="banner ${args.banner.kind}">${args.banner.message}</div>` : ""}
     ${args.body}
   </main>
+  ${renderVersionFooter()}
   ${args.footScript ? html`<script>${args.footScript}</script>` : ""}
 </body>
 </html>`;
+}
+
+/**
+ * Tiny footer showing the running version + commit. Pulled from the
+ * module-level singleton so every page gets it for free. When the
+ * singleton is unset (tests that call layout() directly without a
+ * server in the loop), the footer renders empty.
+ */
+function renderVersionFooter(): RawHtml {
+  const v = getCurrentVersionInfo();
+  if (!v) return html``;
+  const shortCommit = v.commit === "dev" ? "dev" : v.commit.slice(0, 7);
+  return html`<footer class="app">
+    <span>v${v.version}</span>
+    <span>·</span>
+    <code>${shortCommit}</code>
+    ${v.built_at ? html`<span>·</span><span>built ${v.built_at}</span>` : ""}
+  </footer>`;
 }

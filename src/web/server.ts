@@ -1,6 +1,6 @@
 import type { Store } from "../state/db.ts";
 import type { Runtime } from "./runtime.ts";
-import { loadConfigFromStore } from "../config.ts";
+import { isConfigured, loadConfigFromStore } from "../config.ts";
 import { dashboardRoute } from "./routes/dashboard.ts";
 import { reviewDetailRoute } from "./routes/review-detail.ts";
 import { eventsRoute } from "./routes/events.ts";
@@ -29,6 +29,7 @@ import { metricsApiRoute } from "./routes/metrics-api.ts";
 import { webhookRoute } from "./routes/webhook.ts";
 import { authLoginRoute, authCallbackRoute, authLogoutRoute } from "./routes/auth.ts";
 import { usersRoute, handleUserRolePost, handleUserDeletePost } from "./routes/users.ts";
+import { healthRoute, versionRoute, setCurrentVersionInfo, type VersionInfo } from "./routes/health.ts";
 import { hashSessionToken, parseCookies, SESSION_COOKIE_NAME } from "../auth/session.ts";
 import { redirect } from "./html.ts";
 import { log } from "../log.ts";
@@ -52,6 +53,8 @@ export type ServerDeps = {
    */
   oauthClientId: string;
   oauthClientSecret: string;
+  /** Version + commit info resolved at boot; served on /api/version. */
+  versionInfo: VersionInfo;
 };
 
 /**
@@ -92,11 +95,37 @@ type Route = {
 function buildRoutes(opts: {
   webhookSecret: string;
   oauth: { clientId: string; clientSecret: string };
+  versionInfo: VersionInfo;
 }): Route[] {
-  const { webhookSecret, oauth } = opts;
+  const { webhookSecret, oauth, versionInfo } = opts;
   return [
-    // Health check is always open (the auth middleware bypasses it too).
-    { method: "GET", pattern: "/healthz", handler: () => new Response("ok", { status: 200 }) },
+    // Deep health check. Always open (no auth) so uptime monitors +
+    // container healthchecks work without credentials. Reports sqlite
+    // reachability, loop liveness, breaker state, and config readiness.
+    // 503 only when sqlite is actually broken; degraded states return
+    // 200 with detail so orchestrators don't kill the pod on a
+    // temporary breaker open or an incomplete initial setup.
+    {
+      method: "GET",
+      pattern: "/healthz",
+      handler: ({ store, runtime }) => {
+        const cfg = loadConfigFromStore(store);
+        return healthRoute({
+          store,
+          runtime,
+          pollIntervalSeconds: cfg.poll.interval_seconds,
+          configured: isConfigured(cfg),
+        });
+      },
+    },
+    // Build identity. Open path too — harmless metadata. Used by the
+    // dashboard footer so operators can see which commit is running
+    // without shelling in.
+    {
+      method: "GET",
+      pattern: "/api/version",
+      handler: () => versionRoute({ info: versionInfo }),
+    },
 
     // Dashboard + JSON status feed.
     {
@@ -391,11 +420,16 @@ function matchRoute(routes: Route[], method: string, pathname: string) {
 }
 
 export function startWebServer(deps: ServerDeps) {
-  const { store, runtime, host, port, password, webhookSecret, oauthClientId, oauthClientSecret } = deps;
+  const { store, runtime, host, port, password, webhookSecret, oauthClientId, oauthClientSecret, versionInfo } = deps;
   const oauthConfigured = oauthClientId.length > 0 && oauthClientSecret.length > 0;
+  // Expose the resolved version info to layout() via the module-level
+  // singleton so every page's footer can show the running commit
+  // without per-route plumbing.
+  setCurrentVersionInfo(versionInfo);
   const routes = buildRoutes({
     webhookSecret,
     oauth: { clientId: oauthClientId, clientSecret: oauthClientSecret },
+    versionInfo,
   });
 
   const server = Bun.serve({
@@ -418,11 +452,13 @@ export function startWebServer(deps: ServerDeps) {
         return await webhookRoute({ req, store, runtime, secret: webhookSecret });
       }
 
-      // Paths that bypass every auth guard entirely. /healthz for proxies
-      // and the /auth/github/* OAuth dance which is how un-logged-in users
-      // become logged-in users (chicken/egg).
+      // Paths that bypass every auth guard entirely. /healthz for proxies,
+      // /api/version for build-identity metadata (harmless), and the
+      // /auth/github/* OAuth dance which is how un-logged-in users become
+      // logged-in users (chicken/egg).
       const isOpenPath =
         url.pathname === "/healthz" ||
+        url.pathname === "/api/version" ||
         url.pathname.startsWith("/auth/github/");
 
       // Session resolution. Cheap lookup when OAuth is configured and a

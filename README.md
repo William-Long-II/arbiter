@@ -142,6 +142,7 @@ The server binds to `127.0.0.1:8787` on the host by default. If you leave it on 
 - **Session cookies.** HttpOnly + SameSite=Lax + Secure-when-HTTPS. Session tokens are SHA-256'd at rest; the raw token only exists in the cookie, so a DB dump doesn't grant impersonation.
 - **Events + webhook-delivery retention.** `AUTO_REVIEWER_EVENT_RETENTION_DAYS` (default 30) and `AUTO_REVIEWER_WEBHOOK_RETENTION_DAYS` (default 14) prune old rows at startup so the tables stay bounded.
 - **Audit trail.** Every config change + role change records an event with actor, target, and structured before/after. Actor is the session GitHub login when OAuth is on; otherwise the `AUTO_REVIEWER_OPERATOR` env var, otherwise `operator`.
+- **Deep healthcheck.** `/healthz` returns a JSON body reporting sqlite reachability, review-loop liveness (last tick within 3× poll interval, floor 60s), circuit-breaker state, and config readiness. HTTP 503 only when sqlite is actually broken; degraded states return 200 so a container orchestrator doesn't kill the pod on a temporary breaker open. The Docker image's `HEALTHCHECK` directive uses this endpoint; `/api/version` reports the running commit.
 
 ## Environment variables
 
@@ -160,6 +161,8 @@ The server binds to `127.0.0.1:8787` on the host by default. If you leave it on 
 | `AUTO_REVIEWER_WEBHOOK_RETENTION_DAYS` | `14` | Prune `webhook_deliveries` older than this at boot. |
 | `AUTO_REVIEWER_BREAKER_THRESHOLD` | `5` | Consecutive `claude.failed` events that trip the breaker. |
 | `AUTO_REVIEWER_BREAKER_COOLDOWN_SECONDS` | `900` | Seconds the breaker stays open before probing. |
+| `AUTO_REVIEWER_COMMIT` | `dev` | Build-time commit SHA; shown in the UI footer and at `/api/version`. Set by `docker build --build-arg COMMIT=$(git rev-parse HEAD)`. |
+| `AUTO_REVIEWER_BUILT_AT` | unset | Build-time ISO timestamp; shown alongside the commit. Set by `docker build --build-arg BUILT_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)`. |
 
 All other configuration lives in the SQLite DB and is edited through the UI.
 
