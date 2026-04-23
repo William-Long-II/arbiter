@@ -10,7 +10,12 @@ import {
   handleOrgsPost,
   handleReposPost,
 } from "./routes/config.ts";
-import { orgEditRoute, handleOrgEditPost, handleOrgJiraPost } from "./routes/org-edit.ts";
+import {
+  orgEditRoute,
+  handleOrgEditPost,
+  handleOrgJiraPost,
+  handleOrgLinearPost,
+} from "./routes/org-edit.ts";
 import { repoEditRoute, handleRepoEditPost } from "./routes/repo-edit.ts";
 import {
   handleDismissFailure,
@@ -160,6 +165,14 @@ function buildRoutes(): Route[] {
       handler: async ({ req, store, match }) => {
         const form = await req.formData();
         return handleOrgJiraPost(store, decodeURIComponent(match![1]!), form);
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/config\/orgs\/([^/]+)\/intent\/linear$/,
+      handler: async ({ req, store, match }) => {
+        const form = await req.formData();
+        return handleOrgLinearPost(store, decodeURIComponent(match![1]!), form);
       },
     },
     {
