@@ -1,7 +1,7 @@
 import type { Store } from "../../state/db.ts";
 import { currentActor, recordAudit, type AuditChange } from "../../audit.ts";
 import { html, htmlResponse, redirect } from "../html.ts";
-import { layout } from "../layout.ts";
+import { layout, type SessionUser } from "../layout.ts";
 
 /**
  * Per-template edit page. Used for both "create new" (id = "new") and
@@ -12,6 +12,7 @@ import { layout } from "../layout.ts";
 export function toneTemplateEditRoute(args: {
   store: Store;
   id: "new" | number;
+  user?: SessionUser | null;
 }): Response {
   const isNew = args.id === "new";
   const row = isNew ? null : args.store.getToneTemplate(args.id as number);
@@ -54,7 +55,7 @@ export function toneTemplateEditRoute(args: {
     </section>
   `;
 
-  return htmlResponse(layout({ title, active: "config", body }));
+  return htmlResponse(layout({ title, active: "config", body, sessionUser: args.user }));
 }
 
 /**

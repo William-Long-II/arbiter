@@ -102,8 +102,8 @@ function buildRoutes(opts: {
     {
       method: "GET",
       pattern: "/",
-      handler: ({ store, runtime }) =>
-        dashboardRoute({ store, cfg: loadConfigFromStore(store), runtime }),
+      handler: ({ store, runtime, user }) =>
+        dashboardRoute({ store, cfg: loadConfigFromStore(store), runtime, user }),
     },
     {
       method: "GET",
@@ -120,45 +120,47 @@ function buildRoutes(opts: {
     {
       method: "GET",
       pattern: "/config",
-      handler: ({ store }) =>
+      handler: ({ store, user }) =>
         configRoute({
           store,
           cfg: loadConfigFromStore(store),
           webhook: { configured: webhookSecret.length > 0 },
+          user,
         }),
     },
     {
       method: "GET",
       pattern: /^\/config\/orgs\/([^/]+)\/edit$/,
-      handler: ({ store, match }) =>
+      handler: ({ store, match, user }) =>
         orgEditRoute({
           store,
           cfg: loadConfigFromStore(store),
           name: decodeURIComponent(match![1]!),
+          user,
         }),
     },
     {
       method: "GET",
       pattern: /^\/config\/repos\/([^/]+)\/([^/]+)\/edit$/,
-      handler: ({ store, match }) => {
+      handler: ({ store, match, user }) => {
         const slug = `${decodeURIComponent(match![1]!)}/${decodeURIComponent(match![2]!)}`;
-        return repoEditRoute({ store, cfg: loadConfigFromStore(store), slug });
+        return repoEditRoute({ store, cfg: loadConfigFromStore(store), slug, user });
       },
     },
     {
       method: "GET",
       pattern: "/config/tone-templates/new",
-      handler: ({ store }) => toneTemplateEditRoute({ store, id: "new" }),
+      handler: ({ store, user }) => toneTemplateEditRoute({ store, id: "new", user }),
     },
     {
       method: "GET",
       pattern: /^\/config\/tone-templates\/(\d+)\/edit$/,
-      handler: ({ store, match }) =>
-        toneTemplateEditRoute({ store, id: Number(match![1]) }),
+      handler: ({ store, match, user }) =>
+        toneTemplateEditRoute({ store, id: Number(match![1]), user }),
     },
 
     // Events.
-    { method: "GET", pattern: "/events", handler: ({ store }) => eventsRoute({ store }) },
+    { method: "GET", pattern: "/events", handler: ({ store, user }) => eventsRoute({ store, user }) },
 
     // User management (admin-only).
     {
@@ -199,11 +201,11 @@ function buildRoutes(opts: {
     {
       method: "GET",
       pattern: /^\/reviews\/([^/]+)\/([^/]+)\/(\d+)$/,
-      handler: ({ store, match }) => {
+      handler: ({ store, match, user }) => {
         const owner = decodeURIComponent(match![1]!);
         const name = decodeURIComponent(match![2]!);
         const pr = Number(match![3]);
-        return reviewDetailRoute({ store, repo: `${owner}/${name}`, pr });
+        return reviewDetailRoute({ store, repo: `${owner}/${name}`, pr, user });
       },
     },
 
@@ -215,7 +217,7 @@ function buildRoutes(opts: {
       method: "POST",
       pattern: "/config/general",
       requireAdmin: true,
-      handler: async ({ req, store }) => {
+      handler: async ({ req, store, user }) => {
         const form = await req.formData();
         const currentCfg = loadConfigFromStore(store);
         const res = await handleGeneralPost(store, form, currentCfg);
@@ -227,6 +229,7 @@ function buildRoutes(opts: {
             cfg: res.candidate,
             errors: res.errors,
             webhook: { configured: webhookSecret.length > 0 },
+            user,
           });
         }
         return redirect("/config");

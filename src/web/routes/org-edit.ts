@@ -2,12 +2,13 @@ import type { Store } from "../../state/db.ts";
 import type { Config } from "../../config.ts";
 import { currentActor, recordAudit } from "../../audit.ts";
 import { html, htmlResponse, redirect } from "../html.ts";
-import { layout } from "../layout.ts";
+import { layout, type SessionUser } from "../layout.ts";
 
 export function orgEditRoute(args: {
   store: Store;
   cfg: Config;
   name: string;
+  user?: SessionUser | null;
 }): Response {
   const org = args.store.getOrg(args.name);
   if (!org) {
@@ -125,7 +126,7 @@ export function orgEditRoute(args: {
     </section>
   `;
 
-  return htmlResponse(layout({ title: `Edit ${args.name}`, active: "config", body }));
+  return htmlResponse(layout({ title: `Edit ${args.name}`, active: "config", body, sessionUser: args.user }));
 }
 
 export function handleOrgEditPost(

@@ -1,8 +1,11 @@
 import type { Store } from "../../state/db.ts";
 import { html, htmlResponse } from "../html.ts";
-import { layout } from "../layout.ts";
+import { layout, type SessionUser } from "../layout.ts";
 
-export function eventsRoute(args: { store: Store }): Response {
+export function eventsRoute(args: {
+  store: Store;
+  user?: SessionUser | null;
+}): Response {
   const events = args.store.recentEvents(200);
   const body = html`
     <section class="card">
@@ -27,7 +30,7 @@ export function eventsRoute(args: { store: Store }): Response {
         `}
     </section>
   `;
-  return htmlResponse(layout({ title: "Events", active: "events", body }));
+  return htmlResponse(layout({ title: "Events", active: "events", body, sessionUser: args.user }));
 }
 
 function formatWhere(repo: string | null, pr: number | null): string {

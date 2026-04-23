@@ -105,6 +105,9 @@ pre{
 
 export type Banner = { kind: "ok" | "warn" | "err"; message: string };
 
+/** The logged-in user's identity + role, as resolved by the session middleware. */
+export type SessionUser = { login: string; role: "admin" | "viewer" };
+
 export function layout(args: {
   title: string;
   active?: "dashboard" | "config" | "events";
@@ -113,7 +116,7 @@ export function layout(args: {
   /** Inline script injected before </body>. Use raw() — content is not escaped. */
   footScript?: RawHtml;
   /** Logged-in session user — shows name + logout in the header. Null when OAuth isn't in use. */
-  sessionUser?: { login: string; role: "admin" | "viewer" } | null;
+  sessionUser?: SessionUser | null;
 }): RawHtml {
   const active = args.active;
   const cls = (k: typeof active) => (active === k ? "active" : "");
