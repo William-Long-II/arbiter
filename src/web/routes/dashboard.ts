@@ -344,7 +344,10 @@ const DASHBOARD_SCRIPT = `
       applyStatus(await r.json());
     } catch (e) { /* transient — try again next interval */ }
   }
-  poll();
+  // NOTE: no immediate poll() on load. The server-rendered HTML already
+  // reflects current state at render time; firing fetch() a few ms later
+  // only replaces identical data with identical data. First poll happens
+  // at the 5s mark, then every 5s thereafter.
   setInterval(poll, 5000);
 })();
 `;

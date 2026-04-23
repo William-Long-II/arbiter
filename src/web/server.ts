@@ -26,8 +26,171 @@ export type ServerDeps = {
   password: string;
 };
 
+/**
+ * One entry of the route table. `pattern` is either an exact pathname string
+ * (fast path, no regex) or a RegExp whose captures are passed to handler via
+ * `match`. Handler returns a Response; it may be async.
+ */
+type Method = "GET" | "POST";
+type RouteContext = {
+  req: Request;
+  url: URL;
+  match: RegExpMatchArray | null;
+  store: Store;
+  runtime: Runtime;
+};
+type Handler = (ctx: RouteContext) => Response | Promise<Response>;
+type Route = { method: Method; pattern: string | RegExp; handler: Handler };
+
+/**
+ * Build the route table. Passed store + runtime here so handlers don't have
+ * to thread them through every lambda — they close over the bound values.
+ * Tested order: more-specific patterns first when shapes could collide (none
+ * do today, but keep it defensive).
+ */
+function buildRoutes(): Route[] {
+  return [
+    // Health check is always open (the auth middleware bypasses it too).
+    { method: "GET", pattern: "/healthz", handler: () => new Response("ok", { status: 200 }) },
+
+    // Dashboard + JSON status feed.
+    {
+      method: "GET",
+      pattern: "/",
+      handler: ({ store, runtime }) =>
+        dashboardRoute({ store, cfg: loadConfigFromStore(store), runtime }),
+    },
+    {
+      method: "GET",
+      pattern: "/api/status",
+      handler: ({ store, runtime }) => statusApiRoute({ store, runtime }),
+    },
+
+    // Config GETs.
+    {
+      method: "GET",
+      pattern: "/config",
+      handler: ({ store }) => configRoute({ store, cfg: loadConfigFromStore(store) }),
+    },
+    {
+      method: "GET",
+      pattern: /^\/config\/orgs\/([^/]+)\/edit$/,
+      handler: ({ store, match }) =>
+        orgEditRoute({
+          store,
+          cfg: loadConfigFromStore(store),
+          name: decodeURIComponent(match![1]!),
+        }),
+    },
+    {
+      method: "GET",
+      pattern: /^\/config\/repos\/([^/]+)\/([^/]+)\/edit$/,
+      handler: ({ store, match }) => {
+        const slug = `${decodeURIComponent(match![1]!)}/${decodeURIComponent(match![2]!)}`;
+        return repoEditRoute({ store, cfg: loadConfigFromStore(store), slug });
+      },
+    },
+
+    // Events.
+    { method: "GET", pattern: "/events", handler: ({ store }) => eventsRoute({ store }) },
+
+    // Review detail. Placed AFTER /config/* GETs — the three-segment
+    // pattern couldn't match any of them, but keeping the order
+    // semantically route-specific -> route-specific -> review fallback
+    // makes additions safer if anyone ever changes shapes.
+    {
+      method: "GET",
+      pattern: /^\/reviews\/([^/]+)\/([^/]+)\/(\d+)$/,
+      handler: ({ store, match }) => {
+        const owner = decodeURIComponent(match![1]!);
+        const name = decodeURIComponent(match![2]!);
+        const pr = Number(match![3]);
+        return reviewDetailRoute({ store, repo: `${owner}/${name}`, pr });
+      },
+    },
+
+    // Config POSTs — form submissions from the UI.
+    {
+      method: "POST",
+      pattern: "/config/general",
+      handler: async ({ req, store }) => {
+        const form = await req.formData();
+        const res = await handleGeneralPost(store, form);
+        if (!res.ok) return errorPage(res.error);
+        return redirect("/config");
+      },
+    },
+    {
+      method: "POST",
+      pattern: "/config/orgs",
+      handler: async ({ req, store }) => {
+        const form = await req.formData();
+        const res = handleOrgsPost(store, form);
+        if (!res.ok) return errorPage(res.error);
+        return redirect(res.redirect);
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/config\/orgs\/([^/]+)$/,
+      handler: async ({ req, store, match }) => {
+        const form = await req.formData();
+        return handleOrgEditPost(store, decodeURIComponent(match![1]!), form);
+      },
+    },
+    {
+      method: "POST",
+      pattern: "/config/repos",
+      handler: async ({ req, store }) => {
+        const form = await req.formData();
+        const res = handleReposPost(store, form);
+        if (!res.ok) return errorPage(res.error);
+        return redirect(res.redirect);
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/config\/repos\/([^/]+)\/([^/]+)$/,
+      handler: async ({ req, store, match }) => {
+        const slug = `${decodeURIComponent(match![1]!)}/${decodeURIComponent(match![2]!)}`;
+        const form = await req.formData();
+        return handleRepoEditPost(store, slug, form);
+      },
+    },
+
+    // One-shot actions.
+    {
+      method: "POST",
+      pattern: "/actions/toggle-dry-run",
+      handler: ({ store }) => handleToggleDryRun(store),
+    },
+    {
+      method: "POST",
+      pattern: "/actions/recheck",
+      handler: async ({ req, store }) => {
+        const form = await req.formData();
+        return handleRecheck(store, form);
+      },
+    },
+  ];
+}
+
+function matchRoute(routes: Route[], method: string, pathname: string) {
+  for (const r of routes) {
+    if (r.method !== method) continue;
+    if (typeof r.pattern === "string") {
+      if (r.pattern === pathname) return { route: r, match: null };
+    } else {
+      const m = pathname.match(r.pattern);
+      if (m) return { route: r, match: m };
+    }
+  }
+  return null;
+}
+
 export function startWebServer(deps: ServerDeps) {
   const { store, runtime, host, port, password } = deps;
+  const routes = buildRoutes();
 
   const server = Bun.serve({
     hostname: host,
@@ -48,13 +211,10 @@ export function startWebServer(deps: ServerDeps) {
         if (unauthorized) return unauthorized;
       }
 
-      // Same-origin guard for state-changing requests.
-      //
-      // Compare the Origin header against the request's OWN authority (from
-      // its Host header, via req.url), not the configured bind host. Inside
-      // Docker we bind to 0.0.0.0 but browsers hit us on 127.0.0.1:8787 — the
-      // configured-host comparison would spuriously reject every POST with a
-      // "cross-origin" 403 because "http://0.0.0.0:8787" !== the real origin.
+      // Same-origin guard for state-changing requests. Compare Origin against
+      // the request's own authority (not the configured bind host) — inside
+      // Docker we bind 0.0.0.0 but the browser hits 127.0.0.1, so the old
+      // configured-host comparison would 403 every legitimate POST.
       if (method !== "GET" && method !== "HEAD") {
         if (!isSameOrigin(req, url)) {
           return new Response("Cross-origin POST refused", { status: 403 });
@@ -62,93 +222,15 @@ export function startWebServer(deps: ServerDeps) {
       }
 
       try {
-        // Config isn't loaded unconditionally — each route that needs it
-        // calls loadConfigFromStore itself. Hot poll endpoints like
-        // /api/status and per-PR actions never touch config, so pulling
-        // scalars + orgs + repos + skip_authors on every request just
-        // burned cycles. Routes that do need it (dashboard, /config, edit
-        // pages) load it below.
-
-        if (method === "GET" && url.pathname === "/") {
-          return dashboardRoute({ store, cfg: loadConfigFromStore(store), runtime });
-        }
-        if (method === "GET" && url.pathname === "/healthz") {
-          return new Response("ok", { status: 200 });
-        }
-        if (method === "GET" && url.pathname === "/config") {
-          return configRoute({ store, cfg: loadConfigFromStore(store) });
-        }
-        if (method === "GET" && url.pathname === "/events") {
-          return eventsRoute({ store });
-        }
-        if (method === "GET" && url.pathname === "/api/status") {
-          return statusApiRoute({ store, runtime });
-        }
-
-        // /reviews/:owner/:name/:pr
-        const rm = url.pathname.match(/^\/reviews\/([^/]+)\/([^/]+)\/(\d+)$/);
-        if (method === "GET" && rm) {
-          const owner = decodeURIComponent(rm[1]!);
-          const name = decodeURIComponent(rm[2]!);
-          const pr = Number(rm[3]);
-          return reviewDetailRoute({ store, repo: `${owner}/${name}`, pr });
-        }
-
-        // Org edit: GET /config/orgs/:name/edit, POST /config/orgs/:name
-        const orgEditMatch = url.pathname.match(/^\/config\/orgs\/([^/]+)\/edit$/);
-        if (method === "GET" && orgEditMatch) {
-          return orgEditRoute({
-            store,
-            cfg: loadConfigFromStore(store),
-            name: decodeURIComponent(orgEditMatch[1]!),
-          });
-        }
-        const orgPostMatch = url.pathname.match(/^\/config\/orgs\/([^/]+)$/);
-        if (method === "POST" && orgPostMatch) {
-          const form = await req.formData();
-          return handleOrgEditPost(store, decodeURIComponent(orgPostMatch[1]!), form);
-        }
-
-        // Repo edit: GET /config/repos/:owner/:name/edit, POST /config/repos/:owner/:name
-        const repoEditMatch = url.pathname.match(/^\/config\/repos\/([^/]+)\/([^/]+)\/edit$/);
-        if (method === "GET" && repoEditMatch) {
-          const slug = `${decodeURIComponent(repoEditMatch[1]!)}/${decodeURIComponent(repoEditMatch[2]!)}`;
-          return repoEditRoute({ store, cfg: loadConfigFromStore(store), slug });
-        }
-        const repoPostMatch = url.pathname.match(/^\/config\/repos\/([^/]+)\/([^/]+)$/);
-        if (method === "POST" && repoPostMatch) {
-          const slug = `${decodeURIComponent(repoPostMatch[1]!)}/${decodeURIComponent(repoPostMatch[2]!)}`;
-          const form = await req.formData();
-          return handleRepoEditPost(store, slug, form);
-        }
-
-        if (method === "POST" && url.pathname === "/config/general") {
-          const form = await req.formData();
-          const res = await handleGeneralPost(store, form);
-          if (!res.ok) return errorPage(res.error);
-          return redirect("/config");
-        }
-        if (method === "POST" && url.pathname === "/config/orgs") {
-          const form = await req.formData();
-          const res = handleOrgsPost(store, form);
-          if (!res.ok) return errorPage(res.error);
-          return redirect(res.redirect);
-        }
-        if (method === "POST" && url.pathname === "/config/repos") {
-          const form = await req.formData();
-          const res = handleReposPost(store, form);
-          if (!res.ok) return errorPage(res.error);
-          return redirect(res.redirect);
-        }
-        if (method === "POST" && url.pathname === "/actions/toggle-dry-run") {
-          return handleToggleDryRun(store);
-        }
-        if (method === "POST" && url.pathname === "/actions/recheck") {
-          const form = await req.formData();
-          return handleRecheck(store, form);
-        }
-
-        return new Response("Not found", { status: 404 });
+        const hit = matchRoute(routes, method, url.pathname);
+        if (!hit) return new Response("Not found", { status: 404 });
+        return await hit.route.handler({
+          req,
+          url,
+          match: hit.match,
+          store,
+          runtime,
+        });
       } catch (e) {
         log.error("web.unhandled", { error: (e as Error).message, path: url.pathname });
         return new Response(`Error: ${(e as Error).message}`, { status: 500 });

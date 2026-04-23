@@ -329,11 +329,21 @@ export function openStore(path: string): Store {
     return row?.n ?? 0;
   };
 
+  // counts() is hit every 5s by the dashboard poll and triggers six
+  // COUNT(*) scans. SQLite doesn't cache row counts so each one is O(n).
+  // Memoize, invalidated any time something writes. writeVersion is bumped
+  // by every mutator in this store; counts() recomputes only when the
+  // version has moved since the last cache fill.
+  let writeVersion = 0;
+  const bump = () => { writeVersion += 1; };
+  let cachedCounts: { v: number; counts: StoreCounts } | null = null;
+
   return {
     db,
     meta,
     counts(): StoreCounts {
-      return {
+      if (cachedCounts && cachedCounts.v === writeVersion) return cachedCounts.counts;
+      const fresh: StoreCounts = {
         reviews: count(stmts.countReviews),
         events: count(stmts.countEvents),
         scalars: count(stmts.countScalars),
@@ -341,6 +351,8 @@ export function openStore(path: string): Store {
         repos: count(stmts.countRepos),
         skip_authors: count(stmts.countSkipAuthors),
       };
+      cachedCounts = { v: writeVersion, counts: fresh };
+      return fresh;
     },
 
     recordReview({ repo, prNumber, headSha, verdict, note }) {
@@ -352,6 +364,7 @@ export function openStore(path: string): Store {
         note ?? null,
         new Date().toISOString(),
       );
+      bump();
     },
     hasReviewed(repo, prNumber, headSha) {
       const row = stmts.reviewHit.get(repo, prNumber, headSha) as
@@ -375,6 +388,7 @@ export function openStore(path: string): Store {
       const res = headSha
         ? stmts.clearDedupeSha.run(repo, prNumber, headSha)
         : stmts.clearDedupeAll.run(repo, prNumber);
+      if (Number(res.changes) > 0) bump();
       return Number(res.changes);
     },
 
@@ -389,6 +403,7 @@ export function openStore(path: string): Store {
         message,
         payload ? JSON.stringify(payload) : null,
       );
+      bump();
     },
     recentEvents(limit) {
       return stmts.recentEvents.all(limit) as EventRow[];
@@ -397,6 +412,7 @@ export function openStore(path: string): Store {
       if (!Number.isFinite(olderThanDays) || olderThanDays <= 0) return 0;
       const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
       const res = stmts.pruneEvents.run(cutoff);
+      if (Number(res.changes) > 0) bump();
       return Number(res.changes);
     },
 
@@ -406,6 +422,7 @@ export function openStore(path: string): Store {
     },
     setScalar(key, value) {
       stmts.setScalar.run(key, value);
+      bump();
     },
     allScalars() {
       const rows = stmts.allScalars.all() as { key: string; value: string }[];
@@ -430,9 +447,11 @@ export function openStore(path: string): Store {
         row.tone_override,
         row.tone_mode,
       );
+      bump();
     },
     deleteOrg(name) {
       stmts.deleteOrg.run(name);
+      bump();
     },
 
     listWatchedRepos() {
@@ -448,12 +467,15 @@ export function openStore(path: string): Store {
     },
     addWatchedRepo(slug) {
       stmts.addRepo.run(slug);
+      bump();
     },
     setRepoTone(slug, tone, mode) {
       stmts.setRepoTone.run(tone, mode, slug);
+      bump();
     },
     removeWatchedRepo(slug) {
       stmts.removeRepo.run(slug);
+      bump();
     },
 
     listSkipAuthors() {
@@ -462,9 +484,11 @@ export function openStore(path: string): Store {
     },
     addSkipAuthor(username) {
       stmts.addSkipAuthor.run(username);
+      bump();
     },
     removeSkipAuthor(username) {
       stmts.removeSkipAuthor.run(username);
+      bump();
     },
 
     close() {
