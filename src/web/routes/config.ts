@@ -2,6 +2,7 @@ import type { Store } from "../../state/db.ts";
 import type { Config, FieldError } from "../../config.ts";
 import { validateConfig } from "../../config.ts";
 import { sluggedPath } from "../../github/slug.ts";
+import { currentActor, diffGeneralConfig, recordAudit } from "../../audit.ts";
 import { html, htmlResponse, redirect } from "../html.ts";
 import { layout, type Banner } from "../layout.ts";
 
@@ -280,10 +281,10 @@ export async function handleGeneralPost(
   for (const u of existing) if (!next.has(u)) store.removeSkipAuthor(u);
   for (const u of next) if (!existing.has(u)) store.addSkipAuthor(u);
 
-  store.recordEvent({
-    level: "info",
-    kind: "config.update",
-    message: "general settings saved",
+  recordAudit(store, {
+    actor: currentActor(),
+    action: "config.general.save",
+    changes: diffGeneralConfig(currentCfg, cfg),
   });
   return { ok: true };
 }
@@ -298,7 +299,11 @@ export function handleOrgsPost(
 
   if (action === "delete") {
     store.deleteOrg(name);
-    store.recordEvent({ level: "info", kind: "config.update", message: `org deleted: ${name}` });
+    recordAudit(store, {
+      actor: currentActor(),
+      action: "config.org.delete",
+      target: name,
+    });
     return { ok: true, redirect: "/config" };
   }
   if (action === "upsert") {
@@ -321,10 +326,11 @@ export function handleOrgsPost(
       tone_override: existing?.tone_override ?? null,
       tone_mode: existing?.tone_mode ?? "append",
     });
-    store.recordEvent({
-      level: "info",
-      kind: "config.update",
-      message: `org upserted: ${name} (${mode})`,
+    recordAudit(store, {
+      actor: currentActor(),
+      action: "config.org.upsert",
+      target: name,
+      detail: `mode=${mode}`,
     });
     return { ok: true, redirect: "/config" };
   }
@@ -342,12 +348,20 @@ export function handleReposPost(
 
   if (action === "add") {
     store.addWatchedRepo(slug);
-    store.recordEvent({ level: "info", kind: "config.update", message: `repo added: ${slug}` });
+    recordAudit(store, {
+      actor: currentActor(),
+      action: "config.repo.add",
+      target: slug,
+    });
     return { ok: true, redirect: "/config" };
   }
   if (action === "delete") {
     store.removeWatchedRepo(slug);
-    store.recordEvent({ level: "info", kind: "config.update", message: `repo removed: ${slug}` });
+    recordAudit(store, {
+      actor: currentActor(),
+      action: "config.repo.delete",
+      target: slug,
+    });
     return { ok: true, redirect: "/config" };
   }
   return { ok: false, error: "unknown action" };

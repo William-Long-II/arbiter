@@ -1,5 +1,6 @@
 import type { Store } from "../../state/db.ts";
 import type { Config } from "../../config.ts";
+import { currentActor, recordAudit } from "../../audit.ts";
 import { html, htmlResponse, redirect } from "../html.ts";
 import { layout } from "../layout.ts";
 
@@ -90,6 +91,21 @@ export function handleOrgEditPost(
   const toneRaw = String(form.get("tone_override") ?? "");
   const toneOverride = toneRaw.trim().length === 0 ? null : toneRaw;
 
+  const changes = [];
+  if (existing.mode !== mode) {
+    changes.push({ path: "mode", from: existing.mode, to: mode });
+  }
+  if (existing.tone_override !== toneOverride) {
+    changes.push({
+      path: "tone_override",
+      from: existing.tone_override === null ? "null" : `(${existing.tone_override.length} chars)`,
+      to: toneOverride === null ? "null" : `(${toneOverride.length} chars)`,
+    });
+  }
+  if (existing.tone_mode !== toneMode) {
+    changes.push({ path: "tone_mode", from: existing.tone_mode, to: toneMode });
+  }
+
   store.upsertOrg({
     name,
     mode,
@@ -98,10 +114,11 @@ export function handleOrgEditPost(
     tone_override: toneOverride,
     tone_mode: toneMode,
   });
-  store.recordEvent({
-    level: "info",
-    kind: "config.update",
-    message: `org ${name} edited (tone: ${toneOverride === null ? "inherits" : `${toneMode} ${toneOverride.length}c`})`,
+  recordAudit(store, {
+    actor: currentActor(),
+    action: "config.org.edit",
+    target: name,
+    changes,
   });
   return redirect("/config");
 }
