@@ -33,6 +33,9 @@ RUN mkdir -p /app/data && chown -R bun:bun /app
 COPY --from=deps --chown=bun:bun /app/node_modules ./node_modules
 COPY --chown=bun:bun package.json bun.lock tsconfig.json ./
 COPY --chown=bun:bun src ./src
+# scripts/backup-db.ts is invoked via docker compose exec by scripts/backup.sh
+# to produce an online-safe sqlite snapshot.
+COPY --chown=bun:bun scripts ./scripts
 
 # Entrypoint script self-heals /app/data ownership at boot before dropping
 # privileges. Without this, a fresh bind mount (./data created by Docker on
