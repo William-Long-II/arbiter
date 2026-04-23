@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { bootstrapFromYaml, isConfigured, loadConfigFromStore } from "./config.ts";
 import { makeClient } from "./github/client.ts";
 import { openStore } from "./state/db.ts";
@@ -6,6 +7,7 @@ import { log } from "./log.ts";
 import { startWebServer } from "./web/server.ts";
 import { createRuntime } from "./web/runtime.ts";
 import { Breaker } from "./review/breaker.ts";
+import { resolveVersionInfo } from "./web/routes/health.ts";
 
 const DB_PATH = process.env.AUTO_REVIEWER_DB ?? "./data/state.sqlite";
 const YAML_PATH = process.env.AUTO_REVIEWER_CONFIG ?? "./config.yaml";
@@ -104,6 +106,21 @@ if (prunedDeliveries > 0) {
 // because it's, well, a secret — the DB snapshot concern.
 const oauthClientId = store.getScalar("github.oauth_client_id") ?? "";
 
+// Build-time identity: package version from package.json, commit + timestamp
+// from env (injected by the Dockerfile / release workflow). Failing to read
+// package.json isn't fatal; we fall back to "unknown" so the process still
+// boots, on the logic that version reporting is nice-to-have, not critical.
+let packageVersion = "unknown";
+try {
+  const raw = readFileSync("./package.json", "utf8");
+  const parsed = JSON.parse(raw) as { version?: unknown };
+  if (typeof parsed.version === "string") packageVersion = parsed.version;
+} catch (e) {
+  log.warn("startup.package_json_unreadable", { error: (e as Error).message });
+}
+const versionInfo = resolveVersionInfo(packageVersion);
+log.info("startup.version", versionInfo);
+
 startWebServer({
   store,
   runtime,
@@ -113,6 +130,7 @@ startWebServer({
   webhookSecret: WEBHOOK_SECRET,
   oauthClientId,
   oauthClientSecret: OAUTH_CLIENT_SECRET,
+  versionInfo,
 });
 
 if (!WEB_PASSWORD && WEB_HOST !== "127.0.0.1" && WEB_HOST !== "localhost") {

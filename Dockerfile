@@ -49,5 +49,21 @@ ENV NODE_ENV=production
 ENV AUTO_REVIEWER_CONFIG=/app/config.yaml
 ENV AUTO_REVIEWER_DB=/app/data/state.sqlite
 
+# Build identity. Pass --build-arg COMMIT=$(git rev-parse HEAD) and
+# BUILT_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ) from docker build / CI so the
+# running container can report which commit it's serving via /api/version.
+# Both default to empty; the app falls back to "dev" / null at runtime.
+ARG COMMIT=""
+ARG BUILT_AT=""
+ENV AUTO_REVIEWER_COMMIT=$COMMIT
+ENV AUTO_REVIEWER_BUILT_AT=$BUILT_AT
+
+# Deep healthcheck. /healthz reports sqlite + loop + breaker status and
+# returns 503 only on actually-broken states, so a healthy-but-degraded
+# service doesn't thrash restarts. --start-period gives the loop time to
+# do its first tick before probing marks the container unhealthy.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD curl --fail --silent --show-error http://127.0.0.1:8787/healthz || exit 1
+
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["bun", "run", "src/index.ts"]
