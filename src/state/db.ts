@@ -134,17 +134,17 @@ function migrateAddColumn(
     .prepare(`PRAGMA table_info(${table})`)
     .all() as { name: string }[];
   if (cols.some((c) => c.name === column)) return;
-  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${typeDecl}`);
+  db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${typeDecl}`);
 }
 
 export function openStore(path: string): Store {
   mkdirSync(dirname(path), { recursive: true });
   const preExisted = existsSync(path);
   const db = new Database(path, { create: true });
-  db.exec("PRAGMA journal_mode=WAL;");
-  db.exec("PRAGMA foreign_keys=ON;");
+  db.run("PRAGMA journal_mode=WAL;");
+  db.run("PRAGMA foreign_keys=ON;");
 
-  db.exec(`
+  db.run(`
     CREATE TABLE IF NOT EXISTS reviews (
       repo TEXT NOT NULL,
       pr_number INTEGER NOT NULL,
