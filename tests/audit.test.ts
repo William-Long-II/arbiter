@@ -137,6 +137,29 @@ describe("currentActor", () => {
       else delete process.env.AUTO_REVIEWER_OPERATOR;
     }
   });
+
+  test("session login (when provided) overrides both fallbacks", () => {
+    const prev = process.env.AUTO_REVIEWER_OPERATOR;
+    process.env.AUTO_REVIEWER_OPERATOR = "env-operator";
+    try {
+      expect(currentActor({ sessionLogin: "alice-github" })).toBe("alice-github");
+    } finally {
+      if (prev !== undefined) process.env.AUTO_REVIEWER_OPERATOR = prev;
+      else delete process.env.AUTO_REVIEWER_OPERATOR;
+    }
+  });
+
+  test("null/empty session login falls through to env fallback", () => {
+    const prev = process.env.AUTO_REVIEWER_OPERATOR;
+    process.env.AUTO_REVIEWER_OPERATOR = "env-operator";
+    try {
+      expect(currentActor({ sessionLogin: null })).toBe("env-operator");
+      expect(currentActor({ sessionLogin: "" })).toBe("env-operator");
+    } finally {
+      if (prev !== undefined) process.env.AUTO_REVIEWER_OPERATOR = prev;
+      else delete process.env.AUTO_REVIEWER_OPERATOR;
+    }
+  });
 });
 
 describe("recordAudit", () => {

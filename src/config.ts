@@ -48,6 +48,13 @@ export const ConfigSchema = z.object({
       )
       .default(""),
     skip_authors: z.array(z.string().min(1).max(39)).max(200).default([]),
+    /**
+     * GitHub OAuth App client id for multi-user session login (#137).
+     * Stored in the DB so operators can manage it from the UI. The
+     * matching client_secret stays in env (GITHUB_OAUTH_CLIENT_SECRET)
+     * because it must not appear in a DB snapshot.
+     */
+    oauth_client_id: z.string().max(200).default(""),
   }),
   watch: z.object({
     orgs: z.array(OrgWatch).default([]),
@@ -162,6 +169,7 @@ export function isConfigured(cfg: Config): boolean {
 /** Full list of scalar keys persisted in config_scalars. Edit-one-place for UI rendering. */
 export const SCALAR_DEFAULTS: Record<string, string> = {
   "github.bot_username": "",
+  "github.oauth_client_id": "",
   "review.dry_run": "true",
   "review.max_approvals_per_hour": "10",
   "review.tone":
@@ -203,6 +211,7 @@ export function loadConfigFromStore(store: Store): Config {
     github: {
       bot_username: scalars["github.bot_username"] ?? "",
       skip_authors: store.listSkipAuthors(),
+      oauth_client_id: scalars["github.oauth_client_id"] ?? "",
     },
     watch: {
       orgs,
@@ -264,6 +273,7 @@ export function bootstrapFromYaml(store: Store, yamlPath: string): boolean {
   const cfg = parsed.data;
 
   store.setScalar("github.bot_username", cfg.github.bot_username);
+  store.setScalar("github.oauth_client_id", cfg.github.oauth_client_id);
   store.setScalar("review.dry_run", String(cfg.review.dry_run));
   store.setScalar("review.max_approvals_per_hour", String(cfg.review.max_approvals_per_hour));
   store.setScalar("review.tone", cfg.review.tone);
