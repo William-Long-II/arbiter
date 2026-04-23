@@ -88,27 +88,29 @@ export function dashboardRoute(args: {
 
     <section class="card">
       <h2>Recent reviews</h2>
-      ${reviews.length === 0
-        ? html`<p class="muted">No reviews yet. The loop runs every ${cfg.poll.interval_seconds}s.</p>`
-        : html`
-          <table>
-            <thead><tr>
-              <th>When</th><th>Repo</th><th>PR</th><th>Verdict</th><th class="mono">SHA</th><th></th>
-            </tr></thead>
-            <tbody>
-              ${reviews.map((r) => html`
-                <tr>
-                  <td class="muted">${fmtRel(r.reviewed_at)}</td>
-                  <td class="mono"><a href="${reviewUrl(r.repo, r.pr_number)}">${r.repo}</a></td>
-                  <td class="mono">#${r.pr_number}</td>
-                  <td><span class="tag ${r.verdict}">${r.verdict.replace("_", " ")}</span></td>
-                  <td class="mono">${r.head_sha.slice(0, 7)}</td>
-                  <td class="right"><a href="${reviewUrl(r.repo, r.pr_number)}">detail →</a></td>
-                </tr>
-              `)}
-            </tbody>
-          </table>
-        `}
+      <div id="recent-reviews" data-interval-seconds="${cfg.poll.interval_seconds}">
+        ${reviews.length === 0
+          ? html`<p class="muted">No reviews yet. The loop runs every ${cfg.poll.interval_seconds}s.</p>`
+          : html`
+            <table>
+              <thead><tr>
+                <th>When</th><th>Repo</th><th>PR</th><th>Verdict</th><th class="mono">SHA</th><th></th>
+              </tr></thead>
+              <tbody>
+                ${reviews.map((r) => html`
+                  <tr>
+                    <td class="muted" data-at="${r.reviewed_at}">${fmtRel(r.reviewed_at)}</td>
+                    <td class="mono"><a href="${reviewUrl(r.repo, r.pr_number)}">${r.repo}</a></td>
+                    <td class="mono">#${r.pr_number}</td>
+                    <td><span class="tag ${r.verdict}">${r.verdict.replace("_", " ")}</span></td>
+                    <td class="mono">${r.head_sha.slice(0, 7)}</td>
+                    <td class="right"><a href="${reviewUrl(r.repo, r.pr_number)}">detail →</a></td>
+                  </tr>
+                `)}
+              </tbody>
+            </table>
+          `}
+      </div>
     </section>
   `;
 
@@ -124,55 +126,36 @@ export function dashboardRoute(args: {
 }
 
 /**
- * Keeps the dashboard stat cards fresh without a page reload.
+ * Dashboard live-update primitive — a thin "reactive" layer, no framework.
  *
- *   - #stat-next-tick: 1s local countdown based on the latest nextTickAt.
- *   - #stat-last-tick and other cards: refreshed every 5s by polling
- *     /api/status. This is what stops the UI getting stuck on "running"
- *     when a tick finishes server-side — previously the page had no way
- *     to know the tick was over until the user reloaded.
+ * The page server-renders a full state once. After that, the script keeps
+ * it fresh via:
  *
- * When a tick is in progress the server sends nextTickAt=null; the UI
- * shows "running" and the local timer pauses. When the tick completes
- * and the server sets a new nextTickAt, the next poll picks it up and
- * the countdown resumes.
+ *   1. A single `/api/status` poll every 5s that returns EVERY dashboard
+ *      data point as one JSON blob.
+ *   2. A registry mapping DOM element id -> function(element, state). The
+ *      registry runs each renderer on every poll. Adding a new live card
+ *      is: give the host element an id, add a render function, done.
+ *   3. A 1s local "tick" that reformats time-relative strings (countdown,
+ *      "Xs ago", elapsed seconds) without needing a poll. Targets cells
+ *      annotated with data-at / data-started attributes — no renderer
+ *      needs to opt in.
+ *
+ * Why not a framework: the dashboard has ~6 reactive regions and the whole
+ * app is build-free. Pulling in React/Svelte/etc is disproportionate. When
+ * we outgrow this (say, fine-grained diffing of 1000-row tables), swap
+ * the registry out for a real library; the registry pattern makes the
+ * swap local, not project-wide.
  */
 const DASHBOARD_SCRIPT = `
 (function(){
-  var nextEl = document.getElementById('stat-next-tick');
-  var lastEl = document.getElementById('stat-last-activity');
-  var concEl = document.getElementById('stat-concurrency');
-  var currentContainer = document.getElementById('current-prs');
-  var errEl = document.getElementById('stat-tick-error');
-  var modeEl = document.getElementById('stat-mode');
-  var approvalsEl = document.getElementById('stat-approvals');
-  var targetMs = null;
-  // Remembered copy of the last-seen currentPrs list so renderElapsed can
-  // keep ticking the per-PR elapsed seconds between 5s polls.
-  var activePrs = [];
-
+  //
+  // ─── utils ────────────────────────────────────────────────────────────
+  //
   function escapeHtml(s){
     return String(s).replace(/[&<>"']/g, function(c){
       return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
     });
-  }
-
-  function fmtElapsed(iso){
-    var t = Date.parse(iso);
-    if (isNaN(t)) return '—';
-    var s = Math.max(0, Math.floor((Date.now() - t) / 1000));
-    if (s < 60) return s + 's';
-    if (s < 3600) return Math.floor(s/60) + 'm ' + (s % 60) + 's';
-    return Math.floor(s/3600) + 'h ' + Math.floor((s % 3600)/60) + 'm';
-  }
-
-  function fmtCountdown(s){
-    if (s <= 0) return 'now';
-    if (s < 60) return s + 's';
-    var m = Math.floor(s / 60), r = s % 60;
-    if (m < 60) return m + 'm ' + r + 's';
-    var h = Math.floor(m / 60), rm = m % 60;
-    return h + 'h ' + rm + 'm';
   }
   function fmtRel(iso){
     if (!iso) return '—';
@@ -184,89 +167,173 @@ const DASHBOARD_SCRIPT = `
     if (s < 86400) return Math.floor(s/3600) + 'h ago';
     return Math.floor(s/86400) + 'd ago';
   }
+  function fmtElapsed(iso){
+    var t = Date.parse(iso);
+    if (isNaN(t)) return '—';
+    var s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+    if (s < 60) return s + 's';
+    if (s < 3600) return Math.floor(s/60) + 'm ' + (s % 60) + 's';
+    return Math.floor(s/3600) + 'h ' + Math.floor((s % 3600)/60) + 'm';
+  }
+  function fmtCountdown(s){
+    if (s <= 0) return 'now';
+    if (s < 60) return s + 's';
+    var m = Math.floor(s / 60), r = s % 60;
+    if (m < 60) return m + 'm ' + r + 's';
+    var h = Math.floor(m / 60), rm = m % 60;
+    return h + 'h ' + rm + 'm';
+  }
+
+  //
+  // ─── renderer registry ────────────────────────────────────────────────
+  //
+  // Each entry: given the target element and the full status object, write
+  // that element's current representation. The element is allowed to not
+  // exist (renderer is a no-op in that case) so the same registry works on
+  // future pages that reuse a subset of sections.
+  //
+  var renderers = {
+    'stat-mode': function(el, s){ el.textContent = s.mode; },
+    'stat-approvals': function(el, s){
+      el.textContent = s.approvalsInLastHour + ' / ' + s.approvalCap;
+    },
+    'stat-concurrency': function(el, s){
+      if (typeof s.concurrency === 'number') el.textContent = s.concurrency;
+    },
+    'stat-next-tick': function(el, s){
+      el.dataset.at = s.nextTickAt || '';
+      // renderNextTick does the actual text update (also called from the
+      // 1s tick). Here we just reseed the target and let the tick paint.
+      renderNextTick();
+    },
+    'stat-last-activity': function(el, s){
+      el.dataset.at = s.lastActivityAt || '';
+      el.textContent = fmtRel(s.lastActivityAt);
+    },
+    'stat-tick-error': function(el, s){
+      el.textContent = s.lastTickError ? 'last tick error: ' + s.lastTickError : '';
+    },
+    'stat-storage-size': function(el, s){
+      if (s.storage) el.textContent = (s.storage.sizeBytes / 1024).toFixed(1) + ' KB';
+    },
+    'stat-storage-reviews': function(el, s){
+      if (s.storage) el.textContent = s.storage.counts.reviews;
+    },
+    'stat-storage-events': function(el, s){
+      if (s.storage) el.textContent = s.storage.counts.events;
+    },
+    'stat-storage-orgs': function(el, s){
+      if (s.storage) el.textContent = s.storage.counts.orgs;
+    },
+    'stat-storage-repos': function(el, s){
+      if (s.storage) el.textContent = s.storage.counts.repos;
+    },
+    'current-prs': function(el, s){
+      var list = Array.isArray(s.currentPrs) ? s.currentPrs : [];
+      if (!list.length) {
+        el.innerHTML = '<p class="muted">Idle. Next PR will be processed on the next tick.</p>';
+        return;
+      }
+      var rows = list.map(function(p){
+        return '<tr data-started="' + escapeHtml(p.startedAt) + '">' +
+          '<td class="mono">' + escapeHtml(p.repo) + '</td>' +
+          '<td class="mono">#' + escapeHtml(p.number) + '</td>' +
+          '<td class="muted current-elapsed">' + escapeHtml(fmtElapsed(p.startedAt)) + '</td>' +
+        '</tr>';
+      }).join('');
+      el.innerHTML =
+        '<table><thead><tr><th>Repo</th><th>PR</th><th>Elapsed</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody></table>';
+    },
+    'recent-reviews': function(el, s){
+      var list = Array.isArray(s.recentReviews) ? s.recentReviews : [];
+      if (!list.length) {
+        var interval = el.dataset.intervalSeconds || '60';
+        el.innerHTML = '<p class="muted">No reviews yet. The loop runs every ' +
+          escapeHtml(interval) + 's.</p>';
+        return;
+      }
+      var rows = list.map(function(r){
+        var sha = String(r.head_sha || '').slice(0, 7);
+        var verdictLabel = String(r.verdict || '').replace('_', ' ');
+        return '<tr>' +
+          '<td class="muted" data-at="' + escapeHtml(r.reviewed_at) + '">' +
+            escapeHtml(fmtRel(r.reviewed_at)) + '</td>' +
+          '<td class="mono"><a href="' + escapeHtml(r.detail_url) + '">' + escapeHtml(r.repo) + '</a></td>' +
+          '<td class="mono">#' + escapeHtml(r.pr_number) + '</td>' +
+          '<td><span class="tag ' + escapeHtml(r.verdict) + '">' + escapeHtml(verdictLabel) + '</span></td>' +
+          '<td class="mono">' + escapeHtml(sha) + '</td>' +
+          '<td class="right"><a href="' + escapeHtml(r.detail_url) + '">detail →</a></td>' +
+        '</tr>';
+      }).join('');
+      el.innerHTML =
+        '<table><thead><tr><th>When</th><th>Repo</th><th>PR</th><th>Verdict</th>' +
+        '<th class="mono">SHA</th><th></th></tr></thead>' +
+        '<tbody>' + rows + '</tbody></table>';
+    },
+  };
+
+  //
+  // ─── state the 1s tick needs ──────────────────────────────────────────
+  //
+  var targetMs = null; // next-tick countdown target, derived from data-at
 
   function renderNextTick(){
-    if (!nextEl) return;
+    var el = document.getElementById('stat-next-tick');
+    if (!el) return;
+    // If the server cleared nextTickAt, a tick is in progress. Disambiguate
+    // phase 1 (listing — no PR picked up) from phase 2 (workers active) by
+    // looking at the current-prs DOM rather than piping state through.
     if (targetMs === null) {
-      // A tick is in progress (server has cleared nextTickAt). Distinguish
-      // phase 1 (listing repos/PRs from GitHub, no PR picked up yet) from
-      // phase 2 (workers are processing PRs). activePrs is populated from
-      // the poll; empty means we haven't reached the worker pool yet.
-      nextEl.textContent = activePrs.length > 0 ? 'reviewing' : 'discovering';
+      var activeRows = document.querySelectorAll('#current-prs tr[data-started]');
+      el.textContent = activeRows.length > 0 ? 'reviewing' : 'discovering';
       return;
     }
-    nextEl.textContent = fmtCountdown(Math.ceil((targetMs - Date.now()) / 1000));
+    el.textContent = fmtCountdown(Math.ceil((targetMs - Date.now()) / 1000));
   }
 
-  function renderCurrentPrs(){
-    if (!currentContainer) return;
-    if (!activePrs.length) {
-      currentContainer.innerHTML = '<p class="muted">Idle. Next PR will be processed on the next tick.</p>';
-      return;
-    }
-    var rows = activePrs.map(function(p){
-      return '<tr data-started="' + escapeHtml(p.startedAt) + '">' +
-        '<td class="mono">' + escapeHtml(p.repo) + '</td>' +
-        '<td class="mono">#' + escapeHtml(p.number) + '</td>' +
-        '<td class="muted current-elapsed">' + escapeHtml(fmtElapsed(p.startedAt)) + '</td>' +
-      '</tr>';
-    }).join('');
-    currentContainer.innerHTML =
-      '<table><thead><tr><th>Repo</th><th>PR</th><th>Elapsed</th></tr></thead>' +
-      '<tbody>' + rows + '</tbody></table>';
-  }
-
-  function tickCurrentElapsed(){
-    // Update only the elapsed column in-place; preserves DOM stability and
-    // avoids recreating the table every second.
-    if (!currentContainer) return;
-    var rows = currentContainer.querySelectorAll('tr[data-started]');
-    for (var i = 0; i < rows.length; i++) {
-      var cell = rows[i].querySelector('.current-elapsed');
-      if (cell) cell.textContent = fmtElapsed(rows[i].dataset.started);
-    }
-  }
-
+  //
+  // ─── application ──────────────────────────────────────────────────────
+  //
   function applyStatus(s){
-    if (nextEl) {
-      targetMs = s.nextTickAt ? Date.parse(s.nextTickAt) : null;
-      if (isNaN(targetMs)) targetMs = null;
-      nextEl.dataset.at = s.nextTickAt || '';
+    // Update the countdown target BEFORE running renderers, because the
+    // stat-next-tick renderer calls renderNextTick() which reads it.
+    targetMs = s.nextTickAt ? Date.parse(s.nextTickAt) : null;
+    if (isNaN(targetMs)) targetMs = null;
+    for (var id in renderers) {
+      var el = document.getElementById(id);
+      if (el) renderers[id](el, s);
+    }
+  }
+
+  // Seed countdown from server-rendered data-at so the first paint shows
+  // a real value, not a poll-latency flicker.
+  (function seed(){
+    var el = document.getElementById('stat-next-tick');
+    if (el && el.dataset.at) {
+      var t0 = Date.parse(el.dataset.at);
+      targetMs = isNaN(t0) ? null : t0;
     }
     renderNextTick();
-    if (lastEl) {
-      lastEl.dataset.at = s.lastActivityAt || '';
-      lastEl.textContent = fmtRel(s.lastActivityAt);
-    }
-    activePrs = Array.isArray(s.currentPrs) ? s.currentPrs : [];
-    renderCurrentPrs();
-    if (concEl && typeof s.concurrency === 'number') concEl.textContent = s.concurrency;
-    if (errEl) errEl.textContent = s.lastTickError ? 'last tick error: ' + s.lastTickError : '';
-    if (modeEl) modeEl.textContent = s.mode;
-    if (approvalsEl) approvalsEl.textContent = s.approvalsInLastHour + ' / ' + s.approvalCap;
-    if (s.storage) {
-      var setText = function(id, v){ var e = document.getElementById(id); if (e) e.textContent = v; };
-      setText('stat-storage-size', (s.storage.sizeBytes / 1024).toFixed(1) + ' KB');
-      setText('stat-storage-reviews', s.storage.counts.reviews);
-      setText('stat-storage-events', s.storage.counts.events);
-      setText('stat-storage-orgs', s.storage.counts.orgs);
-      setText('stat-storage-repos', s.storage.counts.repos);
-    }
-  }
+  })();
 
-  // Seed from the server-rendered data-at so the countdown starts immediately,
-  // without waiting for the first poll.
-  if (nextEl && nextEl.dataset.at) {
-    var t0 = Date.parse(nextEl.dataset.at);
-    targetMs = isNaN(t0) ? null : t0;
-  }
-  renderNextTick();
-
-  // 1s local ticks: countdown text, "Xs ago" label, per-PR elapsed counters.
+  // 1s local ticks — reformat time-relative cells without hitting the poll.
+  // Every [data-at] cell gets fmtRel; every [data-started] cell inside a
+  // #current-prs table gets fmtElapsed.
   setInterval(function(){
     renderNextTick();
-    if (lastEl && lastEl.dataset.at) lastEl.textContent = fmtRel(lastEl.dataset.at);
-    tickCurrentElapsed();
+    var atCells = document.querySelectorAll('[data-at]');
+    for (var i = 0; i < atCells.length; i++) {
+      var c = atCells[i];
+      // Countdown target is handled separately (not an "Xs ago").
+      if (c.id === 'stat-next-tick') continue;
+      if (c.dataset.at) c.textContent = fmtRel(c.dataset.at);
+    }
+    var currentRows = document.querySelectorAll('#current-prs tr[data-started]');
+    for (var j = 0; j < currentRows.length; j++) {
+      var cell = currentRows[j].querySelector('.current-elapsed');
+      if (cell) cell.textContent = fmtElapsed(currentRows[j].dataset.started);
+    }
   }, 1000);
 
   async function poll(){
