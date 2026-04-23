@@ -12,8 +12,8 @@
  * an empty array — Claude just doesn't see a TICKET CONTEXT block.
  */
 
-export type TicketKind = "github-issue";
-// Future: "jira" | "linear";
+export type TicketKind = "github-issue" | "jira";
+// Future: "linear";
 
 export type TicketRef = {
   kind: TicketKind;

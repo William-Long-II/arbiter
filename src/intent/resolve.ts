@@ -1,19 +1,22 @@
 import type { GH } from "../github/client.ts";
+import type { Store } from "../state/db.ts";
 import type { TicketContext, TicketRef } from "./types.ts";
 import { extractGithubRefs, fetchGithubTicket } from "./github.ts";
+import { extractJiraRefs, fetchJiraTicket } from "./jira.ts";
 
 /**
  * Orchestrate intent resolution for a PR. Runs every configured provider's
  * extractor, dedupes refs by key, fetches in parallel, drops nulls.
+ *
+ * Providers enabled per-PR:
+ *   github-issue  always on (uses the bot's existing PAT)
+ *   jira          on only if credentials are stored for the PR's org owner
  *
  * Bounded behavior:
  *   - At most `MAX_REFS` refs per PR are fetched; excess are dropped with a
  *     log. Prevents a bug-link-heavy PR body from blowing budget.
  *   - No single fetch is retried. A failed fetch just means the ref drops;
  *     the review proceeds without that ticket's context.
- *
- * Future providers (Jira, Linear) slot in by adding extract + fetch
- * functions and appending their refs to `allRefs`.
  */
 const MAX_REFS = 5;
 
@@ -27,6 +30,7 @@ export type IntentResolution = {
 
 export async function resolveIntent(args: {
   gh: GH;
+  store: Store;
   title: string;
   body: string;
   ownRepo: { owner: string; name: string };
@@ -35,7 +39,12 @@ export async function resolveIntent(args: {
     ...extractGithubRefs({ title: args.title, body: args.body, ownRepo: args.ownRepo }),
   ];
 
-  // Dedup by key.
+  const jiraCreds = args.store.getIntentCredentials(args.ownRepo.owner, "jira");
+  if (jiraCreds) {
+    allRefs.push(...extractJiraRefs({ title: args.title, body: args.body }));
+  }
+
+  // Dedup by key across all providers.
   const seen = new Set<string>();
   const unique: TicketRef[] = [];
   for (const r of allRefs) {
@@ -47,10 +56,8 @@ export async function resolveIntent(args: {
   const dropped = unique.slice(MAX_REFS);
   const kept = unique.slice(0, MAX_REFS);
 
-  // Fetch in parallel; null-or-context mapping kept in order so missing refs
-  // can be reported as misses.
   const fetched = await Promise.all(
-    kept.map((r) => dispatchFetch(args.gh, r)),
+    kept.map((r) => dispatchFetch(args.gh, args.store, args.ownRepo.owner, r)),
   );
 
   const tickets: TicketContext[] = [];
@@ -64,12 +71,21 @@ export async function resolveIntent(args: {
   return { tickets, misses, dropped };
 }
 
-function dispatchFetch(gh: GH, ref: TicketRef): Promise<TicketContext | null> {
+function dispatchFetch(
+  gh: GH,
+  store: Store,
+  ownerForCreds: string,
+  ref: TicketRef,
+): Promise<TicketContext | null> {
   switch (ref.kind) {
     case "github-issue":
       return fetchGithubTicket(gh, ref);
+    case "jira": {
+      const creds = store.getIntentCredentials(ownerForCreds, "jira");
+      if (!creds) return Promise.resolve(null);
+      return fetchJiraTicket(creds, ref);
+    }
     default:
-      // Exhaustive check at compile time; at runtime an unknown kind is just a miss.
       return Promise.resolve(null);
   }
 }

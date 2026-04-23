@@ -10,7 +10,7 @@ import {
   handleOrgsPost,
   handleReposPost,
 } from "./routes/config.ts";
-import { orgEditRoute, handleOrgEditPost } from "./routes/org-edit.ts";
+import { orgEditRoute, handleOrgEditPost, handleOrgJiraPost } from "./routes/org-edit.ts";
 import { repoEditRoute, handleRepoEditPost } from "./routes/repo-edit.ts";
 import {
   handleDismissFailure,
@@ -152,6 +152,14 @@ function buildRoutes(): Route[] {
       handler: async ({ req, store, match }) => {
         const form = await req.formData();
         return handleOrgEditPost(store, decodeURIComponent(match![1]!), form);
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/config\/orgs\/([^/]+)\/intent\/jira$/,
+      handler: async ({ req, store, match }) => {
+        const form = await req.formData();
+        return handleOrgJiraPost(store, decodeURIComponent(match![1]!), form);
       },
     },
     {

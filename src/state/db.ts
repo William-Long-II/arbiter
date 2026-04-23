@@ -44,6 +44,18 @@ export type OrgRow = {
   tone_mode: ToneMode;
 };
 
+export type IntentProviderKind = "jira" | "linear";
+
+export type IntentCredentials = {
+  org_name: string;
+  kind: IntentProviderKind;
+  host: string | null;
+  email: string | null;
+  api_token: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type FailureRow = {
   repo: string;
   pr_number: number;
@@ -103,6 +115,18 @@ export type Store = {
    * specific commit. If omitted, every row for the PR is deleted.
    */
   clearDedupe(repo: string, prNumber: number, headSha?: string): number;
+
+  // intent provider credentials (Jira, Linear, …)
+  setIntentCredentials(args: {
+    org_name: string;
+    kind: IntentProviderKind;
+    host: string | null;
+    email: string | null;
+    api_token: string | null;
+  }): void;
+  getIntentCredentials(org_name: string, kind: IntentProviderKind): IntentCredentials | null;
+  listIntentCredentials(org_name: string): IntentCredentials[];
+  removeIntentCredentials(org_name: string, kind: IntentProviderKind): void;
 
   // pr_failures (dead-letter tracking)
   /**
@@ -234,6 +258,21 @@ export function openStore(path: string): Store {
       username TEXT PRIMARY KEY
     );
 
+    -- Per-org credentials for intent providers (Jira, Linear, …). Stored as
+    -- plain rows — if operators want encryption at rest they should put the
+    -- sqlite file on an encrypted volume. The api_token column is the secret
+    -- that never leaves this table (not logged, not included in audit events).
+    CREATE TABLE IF NOT EXISTS config_intent_credentials (
+      org_name TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('jira','linear')),
+      host TEXT,
+      email TEXT,
+      api_token TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (org_name, kind)
+    );
+
     -- Per-SHA failure tracking. Every time a PR fails to review (Claude error,
     -- post error, etc.) we upsert here and bump failure_count. Any successful
     -- review deletes the row. When failure_count crosses the dead-letter
@@ -299,6 +338,28 @@ export function openStore(path: string): Store {
     clearDedupeAll: db.prepare(`DELETE FROM reviews WHERE repo=? AND pr_number=?`),
     clearDedupeSha: db.prepare(
       `DELETE FROM reviews WHERE repo=? AND pr_number=? AND head_sha=?`,
+    ),
+
+    upsertIntentCreds: db.prepare(
+      `INSERT INTO config_intent_credentials
+         (org_name, kind, host, email, api_token, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(org_name, kind) DO UPDATE SET
+         host = excluded.host,
+         email = excluded.email,
+         api_token = excluded.api_token,
+         updated_at = excluded.updated_at`,
+    ),
+    getIntentCreds: db.prepare(
+      `SELECT org_name, kind, host, email, api_token, created_at, updated_at
+       FROM config_intent_credentials WHERE org_name = ? AND kind = ?`,
+    ),
+    listIntentCreds: db.prepare(
+      `SELECT org_name, kind, host, email, api_token, created_at, updated_at
+       FROM config_intent_credentials WHERE org_name = ? ORDER BY kind`,
+    ),
+    deleteIntentCreds: db.prepare(
+      `DELETE FROM config_intent_credentials WHERE org_name = ? AND kind = ?`,
     ),
 
     upsertFailure: db.prepare(
@@ -476,6 +537,23 @@ export function openStore(path: string): Store {
         : stmts.clearDedupeAll.run(repo, prNumber);
       if (Number(res.changes) > 0) bump();
       return Number(res.changes);
+    },
+
+    setIntentCredentials({ org_name, kind, host, email, api_token }) {
+      const now = new Date().toISOString();
+      stmts.upsertIntentCreds.run(org_name, kind, host, email, api_token, now, now);
+      bump();
+    },
+    getIntentCredentials(org_name, kind) {
+      const row = stmts.getIntentCreds.get(org_name, kind) as IntentCredentials | undefined;
+      return row ?? null;
+    },
+    listIntentCredentials(org_name) {
+      return stmts.listIntentCreds.all(org_name) as IntentCredentials[];
+    },
+    removeIntentCredentials(org_name, kind) {
+      const res = stmts.deleteIntentCreds.run(org_name, kind);
+      if (Number(res.changes) > 0) bump();
     },
 
     recordFailure({ repo, prNumber, headSha, kind, error }) {
