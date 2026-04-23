@@ -10,6 +10,7 @@ import { invokeClaude } from "./claude/invoke.ts";
 import { validateReview } from "./review/validate.ts";
 import { postReview } from "./review/post.ts";
 import { resolveTone } from "./review/tone.ts";
+import { filterFiles } from "./review/file-filter.ts";
 import { log } from "./log.ts";
 import type { ActivePr, Runtime } from "./web/runtime.ts";
 
@@ -162,6 +163,47 @@ async function processPrInner(
   }
 
   const ctx = await fetchPrContext(gh, pr.repo, pr.number);
+
+  // Drop files that match the configured include/exclude globs BEFORE
+  // building the prompt. Keeps Claude focused on meaningful diffs and stops
+  // us from paying to review 2MB lockfiles. ctx.files is mutated to the
+  // filtered list so downstream line-comment validation only considers
+  // files Claude actually saw.
+  const originalFileCount = ctx.files.length;
+  const filtered = filterFiles(
+    ctx.files,
+    cfg.review.include_paths,
+    cfg.review.exclude_paths,
+  );
+  ctx.files = filtered.kept;
+
+  if (ctx.files.length === 0) {
+    log.info("files.all_filtered", { ...tag, originalFileCount });
+    store.recordEvent({
+      level: "info",
+      kind: "files.all_filtered",
+      message: `All ${originalFileCount} file(s) filtered out by include/exclude globs; no review performed.`,
+      repo: repoSlug,
+      prNumber: pr.number,
+      headSha: pr.head_sha,
+      payload: {
+        skipped: filtered.skipped.slice(0, 50).map((s) => ({
+          path: s.file.path,
+          reason: s.reason,
+          pattern: s.pattern,
+        })),
+      },
+    });
+    store.recordReview({
+      repo: repoSlug,
+      prNumber: pr.number,
+      headSha: pr.head_sha,
+      verdict: "skipped",
+      note: `All ${originalFileCount} files matched exclude globs; nothing to review.`,
+    });
+    return;
+  }
+
   const resolvedTone = resolveTone({
     cfg,
     owner: pr.repo.owner,
@@ -177,6 +219,7 @@ async function processPrInner(
   log.info("claude.invoke", {
     ...tag,
     files: ctx.files.length,
+    filesFilteredOut: filtered.skipped.length,
     promptBytes: prompt.length,
     toneBytes: resolvedTone.length,
   });

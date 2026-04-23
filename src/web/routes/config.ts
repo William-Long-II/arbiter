@@ -27,6 +27,12 @@ export function configRoute(args: {
         <label>Review tone</label>
         <textarea name="tone">${cfg.review.tone}</textarea>
 
+        <label title="Glob patterns. One per line. If non-empty, ONLY files matching at least one pattern are reviewed. Leave empty to review everything the excludes don't drop.">Include paths (one glob per line, empty = review everything)</label>
+        <textarea name="include_paths" placeholder="src/**&#10;packages/*/src/**">${cfg.review.include_paths.join("\n")}</textarea>
+
+        <label title="Glob patterns. Any match drops the file after include. Seeded on first boot with common lockfiles and generated-code patterns.">Exclude paths (one glob per line)</label>
+        <textarea name="exclude_paths" placeholder="**/*.lock&#10;**/node_modules/**&#10;**/dist/**">${cfg.review.exclude_paths.join("\n")}</textarea>
+
         <div class="grid space">
           <div>
             <label>Dry run</label>
@@ -194,6 +200,8 @@ export async function handleGeneralPost(
   const claudeCmd = String(form.get("claude_command") ?? "claude").trim() || "claude";
   const claudeTimeout = clampInt(form.get("claude_timeout_seconds"), 30, 3600, 600);
   const concurrency = clampInt(form.get("concurrency"), 1, 4, 1);
+  const includePaths = splitLines(form.get("include_paths"));
+  const excludePaths = splitLines(form.get("exclude_paths"));
 
   store.setScalar("github.bot_username", bot);
   store.setScalar("review.dry_run", String(dryRun));
@@ -206,6 +214,8 @@ export async function handleGeneralPost(
   store.setScalar("claude.command", claudeCmd);
   store.setScalar("claude.timeout_seconds", String(claudeTimeout));
   store.setScalar("review.concurrency", String(concurrency));
+  store.setScalar("review.include_paths", JSON.stringify(includePaths));
+  store.setScalar("review.exclude_paths", JSON.stringify(excludePaths));
 
   // Replace the skip-authors set (add new, remove missing).
   const existing = new Set(store.listSkipAuthors());
@@ -280,6 +290,13 @@ export function handleReposPost(
     return { ok: true, redirect: "/config" };
   }
   return { ok: false, error: "unknown action" };
+}
+
+function splitLines(v: FormDataEntryValue | null): string[] {
+  return String(v ?? "")
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 function splitCsv(v: FormDataEntryValue | null): string[] {

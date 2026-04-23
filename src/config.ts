@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import type { Store } from "./state/db.ts";
+import { DEFAULT_EXCLUDE_PATHS } from "./review/file-filter.ts";
 
 const ToneMode = z.enum(["append", "replace"]);
 export type ToneMode = z.infer<typeof ToneMode>;
@@ -59,6 +60,14 @@ export const ConfigSchema = z.object({
      * cooldown from which there is no recovery except waiting.
      */
     concurrency: z.number().int().min(1).max(4).default(1),
+    /**
+     * Glob-list filters applied to the diff before Claude sees it.
+     * include_paths empty = every file passes the include check. Non-empty
+     * acts as a whitelist. exclude_paths drops any match after include.
+     * Both accept Bun.Glob (minimatch-compatible) patterns.
+     */
+    include_paths: z.array(z.string()).default([]),
+    exclude_paths: z.array(z.string()).default([]),
   }),
   poll: z.object({
     interval_seconds: z.number().int().positive().default(60),
@@ -90,6 +99,8 @@ export const SCALAR_DEFAULTS: Record<string, string> = {
   "review.skip_bots": "true",
   "review.require_ci_green": "true",
   "review.concurrency": "1",
+  "review.include_paths": "[]",
+  "review.exclude_paths": JSON.stringify(DEFAULT_EXCLUDE_PATHS),
   "poll.interval_seconds": "60",
   "claude.command": "claude",
   "claude.timeout_seconds": "600",
@@ -128,6 +139,8 @@ export function loadConfigFromStore(store: Store): Config {
       skip_bots: asBool(scalars["review.skip_bots"], true),
       require_ci_green: asBool(scalars["review.require_ci_green"], true),
       concurrency: asInt(scalars["review.concurrency"], 1),
+      include_paths: safeJsonArray(scalars["review.include_paths"] ?? "[]"),
+      exclude_paths: safeJsonArray(scalars["review.exclude_paths"] ?? "[]"),
     },
     poll: {
       interval_seconds: asInt(scalars["poll.interval_seconds"], 60),
@@ -175,6 +188,8 @@ export function bootstrapFromYaml(store: Store, yamlPath: string): boolean {
   store.setScalar("review.skip_bots", String(cfg.review.skip_bots));
   store.setScalar("review.require_ci_green", String(cfg.review.require_ci_green));
   store.setScalar("review.concurrency", String(cfg.review.concurrency));
+  store.setScalar("review.include_paths", JSON.stringify(cfg.review.include_paths));
+  store.setScalar("review.exclude_paths", JSON.stringify(cfg.review.exclude_paths));
   store.setScalar("poll.interval_seconds", String(cfg.poll.interval_seconds));
   store.setScalar("claude.command", cfg.claude.command);
   store.setScalar("claude.timeout_seconds", String(cfg.claude.timeout_seconds));
