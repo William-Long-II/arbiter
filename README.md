@@ -20,6 +20,7 @@ You run it on your own box against the repos and orgs you care about. When someo
 - **Dry-run by default.** First boot logs what it *would* have posted. Flip it in the UI when you trust it.
 - **Idempotent.** SQLite tracks `(repo, pr_number, head_sha)`. A new push re-triggers review; an unchanged push doesn't.
 - **Config in sqlite, editable in the UI.** No file-edit + restart loop to add a repo or tweak the tone.
+- **Operator surface for real deployments.** Deep `/healthz` (sqlite + loop liveness + breaker + integrity), `/api/version` (running commit), `/api/backup` (admin-only `VACUUM INTO` snapshot download), SQLite `PRAGMA integrity_check` at boot, GitHub PAT rate-limit live on the dashboard, per-IP webhook flood guard.
 
 ## How it works
 
@@ -174,10 +175,12 @@ All other configuration lives in the SQLite DB and is edited through the UI.
 
 ```bash
 bun install
-bun test            # ~270 tests (`bun:test`) across pure functions + state CRUD
+bun test            # ~320 tests (`bun:test`) across pure functions + state CRUD
 bun run typecheck
 bun run start       # GITHUB_TOKEN required; UI at http://127.0.0.1:8787
 ```
+
+For a step-through that walks the full feature surface against a real GitHub account (polling → triage → templates → webhooks → OAuth → backup/restore), see [`docs/LOCAL_TESTING.md`](docs/LOCAL_TESTING.md).
 
 ## Layout
 
@@ -221,9 +224,10 @@ src/
     detect.ts            pure findPendingReplies (which bot comments need a reply)
     respond.ts           list comments → invoke Claude → post reply → update watermark
 
-  webhook/               GitHub webhook ingest (#135)
+  webhook/               GitHub webhook ingest
     verify.ts            HMAC-SHA256 constant-time check
-    extract.ts           pull_request payload → {repo, number, head_sha}
+    extract.ts           pull_request / pull_request_review_comment / check_suite → target
+    rate-limit.ts        token-bucket per-IP flood guard + X-Forwarded-For resolver
 
   auth/                  session + OAuth (#137)
     session.ts           token mint/hash, cookie serialize/parse
@@ -252,8 +256,10 @@ src/
       webhook.ts         POST /webhook/github
       events.ts          GET /events
       actions.ts         POST /actions/{toggle-dry-run,recheck,retry-failure,dismiss-failure}
+      health.ts          GET /healthz (deep) + GET /api/version
+      backup.ts          GET /api/backup (admin-only VACUUM INTO stream)
 
-tests/                   bun:test (~270 tests (`bun:test`))
+tests/                   bun:test (~320 tests)
 ```
 
 ## Troubleshooting: state disappears between restarts
