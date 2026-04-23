@@ -2,3 +2,8 @@
 # byte-for-byte comparisons don't fail on Windows checkouts.
 tests/golden/** text eol=lf
 tests/fixtures/** text eol=lf
+
+# Shell scripts must stay LF or bash inside the Linux container fails with
+# "/usr/bin/env: 'bash\r': No such file or directory" on Windows checkouts.
+*.sh text eol=lf
+docker/** text eol=lf

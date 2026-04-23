@@ -1,10 +1,14 @@
 FROM oven/bun:1-debian AS base
 WORKDIR /app
 
-# Node is required to install the Claude Code CLI globally (it ships as an npm package).
-# Use the official NodeSource distribution for a stable 20.x LTS.
+# System deps:
+#  - curl + ca-certificates + git: needed to install the Claude Code CLI and
+#    to let git operations work inside the container.
+#  - gosu: used by the entrypoint to drop privileges from root -> bun after
+#    chown'ing the mounted data directory. su-exec is smaller but not in
+#    Debian main; gosu is the Debian-blessed equivalent.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates git \
+ && apt-get install -y --no-install-recommends curl ca-certificates git gosu \
  && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
  && apt-get install -y --no-install-recommends nodejs \
  && npm install -g @anthropic-ai/claude-code \
@@ -30,9 +34,17 @@ COPY --from=deps --chown=bun:bun /app/node_modules ./node_modules
 COPY --chown=bun:bun package.json bun.lock tsconfig.json ./
 COPY --chown=bun:bun src ./src
 
-USER bun
+# Entrypoint script self-heals /app/data ownership at boot before dropping
+# privileges. Without this, a fresh bind mount (./data created by Docker on
+# the host with root ownership) locks the bun user out with SQLITE_CANTOPEN.
+COPY --chown=root:root docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 0755 /usr/local/bin/entrypoint.sh
+
+# Deliberately NOT `USER bun` here — the entrypoint needs to start as root
+# so it can chown a fresh mounted data dir, then drops to `bun` via gosu.
 ENV NODE_ENV=production
 ENV AUTO_REVIEWER_CONFIG=/app/config.yaml
 ENV AUTO_REVIEWER_DB=/app/data/state.sqlite
 
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["bun", "run", "src/index.ts"]
