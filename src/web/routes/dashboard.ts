@@ -61,6 +61,10 @@ export function dashboardRoute(args: {
           <div class="v" id="stat-breaker" data-reopens-at="${breakerState.kind === "open" ? new Date(breakerState.reopensAt).toISOString() : ""}">${breakerLabel(breakerState)}</div>
         </div>
         <div class="stat"><div class="k">Bot user</div><div class="v">${cfg.github.bot_username || "—"}</div></div>
+        <div class="stat">
+          <div class="k">GitHub API</div>
+          <div class="v" id="stat-gh-rate-limit" data-reset-at="${runtime.ghRateLimit ? new Date(runtime.ghRateLimit.resetAt * 1000).toISOString() : ""}">${fmtGhRate(runtime.ghRateLimit)}</div>
+        </div>
       </div>
       <div class="space flex">
         <form method="post" action="/actions/toggle-dry-run" class="inline">
@@ -295,6 +299,16 @@ const DASHBOARD_SCRIPT = `
     var remaining = Math.max(0, Math.ceil((b.reopensAt - Date.now()) / 1000));
     return 'open (' + remaining + 's left)';
   }
+  function fmtGhRate(rl){
+    if (!rl) return '—';
+    var nowSec = Math.floor(Date.now() / 1000);
+    var s = Math.max(0, rl.resetAt - nowSec);
+    var label;
+    if (s < 60) label = s + 's';
+    else if (s < 3600) label = Math.floor(s/60) + 'm';
+    else label = Math.floor(s/3600) + 'h ' + Math.floor((s%3600)/60) + 'm';
+    return rl.remaining + ' / ' + rl.limit + ' · reset ' + label;
+  }
 
   //
   // ─── renderer registry ────────────────────────────────────────────────
@@ -320,6 +334,15 @@ const DASHBOARD_SCRIPT = `
         el.dataset.reopensAt = '';
       }
       el.textContent = fmtBreaker(s.breaker);
+    },
+    'stat-gh-rate-limit': function(el, s){
+      if (!s.ghRateLimit) {
+        el.textContent = '—';
+        el.dataset.resetAt = '';
+        return;
+      }
+      el.dataset.resetAt = new Date(s.ghRateLimit.resetAt * 1000).toISOString();
+      el.textContent = fmtGhRate(s.ghRateLimit);
     },
     'stat-next-tick': function(el, s){
       el.dataset.at = s.nextTickAt || '';
@@ -462,6 +485,25 @@ const DASHBOARD_SCRIPT = `
       if (!isNaN(at)) {
         var remaining = Math.max(0, Math.ceil((at - Date.now()) / 1000));
         brk.textContent = 'open (' + remaining + 's left)';
+      }
+    }
+    // Rate-limit countdown: the reset timestamp is absolute, but the
+    // "reset in Xm" text should tick down between 5s polls so it feels
+    // live. We parse remaining/limit out of the current text to avoid
+    // refetching — a mild hack, but cheaper than a new poll.
+    var ghr = document.getElementById('stat-gh-rate-limit');
+    if (ghr && ghr.dataset.resetAt) {
+      var ghAt = Date.parse(ghr.dataset.resetAt);
+      if (!isNaN(ghAt)) {
+        var m = /^(\d+)\s*\/\s*(\d+)/.exec(ghr.textContent || '');
+        if (m) {
+          var remainSec = Math.max(0, Math.ceil((ghAt - Date.now()) / 1000));
+          var label;
+          if (remainSec < 60) label = remainSec + 's';
+          else if (remainSec < 3600) label = Math.floor(remainSec/60) + 'm';
+          else label = Math.floor(remainSec/3600) + 'h ' + Math.floor((remainSec%3600)/60) + 'm';
+          ghr.textContent = m[1] + ' / ' + m[2] + ' · reset ' + label;
+        }
       }
     }
   }, 1000);
@@ -616,6 +658,21 @@ function fmtFailures(f: { claude_failed: number; post_failed: number; breaker_de
   const total = f.claude_failed + f.post_failed + f.breaker_deferred + f.dead_letter_entered;
   if (total === 0) return "0";
   return `${total} (${f.claude_failed}c ${f.post_failed}p ${f.breaker_deferred}d ${f.dead_letter_entered}dl)`;
+}
+
+/** SSR render of the GitHub rate-limit stat. Client-side renderer in
+ *  DASHBOARD_SCRIPT mirrors this so the text is identical on refresh
+ *  vs poll-updated frames. */
+function fmtGhRate(rl: import("../runtime.ts").Runtime["ghRateLimit"]): string {
+  if (!rl) return "—";
+  const nowSec = Math.floor(Date.now() / 1000);
+  const secondsToReset = Math.max(0, rl.resetAt - nowSec);
+  const resetLabel = secondsToReset < 60
+    ? `${secondsToReset}s`
+    : secondsToReset < 3600
+      ? `${Math.floor(secondsToReset / 60)}m`
+      : `${Math.floor(secondsToReset / 3600)}h ${Math.floor((secondsToReset % 3600) / 60)}m`;
+  return `${rl.remaining} / ${rl.limit} · reset ${resetLabel}`;
 }
 
 function breakerLabel(state: import("../runtime.ts").Runtime["breaker"] extends { inspect(): infer S } ? S : never): string {

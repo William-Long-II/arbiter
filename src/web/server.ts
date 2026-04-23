@@ -451,7 +451,7 @@ export function startWebServer(deps: ServerDeps) {
       log.error("web.error", { error: (err as Error).message });
       return new Response("Internal error", { status: 500 });
     },
-    async fetch(req) {
+    async fetch(req, server) {
       const url = new URL(req.url);
       const method = req.method.toUpperCase();
 
@@ -461,7 +461,12 @@ export function startWebServer(deps: ServerDeps) {
       // run so legitimate webhook deliveries aren't rejected by /healthz-
       // style probes.
       if (url.pathname === "/webhook/github" && method === "POST") {
-        return await webhookRoute({ req, store, runtime, secret: webhookSecret });
+        // requestIP is how Bun.serve exposes the TCP-level peer. Falls
+        // back to null when the runtime doesn't know (in-process test
+        // calls via new Request()). The webhook route prefers proxy
+        // headers anyway; this is only the final fallback.
+        const tcpAddress = server.requestIP(req)?.address ?? null;
+        return await webhookRoute({ req, store, runtime, secret: webhookSecret, tcpAddress });
       }
 
       // Paths that bypass every auth guard entirely. /healthz for proxies,

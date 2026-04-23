@@ -339,6 +339,92 @@ describe("webhookRoute", () => {
     });
   });
 
+  describe("request size + rate limits", () => {
+    test("413 when Content-Length exceeds the cap", async () => {
+      const { path, cleanup } = tmpDb();
+      try {
+        const store = openStore(path);
+        const runtime = makeRuntime();
+        const body = prBody();
+        const req = new Request("http://localhost/webhook/github", {
+          method: "POST",
+          body,
+          headers: {
+            "x-hub-signature-256": sign(body, SECRET),
+            "x-github-event": "pull_request",
+            "x-github-delivery": "size-0001",
+            // Lying advertised length — well over the 5 MB cap.
+            "content-length": String(10 * 1024 * 1024),
+            // Unique IP so this test doesn't share a bucket with others.
+            "x-forwarded-for": "198.51.100.1",
+          },
+        });
+        const res = await webhookRoute({ req, store, runtime, secret: SECRET });
+        expect(res.status).toBe(413);
+        expect(runtime.webhookQueue).toHaveLength(0);
+        store.close();
+      } finally {
+        cleanup();
+      }
+    });
+
+    test("429 after per-IP burst is exhausted; Retry-After header is set", async () => {
+      const { path, cleanup } = tmpDb();
+      try {
+        const store = openStore(path);
+        const runtime = makeRuntime();
+        // Unique IP so this test has its own fresh bucket.
+        const burstIp = "203.0.113.99";
+        // Default capacity is 120. Blow through it with minimal signed
+        // payloads. We use different delivery IDs so the dedupe doesn't
+        // short-circuit any of them.
+        for (let i = 0; i < 120; i++) {
+          const body = prBody({
+            pull_request: { number: 10_000 + i, head: { sha: `sha${i}` } },
+          });
+          const req = new Request("http://localhost/webhook/github", {
+            method: "POST",
+            body,
+            headers: {
+              "x-hub-signature-256": sign(body, SECRET),
+              "x-github-event": "pull_request",
+              "x-github-delivery": `flood-${i}`,
+              "x-forwarded-for": burstIp,
+            },
+          });
+          const res = await webhookRoute({ req, store, runtime, secret: SECRET });
+          // Every one of these should still be 200 — the burst capacity
+          // is exactly 120.
+          expect(res.status).toBe(200);
+        }
+        // The 121st hits the limit. Using a new delivery id so the
+        // response isn't a duplicate.
+        const body = prBody({
+          pull_request: { number: 20_000, head: { sha: "over" } },
+        });
+        const req = new Request("http://localhost/webhook/github", {
+          method: "POST",
+          body,
+          headers: {
+            "x-hub-signature-256": sign(body, SECRET),
+            "x-github-event": "pull_request",
+            "x-github-delivery": "flood-over",
+            "x-forwarded-for": burstIp,
+          },
+        });
+        const res = await webhookRoute({ req, store, runtime, secret: SECRET });
+        expect(res.status).toBe(429);
+        expect(res.headers.get("retry-after")).not.toBeNull();
+        const retryAfter = Number(res.headers.get("retry-after"));
+        expect(retryAfter).toBeGreaterThanOrEqual(0);
+        expect(retryAfter).toBeLessThanOrEqual(5); // at 2/sec refill, <= 1s
+        store.close();
+      } finally {
+        cleanup();
+      }
+    });
+  });
+
   describe("check_suite", () => {
     function checkBody(overrides: Record<string, unknown> = {}): string {
       return JSON.stringify({

@@ -3,11 +3,39 @@ import type { Runtime, WebhookPullRef, WebhookThreadRef } from "../runtime.ts";
 import { loadConfigFromStore } from "../../config.ts";
 import { verifyWebhookSignature } from "../../webhook/verify.ts";
 import { extractWebhookTarget } from "../../webhook/extract.ts";
+import { RateLimiter, resolveClientIp } from "../../webhook/rate-limit.ts";
 import { log } from "../../log.ts";
+
+/**
+ * Ceiling on the raw webhook body. Real GitHub pull_request payloads
+ * are ~50-200KB; a `check_suite` with a big PR list can push toward
+ * 500KB. 5MB is well over any realistic ceiling and well under
+ * "something could wedge the process by POSTing 1GB" territory.
+ */
+const MAX_BODY_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Per-IP flood guard on /webhook/github. GitHub's own retry storm
+ * averages ~30/minute under failure. Set capacity well above that
+ * with slow sustained refill: legitimate clients won't notice, a
+ * scanner flooding the endpoint hits 429 after the burst.
+ *
+ * Process-local (resets on restart). Good enough for a guard; not a
+ * billing mechanism.
+ */
+const webhookLimiter = new RateLimiter({
+  capacity: 120,
+  refillPerSec: 2, // 120/min sustained after the initial burst
+  staleAfterMs: 10 * 60 * 1000,
+});
+/** Sweep stale buckets roughly once per minute of real traffic. */
+let requestCount = 0;
 
 /**
  * GitHub webhook ingest. Contract:
  *
+ *   - 413: body exceeded MAX_BODY_BYTES (content-length or streamed read).
+ *   - 429: per-IP rate-limit exceeded.
  *   - 401: signature missing or doesn't verify against GITHUB_WEBHOOK_SECRET.
  *   - 503: GITHUB_WEBHOOK_SECRET is unset — we refuse to "accept" anonymous
  *          POSTs since the body is unauthenticated.
@@ -25,8 +53,10 @@ export async function webhookRoute(args: {
   store: Store;
   runtime: Runtime;
   secret: string;
+  /** Optional TCP-level client address (from Bun.serve's `server.requestIP`). */
+  tcpAddress?: string | null;
 }): Promise<Response> {
-  const { req, store, runtime, secret } = args;
+  const { req, store, runtime, secret, tcpAddress = null } = args;
 
   if (!secret) {
     // Operator hasn't wired the webhook secret. Don't silently accept — that
@@ -35,9 +65,44 @@ export async function webhookRoute(args: {
     return plain(503, "webhook ingest disabled: set GITHUB_WEBHOOK_SECRET");
   }
 
+  // Per-IP flood guard. Runs before we read the body so a POST storm can't
+  // exhaust memory reading multi-MB payloads just to reject them later.
+  const ip = resolveClientIp({ headers: req.headers, tcpAddress });
+  const decision = webhookLimiter.take(ip);
+  requestCount += 1;
+  if ((requestCount & 0x1ff) === 0) webhookLimiter.sweep();
+  if (!decision.ok) {
+    log.warn("webhook.rate_limited", { ip, retryAfterMs: decision.retryAfterMs });
+    store.recordEvent({
+      level: "warn",
+      kind: "webhook.rate_limited",
+      message: `Webhook rate limit hit for ${ip} (retry after ${decision.retryAfterMs}ms)`,
+      payload: { ip, retryAfterMs: decision.retryAfterMs },
+    });
+    return new Response("Too many requests", {
+      status: 429,
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+        "retry-after": String(Math.ceil(decision.retryAfterMs / 1000)),
+      },
+    });
+  }
+
+  // Body size guard. Check Content-Length first as a cheap rejection;
+  // then cap the actual bytes read so a lying header can't get past us.
+  const contentLength = Number(req.headers.get("content-length") ?? "");
+  if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
+    log.warn("webhook.body_too_large", { contentLength, cap: MAX_BODY_BYTES });
+    return plain(413, `Payload too large (${contentLength} > ${MAX_BODY_BYTES})`);
+  }
+
   // Read raw body for HMAC — parsing first and re-stringifying would change
   // whitespace and break the signature.
   const body = await req.text();
+  if (body.length > MAX_BODY_BYTES) {
+    log.warn("webhook.body_too_large", { bodyLength: body.length, cap: MAX_BODY_BYTES });
+    return plain(413, `Payload too large (${body.length} > ${MAX_BODY_BYTES})`);
+  }
 
   const signature = req.headers.get("x-hub-signature-256");
   if (!verifyWebhookSignature({ body, secret, signatureHeader: signature })) {

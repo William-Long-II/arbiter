@@ -3,6 +3,7 @@
  * Decoupled so routes don't import the loop directly.
  */
 import type { Breaker } from "../review/breaker.ts";
+import type { GhRateLimit } from "../github/client.ts";
 
 /**
  * A PR nominated for immediate processing by the webhook ingest path.
@@ -79,6 +80,14 @@ export type Runtime = {
    * design.
    */
   wakeRequested: boolean;
+  /**
+   * Most-recent GitHub API rate-limit reading, captured from the last
+   * successful REST response via Octokit's after-request hook. Null until
+   * the first API call lands. Surfaced on /api/status + the dashboard so
+   * the operator can spot "we're eating the PAT's 5000/hr budget" before
+   * it hits zero and every discovery call starts 403'ing.
+   */
+  ghRateLimit: GhRateLimit | null;
 };
 
 export function createRuntime(args: {
@@ -98,5 +107,6 @@ export function createRuntime(args: {
     webhookQueue: [],
     webhookThreadQueue: [],
     wakeRequested: false,
+    ghRateLimit: null,
   };
 }

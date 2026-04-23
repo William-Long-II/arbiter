@@ -102,7 +102,15 @@ const breaker = new Breaker({
 });
 
 const runtime = createRuntime({ bootstrappedFromYaml: bootstrapped, breaker });
-const gh = makeClient(TOKEN);
+const gh = makeClient(TOKEN, {
+  // Every GitHub REST response updates the runtime so the dashboard's
+  // /api/status poll can show current PAT quota. No-op on responses
+  // that don't carry the headers (GraphQL, certain unauthenticated
+  // endpoints).
+  onRateLimit: (limit) => {
+    runtime.ghRateLimit = limit;
+  },
+});
 
 const pruned = store.pruneEvents(EVENT_RETENTION_DAYS);
 if (pruned > 0) {
