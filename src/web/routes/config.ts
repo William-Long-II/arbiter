@@ -68,6 +68,10 @@ export function configRoute(args: {
             <input type="number" name="max_approvals_per_hour" min="1" max="1000" value="${cfg.review.max_approvals_per_hour}">
           </div>
           <div>
+            <label title="After this many consecutive failures on the same PR+SHA, the PR is dead-lettered — skipped from normal discovery and surfaced on the Dashboard's Needs attention card. 0 disables dead-lettering.">Dead-letter threshold (0 disables)</label>
+            <input type="number" name="dead_letter_threshold" min="0" max="20" value="${cfg.review.dead_letter_threshold}">
+          </div>
+          <div>
             <label>Skip drafts</label>
             <select name="skip_drafts">
               <option value="true" ${cfg.review.skip_drafts ? "selected" : ""}>true</option>
@@ -233,6 +237,7 @@ export async function handleGeneralPost(
       skip_bots: String(form.get("skip_bots") ?? "true") === "true",
       require_ci_green: String(form.get("require_ci_green") ?? "true") === "true",
       concurrency: clampInt(form.get("concurrency"), 1, 4, 1),
+      dead_letter_threshold: clampInt(form.get("dead_letter_threshold"), 0, 20, 3),
       include_paths: splitLines(form.get("include_paths")),
       exclude_paths: splitLines(form.get("exclude_paths")),
     },
@@ -273,6 +278,7 @@ export async function handleGeneralPost(
   store.setScalar("claude.command", cfg.claude.command);
   store.setScalar("claude.timeout_seconds", String(cfg.claude.timeout_seconds));
   store.setScalar("review.concurrency", String(cfg.review.concurrency));
+  store.setScalar("review.dead_letter_threshold", String(cfg.review.dead_letter_threshold));
   store.setScalar("review.include_paths", JSON.stringify(cfg.review.include_paths));
   store.setScalar("review.exclude_paths", JSON.stringify(cfg.review.exclude_paths));
 

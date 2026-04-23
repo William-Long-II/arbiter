@@ -44,6 +44,18 @@ export type OrgRow = {
   tone_mode: ToneMode;
 };
 
+export type FailureRow = {
+  repo: string;
+  pr_number: number;
+  head_sha: string;
+  failure_count: number;
+  first_failed_at: string;
+  last_failed_at: string;
+  last_error: string | null;
+  last_kind: string | null;
+  dismissed_at: string | null;
+};
+
 export type RepoRow = {
   slug: string;
   tone_override: string | null;
@@ -91,6 +103,27 @@ export type Store = {
    * specific commit. If omitted, every row for the PR is deleted.
    */
   clearDedupe(repo: string, prNumber: number, headSha?: string): number;
+
+  // pr_failures (dead-letter tracking)
+  /**
+   * Bump the per-SHA failure counter. Returns the new count. Upserts a row
+   * if this is the first failure; otherwise increments the existing count and
+   * updates last_* fields.
+   */
+  recordFailure(args: {
+    repo: string;
+    prNumber: number;
+    headSha: string;
+    kind: string;
+    error: string;
+  }): number;
+  /** Remove the failure record for this PR+SHA. Called on any successful review. */
+  clearFailure(repo: string, prNumber: number, headSha: string): void;
+  getFailure(repo: string, prNumber: number, headSha: string): FailureRow | null;
+  /** PRs at or above `threshold` failures and NOT yet dismissed. Ordered newest-fail first. */
+  listDeadLettered(threshold: number): FailureRow[];
+  /** Mark a PR+SHA as acknowledged by the operator. Still skipped in discovery, just hidden from the "needs attention" card. */
+  dismissFailure(repo: string, prNumber: number, headSha: string): void;
 
   // events
   recordEvent(args: {
@@ -200,6 +233,25 @@ export function openStore(path: string): Store {
     CREATE TABLE IF NOT EXISTS config_skip_authors (
       username TEXT PRIMARY KEY
     );
+
+    -- Per-SHA failure tracking. Every time a PR fails to review (Claude error,
+    -- post error, etc.) we upsert here and bump failure_count. Any successful
+    -- review deletes the row. When failure_count crosses the dead-letter
+    -- threshold the loop stops picking the PR up until the operator hits
+    -- Retry (clears the row) or Dismiss (sets dismissed_at, still skipped).
+    CREATE TABLE IF NOT EXISTS pr_failures (
+      repo TEXT NOT NULL,
+      pr_number INTEGER NOT NULL,
+      head_sha TEXT NOT NULL,
+      failure_count INTEGER NOT NULL,
+      first_failed_at TEXT NOT NULL,
+      last_failed_at TEXT NOT NULL,
+      last_error TEXT,
+      last_kind TEXT,
+      dismissed_at TEXT,
+      PRIMARY KEY (repo, pr_number, head_sha)
+    );
+    CREATE INDEX IF NOT EXISTS idx_pr_failures_count ON pr_failures(failure_count);
   `);
 
   // Migration for DBs created before per-repo tones: add the tone columns if
@@ -247,6 +299,40 @@ export function openStore(path: string): Store {
     clearDedupeAll: db.prepare(`DELETE FROM reviews WHERE repo=? AND pr_number=?`),
     clearDedupeSha: db.prepare(
       `DELETE FROM reviews WHERE repo=? AND pr_number=? AND head_sha=?`,
+    ),
+
+    upsertFailure: db.prepare(
+      `INSERT INTO pr_failures
+         (repo, pr_number, head_sha, failure_count,
+          first_failed_at, last_failed_at, last_error, last_kind, dismissed_at)
+       VALUES (?, ?, ?, 1, ?, ?, ?, ?, NULL)
+       ON CONFLICT(repo, pr_number, head_sha) DO UPDATE SET
+         failure_count = failure_count + 1,
+         last_failed_at = excluded.last_failed_at,
+         last_error = excluded.last_error,
+         last_kind = excluded.last_kind`,
+    ),
+    getFailureCount: db.prepare(
+      `SELECT failure_count FROM pr_failures WHERE repo=? AND pr_number=? AND head_sha=?`,
+    ),
+    getFailure: db.prepare(
+      `SELECT repo, pr_number, head_sha, failure_count,
+              first_failed_at, last_failed_at, last_error, last_kind, dismissed_at
+       FROM pr_failures WHERE repo=? AND pr_number=? AND head_sha=?`,
+    ),
+    clearFailure: db.prepare(
+      `DELETE FROM pr_failures WHERE repo=? AND pr_number=? AND head_sha=?`,
+    ),
+    listDeadLettered: db.prepare(
+      `SELECT repo, pr_number, head_sha, failure_count,
+              first_failed_at, last_failed_at, last_error, last_kind, dismissed_at
+       FROM pr_failures
+       WHERE failure_count >= ? AND dismissed_at IS NULL
+       ORDER BY last_failed_at DESC`,
+    ),
+    dismissFailure: db.prepare(
+      `UPDATE pr_failures SET dismissed_at = ?
+       WHERE repo=? AND pr_number=? AND head_sha=?`,
     ),
 
     insertEvent: db.prepare(
@@ -390,6 +476,31 @@ export function openStore(path: string): Store {
         : stmts.clearDedupeAll.run(repo, prNumber);
       if (Number(res.changes) > 0) bump();
       return Number(res.changes);
+    },
+
+    recordFailure({ repo, prNumber, headSha, kind, error }) {
+      const now = new Date().toISOString();
+      stmts.upsertFailure.run(repo, prNumber, headSha, now, now, error, kind);
+      bump();
+      const row = stmts.getFailureCount.get(repo, prNumber, headSha) as
+        | { failure_count: number }
+        | undefined;
+      return row?.failure_count ?? 1;
+    },
+    clearFailure(repo, prNumber, headSha) {
+      const res = stmts.clearFailure.run(repo, prNumber, headSha);
+      if (Number(res.changes) > 0) bump();
+    },
+    getFailure(repo, prNumber, headSha) {
+      const row = stmts.getFailure.get(repo, prNumber, headSha) as FailureRow | undefined;
+      return row ?? null;
+    },
+    listDeadLettered(threshold) {
+      return stmts.listDeadLettered.all(threshold) as FailureRow[];
+    },
+    dismissFailure(repo, prNumber, headSha) {
+      const res = stmts.dismissFailure.run(new Date().toISOString(), repo, prNumber, headSha);
+      if (Number(res.changes) > 0) bump();
     },
 
     recordEvent({ level, kind, message, repo, prNumber, headSha, payload }) {

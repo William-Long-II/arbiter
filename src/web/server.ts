@@ -12,7 +12,12 @@ import {
 } from "./routes/config.ts";
 import { orgEditRoute, handleOrgEditPost } from "./routes/org-edit.ts";
 import { repoEditRoute, handleRepoEditPost } from "./routes/repo-edit.ts";
-import { handleRecheck, handleToggleDryRun } from "./routes/actions.ts";
+import {
+  handleDismissFailure,
+  handleRecheck,
+  handleRetryFailure,
+  handleToggleDryRun,
+} from "./routes/actions.ts";
 import { statusApiRoute } from "./routes/status-api.ts";
 import { redirect } from "./html.ts";
 import { log } from "../log.ts";
@@ -175,6 +180,22 @@ function buildRoutes(): Route[] {
       handler: async ({ req, store }) => {
         const form = await req.formData();
         return handleRecheck(store, form);
+      },
+    },
+    {
+      method: "POST",
+      pattern: "/actions/retry-failure",
+      handler: async ({ req, store }) => {
+        const form = await req.formData();
+        return handleRetryFailure(store, form);
+      },
+    },
+    {
+      method: "POST",
+      pattern: "/actions/dismiss-failure",
+      handler: async ({ req, store }) => {
+        const form = await req.formData();
+        return handleDismissFailure(store, form);
       },
     },
   ];

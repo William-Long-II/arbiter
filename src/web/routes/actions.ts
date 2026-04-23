@@ -3,6 +3,41 @@ import { currentActor, recordAudit } from "../../audit.ts";
 import { sluggedPath } from "../../github/slug.ts";
 import { redirect } from "../html.ts";
 
+function parseTriple(form: FormData): { repo: string; pr: number; sha: string } | null {
+  const repo = String(form.get("repo") ?? "").trim();
+  const prStr = String(form.get("pr") ?? "").trim();
+  const sha = String(form.get("head_sha") ?? "").trim();
+  const pr = Number(prStr);
+  if (!repo || !Number.isInteger(pr) || !sha) return null;
+  return { repo, pr, sha };
+}
+
+export function handleRetryFailure(store: Store, form: FormData): Response {
+  const t = parseTriple(form);
+  if (!t) return redirect("/");
+  store.clearFailure(t.repo, t.pr, t.sha);
+  recordAudit(store, {
+    actor: currentActor(),
+    action: "action.recheck",
+    target: `${t.repo}#${t.pr}`,
+    detail: `retry from dead-letter (SHA ${t.sha.slice(0, 7)})`,
+  });
+  return redirect("/");
+}
+
+export function handleDismissFailure(store: Store, form: FormData): Response {
+  const t = parseTriple(form);
+  if (!t) return redirect("/");
+  store.dismissFailure(t.repo, t.pr, t.sha);
+  recordAudit(store, {
+    actor: currentActor(),
+    action: "action.recheck",
+    target: `${t.repo}#${t.pr}`,
+    detail: `dismissed dead-letter (SHA ${t.sha.slice(0, 7)})`,
+  });
+  return redirect("/");
+}
+
 export function handleToggleDryRun(store: Store): Response {
   const before = store.getScalar("review.dry_run");
   const next = before === "true" || before === null ? "false" : "true";
