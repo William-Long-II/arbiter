@@ -24,6 +24,14 @@ type StoredNote = {
   }>;
   /** Present on reviews recorded after per-repo tones shipped. Older rows omit it. */
   tone_used?: string;
+  /** Present on reviews recorded after the intent pipeline shipped. Older rows omit it. */
+  tickets?: Array<{
+    kind: string;
+    key: string;
+    title: string;
+    url: string;
+    isPullRequest?: boolean;
+  }>;
 };
 
 export function reviewDetailRoute(args: {
@@ -88,6 +96,25 @@ export function reviewDetailRoute(args: {
             </table>
           `}
       </section>
+
+      ${parsed.tickets && parsed.tickets.length > 0 ? html`
+        <section class="card">
+          <h2>Linked tickets (${parsed.tickets.length})</h2>
+          <p class="muted">Claude was given context from these linked issues/PRs so it could review against the ticket's intent, not just code quality.</p>
+          <table>
+            <thead><tr><th>Ref</th><th>Title</th><th></th></tr></thead>
+            <tbody>
+              ${parsed.tickets.map((t) => html`
+                <tr>
+                  <td class="mono">${t.key}${t.isPullRequest ? " (PR)" : ""}</td>
+                  <td>${t.title}</td>
+                  <td class="right"><a href="${t.url}" target="_blank" rel="noreferrer">open →</a></td>
+                </tr>
+              `)}
+            </tbody>
+          </table>
+        </section>
+      ` : ""}
 
       ${parsed.tone_used !== undefined ? html`
         <section class="card">
