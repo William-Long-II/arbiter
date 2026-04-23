@@ -46,6 +46,7 @@ export function statusApiRoute(args: { store: Store; runtime: Runtime }): Respon
       sizeBytes: store.meta.sizeBytes,
       counts,
     },
+    ghRateLimit: runtime.ghRateLimit,
     recentReviews,
   };
   return new Response(JSON.stringify(body), {
