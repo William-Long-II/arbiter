@@ -39,7 +39,7 @@ export function dashboardRoute(args: {
         <div class="stat"><div class="k">Watched</div><div class="v">${watched} ${watched === 1 ? "entry" : "entries"}</div></div>
         <div class="stat"><div class="k">Poll interval</div><div class="v">${cfg.poll.interval_seconds}s</div></div>
         <div class="stat"><div class="k">Last activity</div><div class="v" id="stat-last-activity" data-at="${runtime.lastActivityAt ?? ""}">${fmtRel(runtime.lastActivityAt)}</div></div>
-        <div class="stat"><div class="k">Next tick</div><div class="v" id="stat-next-tick" data-at="${runtime.nextTickAt ?? ""}">${runtime.nextTickAt ? "…" : "running"}</div></div>
+        <div class="stat"><div class="k">Next tick</div><div class="v" id="stat-next-tick" data-at="${runtime.nextTickAt ?? ""}">${runtime.nextTickAt ? "…" : (runtime.currentPrs.length > 0 ? "reviewing" : "discovering")}</div></div>
         <div class="stat"><div class="k">Concurrency</div><div class="v" id="stat-concurrency">${cfg.review.concurrency}</div></div>
         <div class="stat"><div class="k">Bot user</div><div class="v">${cfg.github.bot_username || "—"}</div></div>
       </div>
@@ -187,7 +187,14 @@ const DASHBOARD_SCRIPT = `
 
   function renderNextTick(){
     if (!nextEl) return;
-    if (targetMs === null) { nextEl.textContent = 'running'; return; }
+    if (targetMs === null) {
+      // A tick is in progress (server has cleared nextTickAt). Distinguish
+      // phase 1 (listing repos/PRs from GitHub, no PR picked up yet) from
+      // phase 2 (workers are processing PRs). activePrs is populated from
+      // the poll; empty means we haven't reached the worker pool yet.
+      nextEl.textContent = activePrs.length > 0 ? 'reviewing' : 'discovering';
+      return;
+    }
     nextEl.textContent = fmtCountdown(Math.ceil((targetMs - Date.now()) / 1000));
   }
 
