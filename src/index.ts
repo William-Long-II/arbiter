@@ -5,6 +5,7 @@ import { runTick } from "./loop.ts";
 import { log } from "./log.ts";
 import { startWebServer } from "./web/server.ts";
 import { createRuntime } from "./web/runtime.ts";
+import { Breaker } from "./review/breaker.ts";
 
 const DB_PATH = process.env.AUTO_REVIEWER_DB ?? "./data/state.sqlite";
 const YAML_PATH = process.env.AUTO_REVIEWER_CONFIG ?? "./config.yaml";
@@ -13,6 +14,8 @@ const WEB_HOST = process.env.AUTO_REVIEWER_WEB_HOST ?? "127.0.0.1";
 const WEB_PORT = Number(process.env.AUTO_REVIEWER_WEB_PORT ?? "8787");
 const WEB_PASSWORD = process.env.AUTO_REVIEWER_PASSWORD ?? "";
 const EVENT_RETENTION_DAYS = Number(process.env.AUTO_REVIEWER_EVENT_RETENTION_DAYS ?? "30");
+const BREAKER_THRESHOLD = Number(process.env.AUTO_REVIEWER_BREAKER_THRESHOLD ?? "5");
+const BREAKER_COOLDOWN_SECONDS = Number(process.env.AUTO_REVIEWER_BREAKER_COOLDOWN_SECONDS ?? "900");
 
 if (!TOKEN) {
   log.error("startup.missing_token", { hint: "set GITHUB_TOKEN in the environment" });
@@ -59,7 +62,22 @@ try {
   });
 }
 
-const runtime = createRuntime(bootstrapped);
+const breaker = new Breaker({
+  threshold: BREAKER_THRESHOLD,
+  cooldownMs: BREAKER_COOLDOWN_SECONDS * 1_000,
+  onTransition: ({ from, to, reason }) => {
+    const level = to === "open" ? "warn" : "info";
+    log[level](`breaker.${to}`, { from, reason });
+    store.recordEvent({
+      level,
+      kind: `breaker.${to}`,
+      message: `Claude circuit breaker: ${from} -> ${to}${reason ? " (" + reason + ")" : ""}`,
+      payload: { from, to, reason },
+    });
+  },
+});
+
+const runtime = createRuntime({ bootstrappedFromYaml: bootstrapped, breaker });
 const gh = makeClient(TOKEN);
 
 const pruned = store.pruneEvents(EVENT_RETENTION_DAYS);
@@ -115,7 +133,7 @@ while (!stopping) {
   runtime.nextTickAt = null; // tick in progress
   const started = Date.now();
   try {
-    await runTick({ gh, cfg, store, progress: runtime });
+    await runTick({ gh, cfg, store, progress: runtime, breaker });
   } catch (e) {
     const msg = (e as Error).message;
     runtime.lastTickError = msg;

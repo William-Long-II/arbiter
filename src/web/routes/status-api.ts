@@ -39,6 +39,7 @@ export function statusApiRoute(args: { store: Store; runtime: Runtime }): Respon
     currentPrs: runtime.currentPrs,
     lastActivityAt: runtime.lastActivityAt,
     concurrency: cfg.review.concurrency,
+    breaker: runtime.breaker.inspect(),
     storage: {
       path: store.meta.path,
       freshlyCreated: store.meta.freshlyCreated,

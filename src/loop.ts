@@ -11,6 +11,7 @@ import { validateReview } from "./review/validate.ts";
 import { postReview } from "./review/post.ts";
 import { resolveTone } from "./review/tone.ts";
 import { filterFiles } from "./review/file-filter.ts";
+import type { Breaker } from "./review/breaker.ts";
 import { log } from "./log.ts";
 import type { ActivePr, Runtime } from "./web/runtime.ts";
 
@@ -25,8 +26,9 @@ export async function runTick(args: {
   cfg: Config;
   store: Store;
   progress: Progress;
+  breaker: Breaker;
 }): Promise<void> {
-  const { gh, cfg, store, progress } = args;
+  const { gh, cfg, store, progress, breaker } = args;
 
   // Phase 1: resolve the eligible-PR list across every watched repo. Errors
   // listing one repo don't stop the others.
@@ -67,7 +69,7 @@ export async function runTick(args: {
       const pr = queue.shift();
       if (!pr) return;
       try {
-        await processPr(gh, cfg, store, pr, progress);
+        await processPr(gh, cfg, store, pr, progress, breaker);
       } catch (e) {
         // processPr catches its own errors and records events, but if
         // anything leaks out we log and keep the worker alive to drain the
@@ -89,6 +91,7 @@ async function processPr(
   store: Store,
   pr: PullRef,
   progress: Progress,
+  breaker: Breaker,
 ): Promise<void> {
   const repoSlug = slug(pr.repo);
   const active: ActivePr = {
@@ -98,7 +101,7 @@ async function processPr(
   };
   progress.currentPrs.push(active);
   try {
-    await processPrInner(gh, cfg, store, pr, repoSlug);
+    await processPrInner(gh, cfg, store, pr, repoSlug, breaker);
   } finally {
     const i = progress.currentPrs.indexOf(active);
     if (i >= 0) progress.currentPrs.splice(i, 1);
@@ -112,6 +115,7 @@ async function processPrInner(
   store: Store,
   pr: PullRef,
   repoSlug: string,
+  breaker: Breaker,
 ): Promise<void> {
   const tag = { repo: repoSlug, pr: pr.number, sha: pr.head_sha.slice(0, 7) };
 
@@ -216,12 +220,32 @@ async function processPrInner(
     tone: resolvedTone,
   });
 
+  // Breaker gate: if Claude has failed enough times in a row the breaker is
+  // open; skip the call entirely. DO NOT record a review row — dedupe stays
+  // empty so the next tick (after the breaker closes) picks this PR up fresh.
+  const acquire = breaker.tryAcquire();
+  if (!acquire.allowed) {
+    const msRemaining = acquire.reopensAt - Date.now();
+    log.warn("breaker.deferred", { ...tag, reopensAt: acquire.reopensAt });
+    store.recordEvent({
+      level: "warn",
+      kind: "breaker.deferred",
+      message: `Claude breaker is open; deferring (reopens in ${Math.max(0, Math.ceil(msRemaining / 1000))}s). Last reason: ${acquire.lastReason}`,
+      repo: repoSlug,
+      prNumber: pr.number,
+      headSha: pr.head_sha,
+      payload: { reopensAt: new Date(acquire.reopensAt).toISOString(), lastReason: acquire.lastReason },
+    });
+    return;
+  }
+
   log.info("claude.invoke", {
     ...tag,
     files: ctx.files.length,
     filesFilteredOut: filtered.skipped.length,
     promptBytes: prompt.length,
     toneBytes: resolvedTone.length,
+    breakerTrial: acquire.trial,
   });
 
   const result = await invokeClaude({
@@ -231,6 +255,7 @@ async function processPrInner(
   });
 
   if (!result.ok) {
+    breaker.recordFailure(result.error);
     log.error("claude.failed", { ...tag, error: result.error, stderr: result.stderr });
     store.recordEvent({
       level: "error",
@@ -244,6 +269,10 @@ async function processPrInner(
         stdoutSample: result.stdoutSample?.slice(0, 500),
       },
     });
+    // Record as skipped so the same SHA doesn't retry every tick forever.
+    // The breaker counts these failures across PRs; when the bot is broken
+    // systemically it'll trip after `threshold` and stop. The dead-letter
+    // queue (#130) will give operators a retry affordance once shipped.
     store.recordReview({
       repo: repoSlug,
       prNumber: pr.number,
@@ -253,6 +282,7 @@ async function processPrInner(
     });
     return;
   }
+  breaker.recordSuccess();
 
   const validated = validateReview(result.review, ctx);
 

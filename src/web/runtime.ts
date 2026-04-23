@@ -2,6 +2,7 @@
  * Shared state the web routes inspect. The loop writes to `status`; the server reads.
  * Decoupled so routes don't import the loop directly.
  */
+import type { Breaker } from "../review/breaker.ts";
 
 export type ActivePr = {
   /** "owner/name" of the repo this PR belongs to. */
@@ -29,9 +30,14 @@ export type Runtime = {
   /** ISO of the most recent per-PR completion (any verdict). Updates throughout a long tick so "last activity" feels live. */
   lastActivityAt: string | null;
   bootstrappedFromYaml: boolean;
+  /** Shared circuit breaker guarding Claude invocations. Single instance per process; all workers check it. */
+  breaker: Breaker;
 };
 
-export function createRuntime(bootstrappedFromYaml: boolean): Runtime {
+export function createRuntime(args: {
+  bootstrappedFromYaml: boolean;
+  breaker: Breaker;
+}): Runtime {
   return {
     startedAt: new Date().toISOString(),
     lastTickStart: null,
@@ -40,6 +46,7 @@ export function createRuntime(bootstrappedFromYaml: boolean): Runtime {
     nextTickAt: null,
     currentPrs: [],
     lastActivityAt: null,
-    bootstrappedFromYaml,
+    bootstrappedFromYaml: args.bootstrappedFromYaml,
+    breaker: args.breaker,
   };
 }

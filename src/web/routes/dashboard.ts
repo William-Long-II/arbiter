@@ -17,19 +17,25 @@ export function dashboardRoute(args: {
   const watched = cfg.watch.orgs.length + cfg.watch.repos.length;
   const counts = store.counts();
 
+  const breakerState = runtime.breaker.inspect();
   const banner: Banner | null = !isConfigured(cfg)
     ? {
         kind: "warn",
         message:
           "Setup not complete. Set github.bot_username and add at least one org or repo in Config before the bot will review anything.",
       }
-    : cfg.review.dry_run
+    : breakerState.kind === "open"
       ? {
-          kind: "ok",
-          message:
-            "Dry-run is ON. Reviews are computed and logged but NOT posted to GitHub. Disable in Config when you trust the output.",
+          kind: "err",
+          message: `Claude circuit breaker is OPEN. No reviews are running until it closes. Last reason: ${breakerState.lastReason}. Check Events for details.`,
         }
-      : null;
+      : cfg.review.dry_run
+        ? {
+            kind: "ok",
+            message:
+              "Dry-run is ON. Reviews are computed and logged but NOT posted to GitHub. Disable in Config when you trust the output.",
+          }
+        : null;
 
   const body = html`
     <section class="card">
@@ -42,6 +48,10 @@ export function dashboardRoute(args: {
         <div class="stat"><div class="k">Last activity</div><div class="v" id="stat-last-activity" data-at="${runtime.lastActivityAt ?? ""}">${fmtRel(runtime.lastActivityAt)}</div></div>
         <div class="stat"><div class="k">Next tick</div><div class="v" id="stat-next-tick" data-at="${runtime.nextTickAt ?? ""}">${runtime.nextTickAt ? "…" : (runtime.currentPrs.length > 0 ? "reviewing" : "discovering")}</div></div>
         <div class="stat"><div class="k">Concurrency</div><div class="v" id="stat-concurrency">${cfg.review.concurrency}</div></div>
+        <div class="stat">
+          <div class="k">Breaker</div>
+          <div class="v" id="stat-breaker" data-reopens-at="${breakerState.kind === "open" ? new Date(breakerState.reopensAt).toISOString() : ""}">${breakerLabel(breakerState)}</div>
+        </div>
         <div class="stat"><div class="k">Bot user</div><div class="v">${cfg.github.bot_username || "—"}</div></div>
       </div>
       <div class="space flex">
@@ -184,6 +194,16 @@ const DASHBOARD_SCRIPT = `
     var h = Math.floor(m / 60), rm = m % 60;
     return h + 'h ' + rm + 'm';
   }
+  function fmtBreaker(b){
+    if (!b) return '—';
+    if (b.kind === 'closed') {
+      var n = b.consecutiveFailures || 0;
+      return n > 0 ? 'closed (' + n + ' fail' + (n === 1 ? '' : 's') + ')' : 'closed';
+    }
+    if (b.kind === 'half_open') return 'half-open (trial)';
+    var remaining = Math.max(0, Math.ceil((b.reopensAt - Date.now()) / 1000));
+    return 'open (' + remaining + 's left)';
+  }
 
   //
   // ─── renderer registry ────────────────────────────────────────────────
@@ -200,6 +220,15 @@ const DASHBOARD_SCRIPT = `
     },
     'stat-concurrency': function(el, s){
       if (typeof s.concurrency === 'number') el.textContent = s.concurrency;
+    },
+    'stat-breaker': function(el, s){
+      if (!s.breaker) return;
+      if (s.breaker.kind === 'open') {
+        el.dataset.reopensAt = new Date(s.breaker.reopensAt).toISOString();
+      } else {
+        el.dataset.reopensAt = '';
+      }
+      el.textContent = fmtBreaker(s.breaker);
     },
     'stat-next-tick': function(el, s){
       el.dataset.at = s.nextTickAt || '';
@@ -320,7 +349,8 @@ const DASHBOARD_SCRIPT = `
 
   // 1s local ticks — reformat time-relative cells without hitting the poll.
   // Every [data-at] cell gets fmtRel; every [data-started] cell inside a
-  // #current-prs table gets fmtElapsed.
+  // #current-prs table gets fmtElapsed. The breaker "open (Xs left)"
+  // counter is reticked here too so it drifts between 5s polls.
   setInterval(function(){
     renderNextTick();
     var atCells = document.querySelectorAll('[data-at]');
@@ -334,6 +364,14 @@ const DASHBOARD_SCRIPT = `
     for (var j = 0; j < currentRows.length; j++) {
       var cell = currentRows[j].querySelector('.current-elapsed');
       if (cell) cell.textContent = fmtElapsed(currentRows[j].dataset.started);
+    }
+    var brk = document.getElementById('stat-breaker');
+    if (brk && brk.dataset.reopensAt) {
+      var at = Date.parse(brk.dataset.reopensAt);
+      if (!isNaN(at)) {
+        var remaining = Math.max(0, Math.ceil((at - Date.now()) / 1000));
+        brk.textContent = 'open (' + remaining + 's left)';
+      }
     }
   }, 1000);
 
@@ -374,4 +412,16 @@ function fmtElapsed(iso: string): string {
   if (s < 60) return `${s}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
   return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
+function breakerLabel(state: import("../runtime.ts").Runtime["breaker"] extends { inspect(): infer S } ? S : never): string {
+  if (state.kind === "closed") {
+    const n = (state as { consecutiveFailures: number }).consecutiveFailures;
+    return n > 0 ? `closed (${n} fail${n === 1 ? "" : "s"})` : "closed";
+  }
+  if (state.kind === "half_open") return "half-open (trial)";
+  // open
+  const reopensAt = (state as { reopensAt: number }).reopensAt;
+  const remaining = Math.max(0, Math.ceil((reopensAt - Date.now()) / 1000));
+  return `open (${remaining}s left)`;
 }
