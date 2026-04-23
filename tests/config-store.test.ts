@@ -194,6 +194,27 @@ claude:
     }
   });
 
+  test("bootstrapFromYaml returns false when the path is a directory (Docker bind-mount slip)", async () => {
+    // If an operator mounts /app/config.yaml from the host but the host
+    // path doesn't exist, Docker creates a DIRECTORY at /app/config.yaml.
+    // The old path tried readFileSync() on the dir and exploded with
+    // EISDIR at boot. New behavior: skip cleanly, let the UI take over.
+    const { path, cleanup } = tmpDb();
+    const fs = await import("node:fs");
+    const fakeYamlDir = path + ".yaml";
+    fs.mkdirSync(fakeYamlDir);
+    try {
+      const store = openStore(path);
+      const result = bootstrapFromYaml(store, fakeYamlDir);
+      expect(result).toBe(false);
+      // No bot_username got set by the aborted bootstrap.
+      expect(store.getScalar("github.bot_username")).toBeNull();
+      store.close();
+    } finally {
+      cleanup();
+    }
+  });
+
   test("events are recorded and returned newest-first", () => {
     const { path, cleanup } = tmpDb();
     try {
