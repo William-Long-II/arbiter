@@ -3,6 +3,7 @@ import type { Config } from "../../config.ts";
 import type { Runtime } from "../runtime.ts";
 import { isConfigured } from "../../config.ts";
 import { sluggedPath } from "../../github/slug.ts";
+import { computeMetrics } from "../../metrics.ts";
 import { html, htmlResponse, raw } from "../html.ts";
 import { layout, type Banner } from "../layout.ts";
 
@@ -19,6 +20,9 @@ export function dashboardRoute(args: {
   const deadLettered = cfg.review.dead_letter_threshold > 0
     ? store.listDeadLettered(cfg.review.dead_letter_threshold)
     : [];
+  // Metrics rendered SSR so the card has real numbers before the first poll
+  // returns; the client refetches every 60s (and immediately on window change).
+  const initialMetrics = computeMetrics(store, "7d");
 
   const breakerState = runtime.breaker.inspect();
   const banner: Banner | null = !isConfigured(cfg)
@@ -62,6 +66,26 @@ export function dashboardRoute(args: {
           <button type="submit">Flip dry-run → ${cfg.review.dry_run ? "live" : "dry-run"}</button>
         </form>
         <span class="lvl-error" id="stat-tick-error">${runtime.lastTickError ? `last tick error: ${runtime.lastTickError}` : ""}</span>
+      </div>
+    </section>
+
+    <section class="card" id="metrics-card" data-window="7d">
+      <div class="flex" style="justify-content:space-between">
+        <h2 style="margin:0">Metrics <span class="muted" style="font-size:11px;font-weight:normal;letter-spacing:0">(last <span id="metrics-window-label">7 days</span>)</span></h2>
+        <div class="flex" style="gap:4px">
+          <button type="button" class="metrics-win" data-window="24h">24h</button>
+          <button type="button" class="metrics-win metrics-win-active" data-window="7d">7d</button>
+          <button type="button" class="metrics-win" data-window="30d">30d</button>
+        </div>
+      </div>
+      <div class="grid space">
+        <div class="stat"><div class="k">Reviews</div><div class="v" id="metric-volume">${fmtVolume(initialMetrics.volume)}</div></div>
+        <div class="stat"><div class="k">Approval rate</div><div class="v" id="metric-approval-rate">${fmtPercent(initialMetrics.approvalRate)}</div></div>
+        <div class="stat"><div class="k">Avg latency</div><div class="v" id="metric-latency">${fmtSeconds(initialMetrics.avgLatencySeconds)}</div></div>
+        <div class="stat"><div class="k">Dropped-comment rate</div><div class="v" id="metric-dropped-rate">${fmtPercent(initialMetrics.droppedCommentRate)}</div></div>
+        <div class="stat"><div class="k">Avg files filtered</div><div class="v" id="metric-files-filtered">${fmtAvg(initialMetrics.avgFilesFilteredOut)}</div></div>
+        <div class="stat"><div class="k">Comments / review</div><div class="v" id="metric-comments">${fmtComments(initialMetrics.avgCommentsPerReview)}</div></div>
+        <div class="stat"><div class="k">Failures</div><div class="v" id="metric-failures">${fmtFailures(initialMetrics.failures)}</div></div>
       </div>
     </section>
 
@@ -428,6 +452,83 @@ const DASHBOARD_SCRIPT = `
   // only replaces identical data with identical data. First poll happens
   // at the 5s mark, then every 5s thereafter.
   setInterval(poll, 5000);
+
+  //
+  // ─── metrics card ─────────────────────────────────────────────────────
+  //
+  // Separate poll cadence (60s) because /api/metrics is much heavier than
+  // /api/status. Window buttons change the active window and trigger an
+  // immediate refresh.
+  //
+  var metricsCard = document.getElementById('metrics-card');
+  var windowLabels = { '24h': '24 hours', '7d': '7 days', '30d': '30 days' };
+
+  function fmtMPercent(r){ return r === null ? '—' : (Math.round(r * 1000) / 10) + '%'; }
+  function fmtMSeconds(s){
+    if (s === null) return '—';
+    if (s < 60) return s.toFixed(1) + 's';
+    var m = Math.floor(s / 60), r = Math.round(s - m * 60);
+    return m + 'm ' + r + 's';
+  }
+  function fmtMAvg(n){ return n === null ? '—' : n.toFixed(1); }
+  function fmtMVolume(v){
+    if (!v || v.total === 0) return '—';
+    return v.total + ' (' + v.approve + '✓ ' + v.request_changes + '✗ ' + v.dry_run + ' dry ' + v.skipped + ' skip)';
+  }
+  function fmtMComments(c){
+    if (!c) return '—';
+    var total = c.nit + c.suggestion + c.issue + c.blocker;
+    if (total === 0) return '0';
+    return total.toFixed(1) + ' (' + c.blocker + 'b ' + c.issue + 'i ' + c.suggestion + 's ' + c.nit + 'n)';
+  }
+  function fmtMFailures(f){
+    if (!f) return '—';
+    var total = f.claude_failed + f.post_failed + f.breaker_deferred + f.dead_letter_entered;
+    if (total === 0) return '0';
+    return total + ' (' + f.claude_failed + 'c ' + f.post_failed + 'p ' + f.breaker_deferred + 'd ' + f.dead_letter_entered + 'dl)';
+  }
+
+  function applyMetrics(m){
+    var set = function(id, val){ var el = document.getElementById(id); if (el) el.textContent = val; };
+    set('metric-volume', fmtMVolume(m.volume));
+    set('metric-approval-rate', fmtMPercent(m.approvalRate));
+    set('metric-latency', fmtMSeconds(m.avgLatencySeconds));
+    set('metric-dropped-rate', fmtMPercent(m.droppedCommentRate));
+    set('metric-files-filtered', fmtMAvg(m.avgFilesFilteredOut));
+    set('metric-comments', fmtMComments(m.avgCommentsPerReview));
+    set('metric-failures', fmtMFailures(m.failures));
+    var lbl = document.getElementById('metrics-window-label');
+    if (lbl && m.window) lbl.textContent = windowLabels[m.window] || m.window;
+  }
+
+  async function pollMetrics(){
+    if (!metricsCard) return;
+    var win = metricsCard.dataset.window || '7d';
+    try {
+      var r = await fetch('/api/metrics?window=' + encodeURIComponent(win), {
+        credentials: 'same-origin', cache: 'no-store',
+      });
+      if (!r.ok) return;
+      applyMetrics(await r.json());
+    } catch (e) { /* transient */ }
+  }
+
+  if (metricsCard) {
+    var buttons = metricsCard.querySelectorAll('button.metrics-win');
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].addEventListener('click', function(ev){
+        var btn = ev.currentTarget;
+        var win = btn.dataset.window;
+        if (!win) return;
+        metricsCard.dataset.window = win;
+        for (var j = 0; j < buttons.length; j++) {
+          buttons[j].classList.toggle('metrics-win-active', buttons[j] === btn);
+        }
+        pollMetrics();
+      });
+    }
+    setInterval(pollMetrics, 60_000);
+  }
 })();
 `;
 
@@ -453,6 +554,42 @@ function fmtElapsed(iso: string): string {
   if (s < 60) return `${s}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
   return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
+function fmtVolume(v: { total: number; approve: number; request_changes: number; dry_run: number; skipped: number }): string {
+  if (v.total === 0) return "—";
+  return `${v.total} (${v.approve}✓ ${v.request_changes}✗ ${v.dry_run} dry ${v.skipped} skip)`;
+}
+
+function fmtPercent(r: number | null): string {
+  if (r === null) return "—";
+  return `${Math.round(r * 1000) / 10}%`;
+}
+
+function fmtSeconds(s: number | null): string {
+  if (s === null) return "—";
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60);
+  const r = Math.round(s - m * 60);
+  return `${m}m ${r}s`;
+}
+
+function fmtAvg(n: number | null): string {
+  if (n === null) return "—";
+  return n.toFixed(1);
+}
+
+function fmtComments(c: { nit: number; suggestion: number; issue: number; blocker: number } | null): string {
+  if (!c) return "—";
+  const total = c.nit + c.suggestion + c.issue + c.blocker;
+  if (total === 0) return "0";
+  return `${total.toFixed(1)} (${c.blocker}b ${c.issue}i ${c.suggestion}s ${c.nit}n)`;
+}
+
+function fmtFailures(f: { claude_failed: number; post_failed: number; breaker_deferred: number; dead_letter_entered: number }): string {
+  const total = f.claude_failed + f.post_failed + f.breaker_deferred + f.dead_letter_entered;
+  if (total === 0) return "0";
+  return `${total} (${f.claude_failed}c ${f.post_failed}p ${f.breaker_deferred}d ${f.dead_letter_entered}dl)`;
 }
 
 function breakerLabel(state: import("../runtime.ts").Runtime["breaker"] extends { inspect(): infer S } ? S : never): string {

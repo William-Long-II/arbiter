@@ -49,6 +49,8 @@ button,input[type=submit]{
 }
 button:hover,input[type=submit]:hover{border-color:var(--accent);color:var(--accent)}
 button.danger:hover{border-color:var(--err);color:var(--err)}
+button.metrics-win{padding:3px 10px;font-size:12px;color:var(--muted)}
+button.metrics-win-active{border-color:var(--accent);color:var(--accent)}
 
 /* Tight, right-aligned cluster of row actions (edit link + delete button, etc).
    Matches anchor and button dimensions so they line up as a unit. */
