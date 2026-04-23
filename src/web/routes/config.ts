@@ -20,6 +20,7 @@ export function configRoute(args: {
   const { store, cfg, errors } = args;
   const orgs = store.listOrgs();
   const repos = store.listWatchedRepoRows();
+  const toneTemplates = store.listToneTemplates();
   // When rendering a failed save, skip_authors comes from the submitted
   // cfg (so the user keeps their edits). On a fresh GET we read from DB.
   const skipAuthors = errors && errors.length > 0
@@ -179,6 +180,42 @@ export function configRoute(args: {
         </div>
         <div class="space"><button type="submit">Add / update org</button></div>
       </form>
+    </section>
+
+    <section class="card">
+      <h2>File-type tone templates</h2>
+      <p class="muted">
+        Each template appends extra guidance to the tone Claude sees when the
+        PR diff contains at least one matching file. Lower-priority templates
+        are appended first; higher-priority (more specific) guidance appears
+        later in the final tone, closer to the review task instruction.
+      </p>
+      ${toneTemplates.length === 0
+        ? html`<p class="muted">No templates yet. Add one to give Claude file-type-specific review lenses (e.g. Terraform security, React a11y, SQL migration safety).</p>`
+        : html`
+          <table>
+            <thead><tr><th>Priority</th><th>Pattern</th><th>Addendum</th><th></th></tr></thead>
+            <tbody>
+              ${toneTemplates.map((t) => html`
+                <tr>
+                  <td class="mono">${t.priority}</td>
+                  <td class="mono">${t.pattern}</td>
+                  <td class="muted">${t.tone_addendum.length > 120 ? t.tone_addendum.slice(0, 117) + "…" : t.tone_addendum}</td>
+                  <td>
+                    <div class="actions">
+                      <a href="/config/tone-templates/${t.id}/edit">edit</a>
+                      <form method="post" action="/config/tone-templates/${t.id}" class="inline">
+                        <input type="hidden" name="_action" value="delete">
+                        <button type="submit" class="danger">delete</button>
+                      </form>
+                    </div>
+                  </td>
+                </tr>
+              `)}
+            </tbody>
+          </table>
+        `}
+      <div class="space"><a href="/config/tone-templates/new"><button type="button">Add template</button></a></div>
     </section>
 
     <section class="card">

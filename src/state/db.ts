@@ -74,6 +74,14 @@ export type RepoRow = {
   tone_mode: ToneMode;
 };
 
+export type ToneTemplateRow = {
+  id: number;
+  pattern: string;
+  tone_addendum: string;
+  priority: number;
+  created_at: string;
+};
+
 export type StoreCounts = {
   reviews: number;
   events: number;
@@ -186,6 +194,19 @@ export type Store = {
   addSkipAuthor(username: string): void;
   removeSkipAuthor(username: string): void;
 
+  // review.tone_templates (file-type specific tone addendums)
+  listToneTemplates(): ToneTemplateRow[];
+  getToneTemplate(id: number): ToneTemplateRow | null;
+  /** Insert a new template. Returns the assigned id. */
+  insertToneTemplate(args: { pattern: string; tone_addendum: string; priority: number }): number;
+  updateToneTemplate(args: {
+    id: number;
+    pattern: string;
+    tone_addendum: string;
+    priority: number;
+  }): void;
+  deleteToneTemplate(id: number): void;
+
   close(): void;
 };
 
@@ -291,6 +312,21 @@ export function openStore(path: string): Store {
       PRIMARY KEY (repo, pr_number, head_sha)
     );
     CREATE INDEX IF NOT EXISTS idx_pr_failures_count ON pr_failures(failure_count);
+
+    -- File-type-specific tone templates. When a PR's diff contains any file
+    -- matching the pattern column, the tone_addendum is appended to the
+    -- resolved tone before Claude sees it. Ordered ascending by priority
+    -- so higher-priority (more specific) templates appear later in the
+    -- final tone — closer to the TASK instruction, where prompt recency
+    -- has more weight.
+    CREATE TABLE IF NOT EXISTS config_tone_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pattern TEXT NOT NULL,
+      tone_addendum TEXT NOT NULL,
+      priority INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_tone_templates_priority ON config_tone_templates(priority);
   `);
 
   // Migration for DBs created before per-repo tones: add the tone columns if
@@ -463,6 +499,23 @@ export function openStore(path: string): Store {
       `INSERT OR IGNORE INTO config_skip_authors(username) VALUES (?)`,
     ),
     removeSkipAuthor: db.prepare(`DELETE FROM config_skip_authors WHERE username=?`),
+
+    listToneTemplates: db.prepare(
+      `SELECT id, pattern, tone_addendum, priority, created_at
+       FROM config_tone_templates ORDER BY priority ASC, id ASC`,
+    ),
+    getToneTemplate: db.prepare(
+      `SELECT id, pattern, tone_addendum, priority, created_at
+       FROM config_tone_templates WHERE id=?`,
+    ),
+    insertToneTemplate: db.prepare(
+      `INSERT INTO config_tone_templates(pattern, tone_addendum, priority, created_at)
+       VALUES (?, ?, ?, ?)`,
+    ),
+    updateToneTemplate: db.prepare(
+      `UPDATE config_tone_templates SET pattern=?, tone_addendum=?, priority=? WHERE id=?`,
+    ),
+    deleteToneTemplate: db.prepare(`DELETE FROM config_tone_templates WHERE id=?`),
   };
 
   const meta: StoreMeta = {
@@ -677,6 +730,28 @@ export function openStore(path: string): Store {
     },
     removeSkipAuthor(username) {
       stmts.removeSkipAuthor.run(username);
+      bump();
+    },
+
+    listToneTemplates() {
+      return stmts.listToneTemplates.all() as ToneTemplateRow[];
+    },
+    getToneTemplate(id) {
+      return (stmts.getToneTemplate.get(id) as ToneTemplateRow | undefined) ?? null;
+    },
+    insertToneTemplate({ pattern, tone_addendum, priority }) {
+      const now = new Date().toISOString();
+      const info = stmts.insertToneTemplate.run(pattern, tone_addendum, priority, now);
+      bump();
+      // bun:sqlite RunResult exposes `lastInsertRowid` as a number for AUTOINCREMENT.
+      return Number((info as { lastInsertRowid: number | bigint }).lastInsertRowid);
+    },
+    updateToneTemplate({ id, pattern, tone_addendum, priority }) {
+      stmts.updateToneTemplate.run(pattern, tone_addendum, priority, id);
+      bump();
+    },
+    deleteToneTemplate(id) {
+      stmts.deleteToneTemplate.run(id);
       bump();
     },
 
