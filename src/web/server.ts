@@ -17,6 +17,7 @@ import {
   handleOrgLinearPost,
 } from "./routes/org-edit.ts";
 import { repoEditRoute, handleRepoEditPost } from "./routes/repo-edit.ts";
+import { toneTemplateEditRoute, handleToneTemplatePost } from "./routes/tone-template-edit.ts";
 import {
   handleDismissFailure,
   handleRecheck,
@@ -106,6 +107,17 @@ function buildRoutes(): Route[] {
         return repoEditRoute({ store, cfg: loadConfigFromStore(store), slug });
       },
     },
+    {
+      method: "GET",
+      pattern: "/config/tone-templates/new",
+      handler: ({ store }) => toneTemplateEditRoute({ store, id: "new" }),
+    },
+    {
+      method: "GET",
+      pattern: /^\/config\/tone-templates\/(\d+)\/edit$/,
+      handler: ({ store, match }) =>
+        toneTemplateEditRoute({ store, id: Number(match![1]) }),
+    },
 
     // Events.
     { method: "GET", pattern: "/events", handler: ({ store }) => eventsRoute({ store }) },
@@ -192,6 +204,22 @@ function buildRoutes(): Route[] {
         const slug = `${decodeURIComponent(match![1]!)}/${decodeURIComponent(match![2]!)}`;
         const form = await req.formData();
         return handleRepoEditPost(store, slug, form);
+      },
+    },
+    {
+      method: "POST",
+      pattern: "/config/tone-templates",
+      handler: async ({ req, store }) => {
+        const form = await req.formData();
+        return handleToneTemplatePost({ store, id: null, form });
+      },
+    },
+    {
+      method: "POST",
+      pattern: /^\/config\/tone-templates\/(\d+)$/,
+      handler: async ({ req, store, match }) => {
+        const form = await req.formData();
+        return handleToneTemplatePost({ store, id: Number(match![1]), form });
       },
     },
 

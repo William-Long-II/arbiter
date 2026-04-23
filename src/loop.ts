@@ -11,6 +11,7 @@ import { TriageResult } from "./claude/schema.ts";
 import { validateReview } from "./review/validate.ts";
 import { postReview } from "./review/post.ts";
 import { resolveTone } from "./review/tone.ts";
+import { applyToneTemplates } from "./review/tone-templates.ts";
 import { filterFiles } from "./review/file-filter.ts";
 import { pickDeepReviewFiles, shouldTriage } from "./review/large-pr.ts";
 import type { Breaker } from "./review/breaker.ts";
@@ -220,11 +221,29 @@ async function processPrInner(
     return;
   }
 
-  const resolvedTone = resolveTone({
+  const baseTone = resolveTone({
     cfg,
     owner: pr.repo.owner,
     name: pr.repo.name,
   });
+
+  // Walk the configured file-type templates and append addendums for every
+  // template that matches at least one changed file. The loop only reads
+  // templates here (not in config load) so changes take effect next tick
+  // without a restart.
+  const templateRows = store.listToneTemplates();
+  const toneResult = applyToneTemplates({
+    baseTone,
+    files: ctx.files,
+    templates: templateRows.map((r) => ({
+      id: r.id,
+      pattern: r.pattern,
+      tone_addendum: r.tone_addendum,
+      priority: r.priority,
+    })),
+  });
+  const resolvedTone = toneResult.tone;
+  const toneTemplatesApplied = toneResult.applied;
 
   // Pull intent context (linked GitHub issues/PRs) from the title+body so the
   // prompt grounds review against what the ticket asked for, not just
@@ -532,7 +551,13 @@ async function processPrInner(
     prNumber: pr.number,
     headSha: pr.head_sha,
     verdict: persisted,
-    note: buildReviewNote(validated, resolvedTone, intent.tickets, triageSummary),
+    note: buildReviewNote(
+      validated,
+      resolvedTone,
+      intent.tickets,
+      triageSummary,
+      toneTemplatesApplied,
+    ),
   });
   // Any prior failure counter for this SHA is now stale — a successful review
   // means we've recovered.
@@ -577,6 +602,13 @@ function buildReviewNote(
     deferred: string[];
     entries: Array<{ path: string; priority: "high" | "medium" | "low"; reason: string }>;
   },
+  templatesApplied: Array<{
+    id: number;
+    pattern: string;
+    priority: number;
+    matched_paths: string[];
+    matched_count: number;
+  }>,
 ): string {
   const payload = {
     verdict: v.verdict,
@@ -604,6 +636,9 @@ function buildReviewNote(
           },
         }
       : {}),
+    // Persisted only when at least one template fired — keeps the note
+    // compact for PRs whose file mix didn't trigger any templates.
+    ...(templatesApplied.length > 0 ? { tone_templates: templatesApplied } : {}),
   };
   const json = JSON.stringify(payload);
   return json.slice(0, 512 * 1024);

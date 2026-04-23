@@ -38,6 +38,14 @@ type StoredNote = {
     deferred: string[];
     entries: Array<{ path: string; priority: "high" | "medium" | "low"; reason: string }>;
   };
+  /** Present only on reviews where at least one file-type tone template fired. */
+  tone_templates?: Array<{
+    id: number;
+    pattern: string;
+    priority: number;
+    matched_paths: string[];
+    matched_count: number;
+  }>;
 };
 
 export function reviewDetailRoute(args: {
@@ -151,6 +159,26 @@ export function reviewDetailRoute(args: {
               </tbody>
             </table>
           ` : ""}
+        </section>
+      ` : ""}
+
+      ${parsed.tone_templates && parsed.tone_templates.length > 0 ? html`
+        <section class="card">
+          <h2>Tone templates fired (${parsed.tone_templates.length})</h2>
+          <p class="muted">These file-type templates matched at least one changed file; their guidance was appended to the tone sent to Claude. Higher-priority templates appear later in the final tone.</p>
+          <table>
+            <thead><tr><th>Priority</th><th>Pattern</th><th>Matched</th><th>Sample files</th></tr></thead>
+            <tbody>
+              ${parsed.tone_templates.map((t) => html`
+                <tr>
+                  <td class="mono">${t.priority}</td>
+                  <td class="mono">${t.pattern}</td>
+                  <td class="mono">${t.matched_count}</td>
+                  <td class="mono muted">${t.matched_paths.join(", ")}${t.matched_count > t.matched_paths.length ? ", …" : ""}</td>
+                </tr>
+              `)}
+            </tbody>
+          </table>
         </section>
       ` : ""}
 
