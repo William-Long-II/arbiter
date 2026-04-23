@@ -38,8 +38,9 @@ export function dashboardRoute(args: {
         <div class="stat"><div class="k">Approvals / hr (rolling)</div><div class="v" id="stat-approvals">${approvalsHour} / ${cfg.review.max_approvals_per_hour}</div></div>
         <div class="stat"><div class="k">Watched</div><div class="v">${watched} ${watched === 1 ? "entry" : "entries"}</div></div>
         <div class="stat"><div class="k">Poll interval</div><div class="v">${cfg.poll.interval_seconds}s</div></div>
-        <div class="stat"><div class="k">Last tick</div><div class="v" id="stat-last-tick" data-at="${runtime.lastTickEnd ?? ""}">${fmtRel(runtime.lastTickEnd)}</div></div>
+        <div class="stat"><div class="k">Last activity</div><div class="v" id="stat-last-activity" data-at="${runtime.lastActivityAt ?? ""}">${fmtRel(runtime.lastActivityAt)}</div></div>
         <div class="stat"><div class="k">Next tick</div><div class="v" id="stat-next-tick" data-at="${runtime.nextTickAt ?? ""}">${runtime.nextTickAt ? "…" : "running"}</div></div>
+        <div class="stat"><div class="k">Concurrency</div><div class="v" id="stat-concurrency">${cfg.review.concurrency}</div></div>
         <div class="stat"><div class="k">Bot user</div><div class="v">${cfg.github.bot_username || "—"}</div></div>
       </div>
       <div class="space flex">
@@ -47,6 +48,28 @@ export function dashboardRoute(args: {
           <button type="submit">Flip dry-run → ${cfg.review.dry_run ? "live" : "dry-run"}</button>
         </form>
         <span class="lvl-error" id="stat-tick-error">${runtime.lastTickError ? `last tick error: ${runtime.lastTickError}` : ""}</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Currently reviewing</h2>
+      <div id="current-prs" data-render-now="${new Date().toISOString()}">
+        ${runtime.currentPrs.length === 0
+          ? html`<p class="muted">Idle. Next PR will be processed on the next tick.</p>`
+          : html`
+            <table>
+              <thead><tr><th>Repo</th><th>PR</th><th>Elapsed</th></tr></thead>
+              <tbody>
+                ${runtime.currentPrs.map((p) => html`
+                  <tr data-started="${p.startedAt}">
+                    <td class="mono">${p.repo}</td>
+                    <td class="mono">#${p.number}</td>
+                    <td class="muted current-elapsed">${fmtElapsed(p.startedAt)}</td>
+                  </tr>
+                `)}
+              </tbody>
+            </table>
+          `}
       </div>
     </section>
 
@@ -117,11 +140,31 @@ export function dashboardRoute(args: {
 const DASHBOARD_SCRIPT = `
 (function(){
   var nextEl = document.getElementById('stat-next-tick');
-  var lastEl = document.getElementById('stat-last-tick');
+  var lastEl = document.getElementById('stat-last-activity');
+  var concEl = document.getElementById('stat-concurrency');
+  var currentContainer = document.getElementById('current-prs');
   var errEl = document.getElementById('stat-tick-error');
   var modeEl = document.getElementById('stat-mode');
   var approvalsEl = document.getElementById('stat-approvals');
   var targetMs = null;
+  // Remembered copy of the last-seen currentPrs list so renderElapsed can
+  // keep ticking the per-PR elapsed seconds between 5s polls.
+  var activePrs = [];
+
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, function(c){
+      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+    });
+  }
+
+  function fmtElapsed(iso){
+    var t = Date.parse(iso);
+    if (isNaN(t)) return '—';
+    var s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+    if (s < 60) return s + 's';
+    if (s < 3600) return Math.floor(s/60) + 'm ' + (s % 60) + 's';
+    return Math.floor(s/3600) + 'h ' + Math.floor((s % 3600)/60) + 'm';
+  }
 
   function fmtCountdown(s){
     if (s <= 0) return 'now';
@@ -148,6 +191,35 @@ const DASHBOARD_SCRIPT = `
     nextEl.textContent = fmtCountdown(Math.ceil((targetMs - Date.now()) / 1000));
   }
 
+  function renderCurrentPrs(){
+    if (!currentContainer) return;
+    if (!activePrs.length) {
+      currentContainer.innerHTML = '<p class="muted">Idle. Next PR will be processed on the next tick.</p>';
+      return;
+    }
+    var rows = activePrs.map(function(p){
+      return '<tr data-started="' + escapeHtml(p.startedAt) + '">' +
+        '<td class="mono">' + escapeHtml(p.repo) + '</td>' +
+        '<td class="mono">#' + escapeHtml(p.number) + '</td>' +
+        '<td class="muted current-elapsed">' + escapeHtml(fmtElapsed(p.startedAt)) + '</td>' +
+      '</tr>';
+    }).join('');
+    currentContainer.innerHTML =
+      '<table><thead><tr><th>Repo</th><th>PR</th><th>Elapsed</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table>';
+  }
+
+  function tickCurrentElapsed(){
+    // Update only the elapsed column in-place; preserves DOM stability and
+    // avoids recreating the table every second.
+    if (!currentContainer) return;
+    var rows = currentContainer.querySelectorAll('tr[data-started]');
+    for (var i = 0; i < rows.length; i++) {
+      var cell = rows[i].querySelector('.current-elapsed');
+      if (cell) cell.textContent = fmtElapsed(rows[i].dataset.started);
+    }
+  }
+
   function applyStatus(s){
     if (nextEl) {
       targetMs = s.nextTickAt ? Date.parse(s.nextTickAt) : null;
@@ -156,9 +228,12 @@ const DASHBOARD_SCRIPT = `
     }
     renderNextTick();
     if (lastEl) {
-      lastEl.dataset.at = s.lastTickEnd || '';
-      lastEl.textContent = fmtRel(s.lastTickEnd);
+      lastEl.dataset.at = s.lastActivityAt || '';
+      lastEl.textContent = fmtRel(s.lastActivityAt);
     }
+    activePrs = Array.isArray(s.currentPrs) ? s.currentPrs : [];
+    renderCurrentPrs();
+    if (concEl && typeof s.concurrency === 'number') concEl.textContent = s.concurrency;
     if (errEl) errEl.textContent = s.lastTickError ? 'last tick error: ' + s.lastTickError : '';
     if (modeEl) modeEl.textContent = s.mode;
     if (approvalsEl) approvalsEl.textContent = s.approvalsInLastHour + ' / ' + s.approvalCap;
@@ -180,11 +255,11 @@ const DASHBOARD_SCRIPT = `
   }
   renderNextTick();
 
-  // 1s local ticks for the countdown text; lastTick is re-formatted too so
-  // "32s ago" keeps drifting between polls.
+  // 1s local ticks: countdown text, "Xs ago" label, per-PR elapsed counters.
   setInterval(function(){
     renderNextTick();
     if (lastEl && lastEl.dataset.at) lastEl.textContent = fmtRel(lastEl.dataset.at);
+    tickCurrentElapsed();
   }, 1000);
 
   async function poll(){
@@ -217,4 +292,13 @@ function fmtRel(iso: string | null): string {
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
+}
+
+function fmtElapsed(iso: string): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "—";
+  const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
