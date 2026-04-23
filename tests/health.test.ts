@@ -186,6 +186,35 @@ describe("healthRoute", () => {
     }
   });
 
+  test("integrity check is ok on a re-opened healthy DB", async () => {
+    const { path, cleanup } = tmpDb();
+    try {
+      // First open creates the file; second open triggers the boot-time
+      // integrity check (preExisted=true).
+      openStore(path).close();
+      const store = openStore(path);
+      const runtime = makeRuntime();
+      runtime.lastTickStart = new Date().toISOString();
+      const res = healthRoute({
+        store,
+        runtime,
+        pollIntervalSeconds: 60,
+        configured: true,
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        status: string;
+        checks: { integrity: { ok: boolean; detail: string } };
+      };
+      expect(body.status).toBe("ok");
+      expect(body.checks.integrity.ok).toBe(true);
+      expect(body.checks.integrity.detail).toContain("ok");
+      store.close();
+    } finally {
+      cleanup();
+    }
+  });
+
   test("staleness threshold is at least 60s even when poll interval is tiny", async () => {
     // If someone sets poll_interval=10s, 3× = 30s, which would flap the
     // healthcheck during a long Claude call (several minutes). The floor

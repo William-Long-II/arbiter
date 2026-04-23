@@ -35,6 +35,7 @@ const store = openStore(DB_PATH);
     path: store.meta.path,
     freshlyCreated: store.meta.freshlyCreated,
     sizeKB: mb,
+    integrity: store.meta.integrity === "ok" ? "ok" : store.meta.integrity ?? "skipped",
     ...counts,
   });
   store.recordEvent({
@@ -45,6 +46,24 @@ const store = openStore(DB_PATH);
       : `DB at ${store.meta.path} opened (${mb} KB). Reviews=${counts.reviews}, events=${counts.events}, orgs=${counts.orgs}, repos=${counts.repos}, skip_authors=${counts.skip_authors}.`,
     payload: { path: store.meta.path, freshlyCreated: store.meta.freshlyCreated, sizeBytes: store.meta.sizeBytes, ...counts },
   });
+  // Integrity failure gets its own event so it can't be lost under
+  // routine storage.opened chatter. "warn" level so it shows in the
+  // Events page's default-visible range but doesn't halt the process —
+  // the operator can still use the UI to navigate to the backup option.
+  if (store.meta.integrity !== null && store.meta.integrity !== "ok") {
+    log.error("storage.integrity_failed", {
+      path: store.meta.path,
+      error: store.meta.integrity.error,
+    });
+    store.recordEvent({
+      level: "error",
+      kind: "storage.integrity_failed",
+      message:
+        `SQLite PRAGMA integrity_check FAILED at boot: ${store.meta.integrity.error}. ` +
+        `Restore from the most recent backup (scripts/restore.sh) before the damage spreads.`,
+      payload: { path: store.meta.path, error: store.meta.integrity.error },
+    });
+  }
 }
 
 let bootstrapped = false;

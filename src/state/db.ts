@@ -137,6 +137,15 @@ export type StoreMeta = {
   freshlyCreated: boolean;
   /** sqlite file size in bytes at the time openStore() returned. */
   sizeBytes: number;
+  /**
+   * Result of `PRAGMA integrity_check` at boot. "ok" for healthy DBs;
+   * any other value (first row of the diagnostic output, truncated) when
+   * SQLite reported a problem. Undefined on a freshly-created file —
+   * there's nothing to check yet. Surfaced in /healthz, the Dashboard
+   * Storage card, and as a startup event so the operator is prompted
+   * to restore from backup before damage spreads.
+   */
+  integrity: "ok" | { error: string } | null;
 };
 
 export type Store = {
@@ -708,10 +717,20 @@ export function openStore(path: string): Store {
     ),
   };
 
+  // PRAGMA integrity_check catches malloc errors, index corruption, and most
+  // page-level damage. Runs once at boot, not per-request (full scan of every
+  // index on a 100MB DB takes hundreds of ms). Skipped for freshly-created
+  // files because there's nothing to check — the schema above just ran.
+  // On failure we DON'T throw; the process boots anyway, because a crash-
+  // looping container is harder for an operator to act on than a running
+  // one that logs loudly and surfaces the error in /healthz + the UI.
+  const integrity = preExisted ? runIntegrityCheck(db) : null;
+
   const meta: StoreMeta = {
     path,
     freshlyCreated: !preExisted,
     sizeBytes: safeStatSize(path),
+    integrity,
   };
 
   const count = (s: ReturnType<typeof db.prepare>): number => {
@@ -1050,5 +1069,25 @@ function safeStatSize(p: string): number {
     return statSync(p).size;
   } catch {
     return 0;
+  }
+}
+
+/**
+ * Run `PRAGMA integrity_check` and normalize the result. SQLite returns
+ * a single row "ok" on healthy DBs; any other output (the first row
+ * being a description of the first problem found) means something is
+ * wrong. We pass the raw first row back so the operator can read what
+ * SQLite said, truncated to 200 chars so a pathologically-damaged DB
+ * doesn't flood the event log.
+ */
+function runIntegrityCheck(db: Database): "ok" | { error: string } {
+  try {
+    const rows = db.prepare("PRAGMA integrity_check").all() as Array<{ integrity_check: string }>;
+    const first = rows[0]?.integrity_check ?? "";
+    if (rows.length === 1 && first === "ok") return "ok";
+    const joined = rows.map((r) => r.integrity_check).join("; ").slice(0, 200);
+    return { error: joined || "integrity_check returned no rows" };
+  } catch (e) {
+    return { error: (e as Error).message.slice(0, 200) };
   }
 }

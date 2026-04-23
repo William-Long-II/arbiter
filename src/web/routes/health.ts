@@ -24,6 +24,7 @@ export type HealthStatus = {
   status: "ok" | "degraded" | "down";
   checks: {
     sqlite: { ok: boolean; detail?: string };
+    integrity: { ok: boolean; detail: string };
     loop: { ok: boolean; detail: string; lastTickStart: string | null; secondsSinceLastTick: number | null };
     breaker: { ok: boolean; detail: string; kind: "closed" | "open" | "half_open" };
     configured: { ok: boolean; detail: string };
@@ -53,6 +54,19 @@ export function healthRoute(args: {
   } catch (e) {
     sqlite = { ok: false, detail: (e as Error).message.slice(0, 200) };
   }
+
+  // integrity: reflects the boot-time PRAGMA integrity_check result.
+  // Doesn't re-run per request — integrity_check is linear in DB size and
+  // we'd be hammering it on every uptime probe. Surfacing the cached
+  // result is enough to make the "DB corrupted, please restore" state
+  // visible to an operator who's watching /healthz.
+  const integrityMeta = store.meta.integrity;
+  const integrity: HealthStatus["checks"]["integrity"] =
+    integrityMeta === null
+      ? { ok: true, detail: "freshly-created DB; nothing to check yet" }
+      : integrityMeta === "ok"
+        ? { ok: true, detail: "ok (last checked at boot)" }
+        : { ok: false, detail: `integrity_check failed at boot: ${integrityMeta.error}` };
 
   // loop liveness: a tick hasn't happened in a while → probably stuck.
   // Threshold is 3× the configured poll interval — enough slack to absorb
@@ -103,17 +117,18 @@ export function healthRoute(args: {
     ? { ok: true, detail: "bot_username set, at least one org/repo watched" }
     : { ok: false, detail: "initial setup incomplete (bot_username or watched repos missing)" };
 
-  // Roll-up: down if sqlite is broken (process can't do its job at all);
-  // degraded if the loop is stuck, breaker is open, or setup isn't done.
+  // Roll-up: down if sqlite is broken OR the integrity check failed at
+  // boot (both indicate the process can't safely do its job); degraded
+  // if the loop is stuck, breaker is open, or setup isn't done.
   // Everything else → ok.
   let status: HealthStatus["status"];
-  if (!sqlite.ok) status = "down";
+  if (!sqlite.ok || !integrity.ok) status = "down";
   else if (!loop.ok || !breaker.ok || !configuredCheck.ok) status = "degraded";
   else status = "ok";
 
   const body: HealthStatus = {
     status,
-    checks: { sqlite, loop, breaker, configured: configuredCheck },
+    checks: { sqlite, integrity, loop, breaker, configured: configuredCheck },
     at: new Date().toISOString(),
   };
 
