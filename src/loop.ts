@@ -232,6 +232,7 @@ async function processPrInner(
   try {
     const resolved = await resolveIntent({
       gh,
+      store,
       title: ctx.title,
       body: ctx.body,
       ownRepo: pr.repo,

@@ -16,6 +16,8 @@ export function orgEditRoute(args: {
   const include = parseArr(org.include_json);
   const exclude = parseArr(org.exclude_json);
 
+  const jiraCreds = args.store.getIntentCredentials(args.name, "jira");
+
   const body = html`
     <section class="card">
       <h2>Edit org: ${args.name}</h2>
@@ -57,6 +59,40 @@ export function orgEditRoute(args: {
 
         <div class="space flex">
           <button type="submit">Save</button>
+          <a href="/config" class="muted">cancel</a>
+        </div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Jira intent provider</h2>
+      <p class="muted">
+        When set, PRs in this org whose title or body mentions a Jira key
+        (<code>PROJ-123</code>) will pull the ticket's summary + description into
+        Claude's prompt so reviews judge against what the ticket asked for, not
+        just code quality. All three fields are required. Leave the token blank
+        on save to keep the existing one.
+      </p>
+      <form method="post" action="/config/orgs/${encodeURIComponent(args.name)}/intent/jira">
+        <div class="grid">
+          <div>
+            <label>Jira host (e.g. <code>https://acme.atlassian.net</code>)</label>
+            <input type="text" name="host" value="${jiraCreds?.host ?? ""}" placeholder="https://your-org.atlassian.net">
+          </div>
+          <div>
+            <label>Email (Atlassian account)</label>
+            <input type="text" name="email" value="${jiraCreds?.email ?? ""}" placeholder="you@example.com">
+          </div>
+          <div>
+            <label>API token (${jiraCreds?.api_token ? "already set — leave blank to keep" : "required"})</label>
+            <input type="password" name="api_token" placeholder="${jiraCreds?.api_token ? "•••••••• already set ••••••••" : "paste from id.atlassian.com/manage-profile/security/api-tokens"}">
+          </div>
+        </div>
+        <div class="space flex">
+          <button type="submit">Save Jira credentials</button>
+          ${jiraCreds
+            ? html`<button type="submit" name="_action" value="delete" class="danger">Remove</button>`
+            : ""}
           <a href="/config" class="muted">cancel</a>
         </div>
       </form>
@@ -119,6 +155,68 @@ export function handleOrgEditPost(
     action: "config.org.edit",
     target: name,
     changes,
+  });
+  return redirect("/config");
+}
+
+export function handleOrgJiraPost(
+  store: Store,
+  name: string,
+  form: FormData,
+): Response {
+  const existing = store.getOrg(name);
+  if (!existing) {
+    return new Response(`Unknown org: ${name}`, { status: 404 });
+  }
+
+  if (String(form.get("_action") ?? "") === "delete") {
+    store.removeIntentCredentials(name, "jira");
+    recordAudit(store, {
+      actor: currentActor(),
+      action: "config.org.edit",
+      target: name,
+      detail: "removed Jira credentials",
+    });
+    return redirect("/config");
+  }
+
+  const host = String(form.get("host") ?? "").trim();
+  const email = String(form.get("email") ?? "").trim();
+  const submittedToken = String(form.get("api_token") ?? "").trim();
+
+  if (!host || !email) {
+    return new Response("Jira host and email are required", { status: 400 });
+  }
+  if (!/^https?:\/\//.test(host)) {
+    return new Response("host must start with http:// or https://", { status: 400 });
+  }
+
+  // Empty token means "keep existing." That's the convention users expect from
+  // password fields — otherwise they'd have to re-paste the token on every
+  // unrelated edit.
+  let apiToken: string | null = null;
+  const existingCreds = store.getIntentCredentials(name, "jira");
+  if (submittedToken) {
+    apiToken = submittedToken;
+  } else if (existingCreds?.api_token) {
+    apiToken = existingCreds.api_token;
+  } else {
+    return new Response("api_token is required on first save", { status: 400 });
+  }
+
+  store.setIntentCredentials({
+    org_name: name,
+    kind: "jira",
+    host,
+    email,
+    api_token: apiToken,
+  });
+  // Never log the token itself.
+  recordAudit(store, {
+    actor: currentActor(),
+    action: "config.org.edit",
+    target: name,
+    detail: `saved Jira credentials (host=${host}, email=${email})`,
   });
   return redirect("/config");
 }
