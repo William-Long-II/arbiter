@@ -1,6 +1,7 @@
 import type { Store } from "../../state/db.ts";
 import type { Runtime } from "../runtime.ts";
 import { loadConfigFromStore } from "../../config.ts";
+import { sluggedPath } from "../../github/slug.ts";
 
 /**
  * Small JSON endpoint the dashboard polls so the stat cards stay in sync
@@ -14,19 +15,17 @@ export function statusApiRoute(args: { store: Store; runtime: Runtime }): Respon
   const { store, runtime } = args;
   const cfg = loadConfigFromStore(store);
   const counts = store.counts();
-  const recentReviews = store.recentReviews(50).map((r) => {
-    const [owner, name] = r.repo.split("/");
-    return {
-      repo: r.repo,
-      pr_number: r.pr_number,
-      head_sha: r.head_sha,
-      verdict: r.verdict,
-      reviewed_at: r.reviewed_at,
-      // Pre-computed URL so the client doesn't have to know the routing
-      // scheme. Uses the same two-segment form as the server-side matcher.
-      detail_url: `/reviews/${encodeURIComponent(owner ?? "")}/${encodeURIComponent(name ?? "")}/${r.pr_number}`,
-    };
-  });
+  const recentReviews = store.recentReviews(50).map((r) => ({
+    repo: r.repo,
+    pr_number: r.pr_number,
+    head_sha: r.head_sha,
+    verdict: r.verdict,
+    reviewed_at: r.reviewed_at,
+    // Pre-computed URL so the client doesn't have to know the routing
+    // scheme. sluggedPath preserves the two-segment form the route matcher
+    // expects; see src/github/slug.ts.
+    detail_url: `/reviews/${sluggedPath(r.repo)}/${r.pr_number}`,
+  }));
   const body = {
     now: new Date().toISOString(),
     mode: cfg.review.dry_run ? "dry-run" : "live",

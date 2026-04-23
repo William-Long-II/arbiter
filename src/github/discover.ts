@@ -1,5 +1,6 @@
 import type { Config } from "../config.ts";
 import type { GH } from "./client.ts";
+import { parseSlug } from "./slug.ts";
 
 export type RepoRef = { owner: string; name: string };
 
@@ -25,9 +26,9 @@ export async function resolveWatchedRepos(gh: GH, cfg: Config): Promise<RepoRef[
   }
 
   for (const r of cfg.watch.repos) {
-    const [owner, name] = r.slug.split("/");
-    if (!owner || !name) continue;
-    add({ owner, name });
+    const parsed = parseSlug(r.slug);
+    if (!parsed) continue;
+    add(parsed);
   }
 
   return out;

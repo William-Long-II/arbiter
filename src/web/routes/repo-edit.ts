@@ -1,6 +1,7 @@
 import type { Store } from "../../state/db.ts";
 import type { Config } from "../../config.ts";
 import { resolveTone } from "../../review/tone.ts";
+import { parseSlug, sluggedPath } from "../../github/slug.ts";
 import { html, htmlResponse, redirect } from "../html.ts";
 import { layout } from "../layout.ts";
 
@@ -13,7 +14,11 @@ export function repoEditRoute(args: {
   if (!repo) {
     return new Response(`Unknown repo: ${args.slug}`, { status: 404 });
   }
-  const [owner, name] = args.slug.split("/") as [string, string];
+  const parsed = parseSlug(args.slug);
+  if (!parsed) {
+    return new Response(`Malformed repo slug: ${args.slug}`, { status: 400 });
+  }
+  const { owner, name } = parsed;
   const org = args.store.getOrg(owner);
 
   // Show the tone that WOULD be resolved right now as a preview. This is what
@@ -27,7 +32,7 @@ export function repoEditRoute(args: {
         Repo-level tone sits on top of the org tone (if any), which sits on top of the default.
         Append adds to what's inherited; replace wipes everything above it and uses only this text.
       </p>
-      <form method="post" action="/config/repos/${splitSlug(args.slug)}">
+      <form method="post" action="/config/repos/${sluggedPath(args.slug)}">
         <label>Tone mode</label>
         <select name="tone_mode">
           <option value="append" ${repo.tone_mode === "append" ? "selected" : ""}>append (add to inherited)</option>
@@ -86,9 +91,4 @@ export function handleRepoEditPost(
     message: `repo ${slug} edited (tone: ${toneOverride === null ? "inherits" : `${toneMode} ${toneOverride.length}c`})`,
   });
   return redirect("/config");
-}
-
-function splitSlug(slug: string): string {
-  const [owner, name] = slug.split("/");
-  return `${encodeURIComponent(owner ?? "")}/${encodeURIComponent(name ?? "")}`;
 }
