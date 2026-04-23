@@ -36,11 +36,19 @@ export async function runTick(args: {
   log.info("tick.repos", { count: repos.length });
 
   const eligible: PullRef[] = [];
+  const deadLetterThreshold = cfg.review.dead_letter_threshold;
   for (const repo of repos) {
     try {
       const prs = filterReviewable(await listOpenPulls(gh, repo), cfg);
       for (const pr of prs) {
-        if (store.hasReviewed(slug(repo), pr.number, pr.head_sha)) continue;
+        const s = slug(repo);
+        if (store.hasReviewed(s, pr.number, pr.head_sha)) continue;
+        // Dead-letter gate: PRs at/above threshold are skipped until the
+        // operator Retries or Dismisses via the UI.
+        if (deadLetterThreshold > 0) {
+          const f = store.getFailure(s, pr.number, pr.head_sha);
+          if (f && f.failure_count >= deadLetterThreshold) continue;
+        }
         eligible.push(pr);
       }
     } catch (e) {
@@ -269,17 +277,28 @@ async function processPrInner(
         stdoutSample: result.stdoutSample?.slice(0, 500),
       },
     });
-    // Record as skipped so the same SHA doesn't retry every tick forever.
-    // The breaker counts these failures across PRs; when the bot is broken
-    // systemically it'll trip after `threshold` and stop. The dead-letter
-    // queue (#130) will give operators a retry affordance once shipped.
-    store.recordReview({
+    // Bump the per-PR failure counter. At or above dead_letter_threshold the
+    // discovery filter stops picking this PR up until the operator retries or
+    // dismisses from the Dashboard. No recordReview here — dedupe should only
+    // hold successful reviews.
+    const count = store.recordFailure({
       repo: repoSlug,
       prNumber: pr.number,
       headSha: pr.head_sha,
-      verdict: "skipped",
-      note: `claude: ${result.error}`,
+      kind: "claude",
+      error: result.error,
     });
+    if (count >= cfg.review.dead_letter_threshold && cfg.review.dead_letter_threshold > 0) {
+      store.recordEvent({
+        level: "warn",
+        kind: "dead_letter.entered",
+        message: `PR dead-lettered after ${count} failures; needs operator attention`,
+        repo: repoSlug,
+        prNumber: pr.number,
+        headSha: pr.head_sha,
+        payload: { count, threshold: cfg.review.dead_letter_threshold },
+      });
+    }
     return;
   }
   breaker.recordSuccess();
@@ -340,13 +359,24 @@ async function processPrInner(
       prNumber: pr.number,
       headSha: pr.head_sha,
     });
-    store.recordReview({
+    const count = store.recordFailure({
       repo: repoSlug,
       prNumber: pr.number,
       headSha: pr.head_sha,
-      verdict: "skipped",
-      note: `post: ${post.error}`,
+      kind: "post",
+      error: post.error,
     });
+    if (count >= cfg.review.dead_letter_threshold && cfg.review.dead_letter_threshold > 0) {
+      store.recordEvent({
+        level: "warn",
+        kind: "dead_letter.entered",
+        message: `PR dead-lettered after ${count} failures; needs operator attention`,
+        repo: repoSlug,
+        prNumber: pr.number,
+        headSha: pr.head_sha,
+        payload: { count, threshold: cfg.review.dead_letter_threshold },
+      });
+    }
     return;
   }
 
@@ -364,6 +394,9 @@ async function processPrInner(
     verdict: persisted,
     note: buildReviewNote(validated, resolvedTone),
   });
+  // Any prior failure counter for this SHA is now stale — a successful review
+  // means we've recovered.
+  store.clearFailure(repoSlug, pr.number, pr.head_sha);
 
   store.recordEvent({
     level: "info",

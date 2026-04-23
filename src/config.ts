@@ -73,6 +73,14 @@ export const ConfigSchema = z.object({
      */
     concurrency: z.number().int().min(1).max(4).default(1),
     /**
+     * Per-PR failure threshold. After this many consecutive review failures
+     * on the same (repo, pr, head_sha), the PR is dead-lettered: skipped by
+     * normal discovery and surfaced on the Dashboard's "Needs attention"
+     * card for operator action (retry or dismiss). Set to 0 to disable
+     * dead-lettering (PRs retry every tick regardless).
+     */
+    dead_letter_threshold: z.number().int().min(0).max(20).default(3),
+    /**
      * Glob-list filters applied to the diff before Claude sees it.
      * include_paths empty = every file passes the include check. Non-empty
      * acts as a whitelist. exclude_paths drops any match after include.
@@ -135,6 +143,7 @@ export const SCALAR_DEFAULTS: Record<string, string> = {
   "review.skip_bots": "true",
   "review.require_ci_green": "true",
   "review.concurrency": "1",
+  "review.dead_letter_threshold": "3",
   "review.include_paths": "[]",
   "review.exclude_paths": JSON.stringify(DEFAULT_EXCLUDE_PATHS),
   "poll.interval_seconds": "60",
@@ -175,6 +184,7 @@ export function loadConfigFromStore(store: Store): Config {
       skip_bots: asBool(scalars["review.skip_bots"], true),
       require_ci_green: asBool(scalars["review.require_ci_green"], true),
       concurrency: asInt(scalars["review.concurrency"], 1),
+      dead_letter_threshold: asInt(scalars["review.dead_letter_threshold"], 3),
       include_paths: safeJsonArray(scalars["review.include_paths"] ?? "[]"),
       exclude_paths: safeJsonArray(scalars["review.exclude_paths"] ?? "[]"),
     },
@@ -224,6 +234,7 @@ export function bootstrapFromYaml(store: Store, yamlPath: string): boolean {
   store.setScalar("review.skip_bots", String(cfg.review.skip_bots));
   store.setScalar("review.require_ci_green", String(cfg.review.require_ci_green));
   store.setScalar("review.concurrency", String(cfg.review.concurrency));
+  store.setScalar("review.dead_letter_threshold", String(cfg.review.dead_letter_threshold));
   store.setScalar("review.include_paths", JSON.stringify(cfg.review.include_paths));
   store.setScalar("review.exclude_paths", JSON.stringify(cfg.review.exclude_paths));
   store.setScalar("poll.interval_seconds", String(cfg.poll.interval_seconds));

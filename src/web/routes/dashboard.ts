@@ -16,6 +16,9 @@ export function dashboardRoute(args: {
   const approvalsHour = store.approvalsInLastHour();
   const watched = cfg.watch.orgs.length + cfg.watch.repos.length;
   const counts = store.counts();
+  const deadLettered = cfg.review.dead_letter_threshold > 0
+    ? store.listDeadLettered(cfg.review.dead_letter_threshold)
+    : [];
 
   const breakerState = runtime.breaker.inspect();
   const banner: Banner | null = !isConfigured(cfg)
@@ -61,6 +64,44 @@ export function dashboardRoute(args: {
         <span class="lvl-error" id="stat-tick-error">${runtime.lastTickError ? `last tick error: ${runtime.lastTickError}` : ""}</span>
       </div>
     </section>
+
+    ${deadLettered.length > 0 ? html`
+      <section class="card">
+        <h2>Needs attention (${deadLettered.length})</h2>
+        <p class="muted">These PRs failed too many times to keep retrying automatically. Retry resets the counter; Dismiss hides the row while leaving the PR skipped.</p>
+        <table>
+          <thead><tr><th>When</th><th>Repo</th><th>PR</th><th class="mono">SHA</th><th>Fails</th><th>Last error</th><th></th></tr></thead>
+          <tbody>
+            ${deadLettered.map((f) => html`
+              <tr>
+                <td class="muted" data-at="${f.last_failed_at}">${fmtRel(f.last_failed_at)}</td>
+                <td class="mono">${f.repo}</td>
+                <td class="mono">#${f.pr_number}</td>
+                <td class="mono">${f.head_sha.slice(0, 7)}</td>
+                <td class="muted">${f.failure_count}</td>
+                <td class="muted">${f.last_kind ?? "—"}: ${(f.last_error ?? "").slice(0, 80)}${(f.last_error ?? "").length > 80 ? "…" : ""}</td>
+                <td class="right">
+                  <div class="actions">
+                    <form method="post" action="/actions/retry-failure" class="inline">
+                      <input type="hidden" name="repo" value="${f.repo}">
+                      <input type="hidden" name="pr" value="${f.pr_number}">
+                      <input type="hidden" name="head_sha" value="${f.head_sha}">
+                      <button type="submit">retry</button>
+                    </form>
+                    <form method="post" action="/actions/dismiss-failure" class="inline">
+                      <input type="hidden" name="repo" value="${f.repo}">
+                      <input type="hidden" name="pr" value="${f.pr_number}">
+                      <input type="hidden" name="head_sha" value="${f.head_sha}">
+                      <button type="submit" class="danger">dismiss</button>
+                    </form>
+                  </div>
+                </td>
+              </tr>
+            `)}
+          </tbody>
+        </table>
+      </section>
+    ` : ""}
 
     <section class="card">
       <h2>Currently reviewing</h2>
