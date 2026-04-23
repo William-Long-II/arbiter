@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import type { Store } from "./state/db.ts";
@@ -260,6 +260,16 @@ export function loadConfigFromStore(store: Store): Config {
 export function bootstrapFromYaml(store: Store, yamlPath: string): boolean {
   if (store.getScalar("github.bot_username")) return false;
   if (!existsSync(yamlPath)) return false;
+  // If the path exists but isn't a regular file, skip cleanly instead of
+  // crashing with EISDIR. This is common when Docker bind-mounts a host
+  // path that doesn't exist: dockerd creates a directory at the mount
+  // target, and the previous `existsSync && readFileSync` path exploded
+  // on the first-boot attempt to read the "file".
+  try {
+    if (!statSync(yamlPath).isFile()) return false;
+  } catch {
+    return false;
+  }
 
   const raw = parseYaml(readFileSync(yamlPath, "utf8"));
   const parsed = ConfigSchema.safeParse(raw);

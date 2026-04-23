@@ -438,12 +438,21 @@ export function handleOrgsPost(
   if (!name) return { ok: false, error: "org name required" };
 
   if (action === "delete") {
+    // Don't audit-log a no-op. A delete for a name that isn't in the
+    // table is almost always a stale tab or a malformed curl; the
+    // audit log is a record of actual state changes, and filling it
+    // with phantom "deleted totally-fake" rows erodes its value.
+    // deleteOrg itself is idempotent (DELETE WHERE name=?), so there's
+    // nothing to undo on the silent-skip path.
+    const existed = store.getOrg(name) !== null;
     store.deleteOrg(name);
-    recordAudit(store, {
-      actor: currentActor(),
-      action: "config.org.delete",
-      target: name,
-    });
+    if (existed) {
+      recordAudit(store, {
+        actor: currentActor(),
+        action: "config.org.delete",
+        target: name,
+      });
+    }
     return { ok: true, redirect: "/config" };
   }
   if (action === "upsert") {
@@ -496,12 +505,17 @@ export function handleReposPost(
     return { ok: true, redirect: "/config" };
   }
   if (action === "delete") {
+    // Same no-op guard as the org path above — no audit row for a
+    // delete of a slug that wasn't in the table.
+    const existed = store.getRepo(slug) !== null;
     store.removeWatchedRepo(slug);
-    recordAudit(store, {
-      actor: currentActor(),
-      action: "config.repo.delete",
-      target: slug,
-    });
+    if (existed) {
+      recordAudit(store, {
+        actor: currentActor(),
+        action: "config.repo.delete",
+        target: slug,
+      });
+    }
     return { ok: true, redirect: "/config" };
   }
   return { ok: false, error: "unknown action" };
