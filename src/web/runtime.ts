@@ -19,6 +19,18 @@ export type WebhookPullRef = {
   source: "webhook";
 };
 
+/**
+ * A PR that webhook delivery indicated has a new review-comment reply
+ * worth scanning. The threaded-reply sweep drains this list at the top
+ * of its Phase 3 pass; after the drain it falls back to the normal
+ * "scan recently-reviewed PRs" path so nothing falls through the cracks
+ * if a webhook delivery was missed.
+ */
+export type WebhookThreadRef = {
+  repo: { owner: string; name: string };
+  number: number;
+};
+
 export type ActivePr = {
   /** "owner/name" of the repo this PR belongs to. */
   repo: string;
@@ -55,6 +67,12 @@ export type Runtime = {
    */
   webhookQueue: WebhookPullRef[];
   /**
+   * PRs flagged by `pull_request_review_comment` deliveries. Drained by
+   * Phase 3 of runTick (threaded-reply sweep) before the fallback scan
+   * over recentReviews runs.
+   */
+  webhookThreadQueue: WebhookThreadRef[];
+  /**
    * Set by the webhook handler when it enqueues a PR. The main loop's
    * sleep wrapper observes this to shorten the current interval — turning
    * "60s polling" into "instant response" without blowing up the idle-wait
@@ -78,6 +96,7 @@ export function createRuntime(args: {
     bootstrappedFromYaml: args.bootstrappedFromYaml,
     breaker: args.breaker,
     webhookQueue: [],
+    webhookThreadQueue: [],
     wakeRequested: false,
   };
 }

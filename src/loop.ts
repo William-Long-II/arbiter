@@ -25,7 +25,7 @@ import type { ActivePr, Runtime } from "./web/runtime.ts";
  * Progress-reporting slice of Runtime that the loop needs. Taking only these
  * fields keeps runTick testable without pulling in every unrelated runtime field.
  */
-type Progress = Pick<Runtime, "currentPrs" | "lastActivityAt" | "webhookQueue">;
+type Progress = Pick<Runtime, "currentPrs" | "lastActivityAt" | "webhookQueue" | "webhookThreadQueue">;
 
 export async function runTick(args: {
   gh: GH;
@@ -133,41 +133,73 @@ export async function runTick(args: {
   // review of its quota slot, and uses the shared breaker + per-hour
   // approval budget so it can't go runaway.
   if (cfg.review.threaded_replies) {
-    const recent = store.recentReviews(cfg.review.threaded_replies_scan_recent);
-    let totalPosted = 0;
-    let totalSkipped = 0;
-    for (const r of recent) {
+    // First: drain any webhook-nudged PRs so operator replies get an
+    // immediate response. Then: union with the recentReviews fallback so
+    // threads on PRs that fell out of the webhook nudge (missed delivery,
+    // pre-webhook PRs) still get picked up. Dedupe by "owner/name#pr" so
+    // the same PR isn't scanned twice in one tick.
+    const drainedThread = progress.webhookThreadQueue.splice(
+      0,
+      progress.webhookThreadQueue.length,
+    );
+    const fallback = store.recentReviews(cfg.review.threaded_replies_scan_recent);
+
+    type ScanTarget = { repo: string; owner: string; name: string; pr_number: number };
+    const seen = new Set<string>();
+    const targets: ScanTarget[] = [];
+    for (const ref of drainedThread) {
+      const key = `${ref.repo.owner}/${ref.repo.name}#${ref.number}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      targets.push({
+        repo: `${ref.repo.owner}/${ref.repo.name}`,
+        owner: ref.repo.owner,
+        name: ref.repo.name,
+        pr_number: ref.number,
+      });
+    }
+    for (const r of fallback) {
+      const key = `${r.repo}#${r.pr_number}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
       const [owner, name] = r.repo.split("/");
       if (!owner || !name) continue;
+      targets.push({ repo: r.repo, owner, name, pr_number: r.pr_number });
+    }
+
+    let totalPosted = 0;
+    let totalSkipped = 0;
+    for (const t of targets) {
       try {
         const result = await respondToThreads({
           gh,
           cfg,
           store,
-          repo: { owner, name },
-          prNumber: r.pr_number,
+          repo: { owner: t.owner, name: t.name },
+          prNumber: t.pr_number,
           breaker,
         });
         totalPosted += result.repliesPosted;
         totalSkipped += result.skipped;
       } catch (e) {
         log.error("threads.unhandled", {
-          repo: r.repo,
-          pr: r.pr_number,
+          repo: t.repo,
+          pr: t.pr_number,
           error: (e as Error).message,
         });
         store.recordEvent({
           level: "error",
           kind: "threads.unhandled",
-          message: `threaded-reply sweep failed on ${r.repo}#${r.pr_number}: ${(e as Error).message}`,
-          repo: r.repo,
-          prNumber: r.pr_number,
+          message: `threaded-reply sweep failed on ${t.repo}#${t.pr_number}: ${(e as Error).message}`,
+          repo: t.repo,
+          prNumber: t.pr_number,
         });
       }
     }
     if (totalPosted > 0 || totalSkipped > 0) {
       log.info("threads.sweep", {
-        scanned: recent.length,
+        webhookNudged: drainedThread.length,
+        scanned: targets.length,
         posted: totalPosted,
         skipped: totalSkipped,
       });
