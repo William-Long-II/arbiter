@@ -13,6 +13,14 @@ export type ReviewRow = {
   reviewed_at: string;
 };
 
+/**
+ * Slim projection of ReviewRow without the `note` column. `note` holds the
+ * full validated-review JSON (capped at 512KB) and is only needed by the
+ * detail page. List endpoints (dashboard, /api/status) don't touch it —
+ * returning the summary instead avoids pulling hundreds of KB per poll.
+ */
+export type ReviewSummary = Omit<ReviewRow, "note">;
+
 export type EventRow = {
   id: number;
   ts: string;
@@ -75,7 +83,7 @@ export type Store = {
   }): void;
   hasReviewed(repo: string, prNumber: number, headSha: string): boolean;
   approvalsInLastHour(): number;
-  recentReviews(limit: number): ReviewRow[];
+  recentReviews(limit: number): ReviewSummary[];
   getReview(repo: string, prNumber: number): ReviewRow | null;
   /**
    * Delete dedupe rows for a PR. If `headSha` is provided, only that row is
@@ -224,8 +232,11 @@ export function openStore(path: string): Store {
     approvalCount: db.prepare(
       `SELECT COUNT(*) AS n FROM reviews WHERE verdict='approve' AND reviewed_at >= ?`,
     ),
+    // Deliberately does NOT select `note` — that column can be up to 512KB
+    // per row and list callers never use it. Pull it through getReview when
+    // you need it.
     recentReviews: db.prepare(
-      `SELECT repo, pr_number, head_sha, verdict, note, reviewed_at
+      `SELECT repo, pr_number, head_sha, verdict, reviewed_at
        FROM reviews ORDER BY reviewed_at DESC LIMIT ?`,
     ),
     getReview: db.prepare(
@@ -354,7 +365,7 @@ export function openStore(path: string): Store {
       return row?.n ?? 0;
     },
     recentReviews(limit) {
-      return stmts.recentReviews.all(limit) as ReviewRow[];
+      return stmts.recentReviews.all(limit) as ReviewSummary[];
     },
     getReview(repo, prNumber) {
       const row = stmts.getReview.get(repo, prNumber) as ReviewRow | undefined;
