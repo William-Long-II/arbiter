@@ -62,17 +62,21 @@ export function startWebServer(deps: ServerDeps) {
       }
 
       try {
-        // Always load config fresh — UI edits must be visible to the UI immediately.
-        const cfg = loadConfigFromStore(store);
+        // Config isn't loaded unconditionally — each route that needs it
+        // calls loadConfigFromStore itself. Hot poll endpoints like
+        // /api/status and per-PR actions never touch config, so pulling
+        // scalars + orgs + repos + skip_authors on every request just
+        // burned cycles. Routes that do need it (dashboard, /config, edit
+        // pages) load it below.
 
         if (method === "GET" && url.pathname === "/") {
-          return dashboardRoute({ store, cfg, runtime });
+          return dashboardRoute({ store, cfg: loadConfigFromStore(store), runtime });
         }
         if (method === "GET" && url.pathname === "/healthz") {
           return new Response("ok", { status: 200 });
         }
         if (method === "GET" && url.pathname === "/config") {
-          return configRoute({ store, cfg });
+          return configRoute({ store, cfg: loadConfigFromStore(store) });
         }
         if (method === "GET" && url.pathname === "/events") {
           return eventsRoute({ store });
@@ -95,7 +99,7 @@ export function startWebServer(deps: ServerDeps) {
         if (method === "GET" && orgEditMatch) {
           return orgEditRoute({
             store,
-            cfg,
+            cfg: loadConfigFromStore(store),
             name: decodeURIComponent(orgEditMatch[1]!),
           });
         }
@@ -109,7 +113,7 @@ export function startWebServer(deps: ServerDeps) {
         const repoEditMatch = url.pathname.match(/^\/config\/repos\/([^/]+)\/([^/]+)\/edit$/);
         if (method === "GET" && repoEditMatch) {
           const slug = `${decodeURIComponent(repoEditMatch[1]!)}/${decodeURIComponent(repoEditMatch[2]!)}`;
-          return repoEditRoute({ store, cfg, slug });
+          return repoEditRoute({ store, cfg: loadConfigFromStore(store), slug });
         }
         const repoPostMatch = url.pathname.match(/^\/config\/repos\/([^/]+)\/([^/]+)$/);
         if (method === "POST" && repoPostMatch) {

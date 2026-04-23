@@ -2,6 +2,7 @@ import type { Store } from "../../state/db.ts";
 import type { Config } from "../../config.ts";
 import type { Runtime } from "../runtime.ts";
 import { isConfigured } from "../../config.ts";
+import { sluggedPath } from "../../github/slug.ts";
 import { html, htmlResponse, raw } from "../html.ts";
 import { layout, type Banner } from "../layout.ts";
 
@@ -349,12 +350,7 @@ const DASHBOARD_SCRIPT = `
 `;
 
 function reviewUrl(repo: string, pr: number): string {
-  // Emit owner and name as SEPARATE path segments. Encoding the whole
-  // "owner/name" with encodeURIComponent produces "owner%2Fname" which
-  // the route matcher reads as a single segment and fails to match the
-  // three-segment :owner/:name/:pr pattern.
-  const [owner, name] = repo.split("/");
-  return `/reviews/${encodeURIComponent(owner ?? "")}/${encodeURIComponent(name ?? "")}/${pr}`;
+  return `/reviews/${sluggedPath(repo)}/${pr}`;
 }
 
 function fmtRel(iso: string | null): string {
