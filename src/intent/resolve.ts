@@ -3,14 +3,18 @@ import type { Store } from "../state/db.ts";
 import type { TicketContext, TicketRef } from "./types.ts";
 import { extractGithubRefs, fetchGithubTicket } from "./github.ts";
 import { extractJiraRefs, fetchJiraTicket } from "./jira.ts";
+import { extractLinearRefs, fetchLinearTicket } from "./linear.ts";
 
 /**
  * Orchestrate intent resolution for a PR. Runs every configured provider's
- * extractor, dedupes refs by key, fetches in parallel, drops nulls.
+ * extractor, dedupes refs (by kind+key so the same "PROJ-123" string can
+ * belong to both Jira and Linear when both are configured), fetches in
+ * parallel, drops nulls.
  *
  * Providers enabled per-PR:
  *   github-issue  always on (uses the bot's existing PAT)
- *   jira          on only if credentials are stored for the PR's org owner
+ *   jira          when store has jira credentials for the PR's org owner
+ *   linear        when store has linear credentials for the PR's org owner
  *
  * Bounded behavior:
  *   - At most `MAX_REFS` refs per PR are fetched; excess are dropped with a
@@ -44,12 +48,19 @@ export async function resolveIntent(args: {
     allRefs.push(...extractJiraRefs({ title: args.title, body: args.body }));
   }
 
-  // Dedup by key across all providers.
+  const linearCreds = args.store.getIntentCredentials(args.ownRepo.owner, "linear");
+  if (linearCreds) {
+    allRefs.push(...extractLinearRefs({ title: args.title, body: args.body }));
+  }
+
+  // Dedup by kind+key — same string ("PROJ-123") may legitimately refer to
+  // both a Jira ticket and a Linear ticket when both providers are active.
   const seen = new Set<string>();
   const unique: TicketRef[] = [];
   for (const r of allRefs) {
-    if (seen.has(r.key)) continue;
-    seen.add(r.key);
+    const k = `${r.kind}:${r.key}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
     unique.push(r);
   }
 
@@ -84,6 +95,11 @@ function dispatchFetch(
       const creds = store.getIntentCredentials(ownerForCreds, "jira");
       if (!creds) return Promise.resolve(null);
       return fetchJiraTicket(creds, ref);
+    }
+    case "linear": {
+      const creds = store.getIntentCredentials(ownerForCreds, "linear");
+      if (!creds) return Promise.resolve(null);
+      return fetchLinearTicket(creds, ref);
     }
     default:
       return Promise.resolve(null);

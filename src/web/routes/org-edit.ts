@@ -17,6 +17,7 @@ export function orgEditRoute(args: {
   const exclude = parseArr(org.exclude_json);
 
   const jiraCreds = args.store.getIntentCredentials(args.name, "jira");
+  const linearCreds = args.store.getIntentCredentials(args.name, "linear");
 
   const body = html`
     <section class="card">
@@ -91,6 +92,31 @@ export function orgEditRoute(args: {
         <div class="space flex">
           <button type="submit">Save Jira credentials</button>
           ${jiraCreds
+            ? html`<button type="submit" name="_action" value="delete" class="danger">Remove</button>`
+            : ""}
+          <a href="/config" class="muted">cancel</a>
+        </div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Linear intent provider</h2>
+      <p class="muted">
+        When set, PRs in this org mentioning a Linear identifier
+        (<code>ENG-123</code>, <code>OPS-45</code>) pull the ticket into Claude's
+        prompt. If both Jira and Linear are configured, identifiers that happen
+        to exist in both places are fetched from both and presented side-by-side.
+      </p>
+      <form method="post" action="/config/orgs/${encodeURIComponent(args.name)}/intent/linear">
+        <div class="grid">
+          <div>
+            <label>API key (${linearCreds?.api_token ? "already set — leave blank to keep" : "required"})</label>
+            <input type="password" name="api_token" placeholder="${linearCreds?.api_token ? "•••••••• already set ••••••••" : "paste from linear.app/settings/api"}">
+          </div>
+        </div>
+        <div class="space flex">
+          <button type="submit">Save Linear credentials</button>
+          ${linearCreds
             ? html`<button type="submit" name="_action" value="delete" class="danger">Remove</button>`
             : ""}
           <a href="/config" class="muted">cancel</a>
@@ -217,6 +243,55 @@ export function handleOrgJiraPost(
     action: "config.org.edit",
     target: name,
     detail: `saved Jira credentials (host=${host}, email=${email})`,
+  });
+  return redirect("/config");
+}
+
+export function handleOrgLinearPost(
+  store: Store,
+  name: string,
+  form: FormData,
+): Response {
+  const existing = store.getOrg(name);
+  if (!existing) {
+    return new Response(`Unknown org: ${name}`, { status: 404 });
+  }
+
+  if (String(form.get("_action") ?? "") === "delete") {
+    store.removeIntentCredentials(name, "linear");
+    recordAudit(store, {
+      actor: currentActor(),
+      action: "config.org.edit",
+      target: name,
+      detail: "removed Linear credentials",
+    });
+    return redirect("/config");
+  }
+
+  const submittedToken = String(form.get("api_token") ?? "").trim();
+  const existingCreds = store.getIntentCredentials(name, "linear");
+
+  let apiToken: string | null = null;
+  if (submittedToken) {
+    apiToken = submittedToken;
+  } else if (existingCreds?.api_token) {
+    apiToken = existingCreds.api_token;
+  } else {
+    return new Response("api_token is required on first save", { status: 400 });
+  }
+
+  store.setIntentCredentials({
+    org_name: name,
+    kind: "linear",
+    host: null,
+    email: null,
+    api_token: apiToken,
+  });
+  recordAudit(store, {
+    actor: currentActor(),
+    action: "config.org.edit",
+    target: name,
+    detail: "saved Linear credentials",
   });
   return redirect("/config");
 }
