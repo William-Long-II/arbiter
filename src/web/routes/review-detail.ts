@@ -32,6 +32,12 @@ type StoredNote = {
     url: string;
     isPullRequest?: boolean;
   }>;
+  /** Present only on large PRs where triage ran and narrowed the deep-review set. */
+  triage?: {
+    deep: string[];
+    deferred: string[];
+    entries: Array<{ path: string; priority: "high" | "medium" | "low"; reason: string }>;
+  };
 };
 
 export function reviewDetailRoute(args: {
@@ -113,6 +119,38 @@ export function reviewDetailRoute(args: {
               `)}
             </tbody>
           </table>
+        </section>
+      ` : ""}
+
+      ${parsed.triage ? html`
+        <section class="card">
+          <h2>Large-PR triage</h2>
+          <p class="muted">This PR was large enough to trigger a lightweight triage pass. Claude classified every changed file, and only the top-priority subset was deep-reviewed. Deferred files are still noted in the review summary.</p>
+          <div class="grid">
+            <div class="stat"><div class="k">Deep-reviewed</div><div class="v">${parsed.triage.deep.length}</div></div>
+            <div class="stat"><div class="k">Deferred</div><div class="v">${parsed.triage.deferred.length}</div></div>
+            <div class="stat"><div class="k">Classified</div><div class="v">${parsed.triage.entries.length}</div></div>
+          </div>
+          ${parsed.triage.entries.length > 0 ? html`
+            <table>
+              <thead><tr><th>Priority</th><th>File</th><th>Reviewed?</th><th>Reason</th></tr></thead>
+              <tbody>
+                ${(() => {
+                  const deepSet = new Set(parsed.triage.deep);
+                  const order: Record<"high" | "medium" | "low", number> = { high: 0, medium: 1, low: 2 };
+                  const rows = [...parsed.triage.entries].sort((a, b) => order[a.priority] - order[b.priority]);
+                  return rows.map((e) => html`
+                    <tr>
+                      <td><span class="tag ${e.priority}">${e.priority}</span></td>
+                      <td class="mono">${e.path}</td>
+                      <td>${deepSet.has(e.path) ? "yes" : html`<span class="muted">no</span>`}</td>
+                      <td class="muted">${e.reason}</td>
+                    </tr>
+                  `);
+                })()}
+              </tbody>
+            </table>
+          ` : ""}
         </section>
       ` : ""}
 

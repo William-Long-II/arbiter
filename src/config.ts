@@ -81,6 +81,18 @@ export const ConfigSchema = z.object({
      */
     dead_letter_threshold: z.number().int().min(0).max(20).default(3),
     /**
+     * Large-PR triage activates above either threshold. When it does, a
+     * lightweight first-pass classifies every file; only the top
+     * `large_pr_deep_review_files` get the full review prompt. Rest are
+     * summarized as deferred. Two Claude calls per large PR (triage +
+     * review) regardless of total file count.
+     *
+     * Set fileCount or diffBytes very high to effectively disable triage.
+     */
+    large_pr_threshold_files: z.number().int().min(5).max(500).default(25),
+    large_pr_threshold_bytes: z.number().int().min(10_000).max(10_000_000).default(100_000),
+    large_pr_deep_review_files: z.number().int().min(1).max(50).default(15),
+    /**
      * Glob-list filters applied to the diff before Claude sees it.
      * include_paths empty = every file passes the include check. Non-empty
      * acts as a whitelist. exclude_paths drops any match after include.
@@ -144,6 +156,9 @@ export const SCALAR_DEFAULTS: Record<string, string> = {
   "review.require_ci_green": "true",
   "review.concurrency": "1",
   "review.dead_letter_threshold": "3",
+  "review.large_pr_threshold_files": "25",
+  "review.large_pr_threshold_bytes": "100000",
+  "review.large_pr_deep_review_files": "15",
   "review.include_paths": "[]",
   "review.exclude_paths": JSON.stringify(DEFAULT_EXCLUDE_PATHS),
   "poll.interval_seconds": "60",
@@ -185,6 +200,9 @@ export function loadConfigFromStore(store: Store): Config {
       require_ci_green: asBool(scalars["review.require_ci_green"], true),
       concurrency: asInt(scalars["review.concurrency"], 1),
       dead_letter_threshold: asInt(scalars["review.dead_letter_threshold"], 3),
+      large_pr_threshold_files: asInt(scalars["review.large_pr_threshold_files"], 25),
+      large_pr_threshold_bytes: asInt(scalars["review.large_pr_threshold_bytes"], 100_000),
+      large_pr_deep_review_files: asInt(scalars["review.large_pr_deep_review_files"], 15),
       include_paths: safeJsonArray(scalars["review.include_paths"] ?? "[]"),
       exclude_paths: safeJsonArray(scalars["review.exclude_paths"] ?? "[]"),
     },
@@ -235,6 +253,9 @@ export function bootstrapFromYaml(store: Store, yamlPath: string): boolean {
   store.setScalar("review.require_ci_green", String(cfg.review.require_ci_green));
   store.setScalar("review.concurrency", String(cfg.review.concurrency));
   store.setScalar("review.dead_letter_threshold", String(cfg.review.dead_letter_threshold));
+  store.setScalar("review.large_pr_threshold_files", String(cfg.review.large_pr_threshold_files));
+  store.setScalar("review.large_pr_threshold_bytes", String(cfg.review.large_pr_threshold_bytes));
+  store.setScalar("review.large_pr_deep_review_files", String(cfg.review.large_pr_deep_review_files));
   store.setScalar("review.include_paths", JSON.stringify(cfg.review.include_paths));
   store.setScalar("review.exclude_paths", JSON.stringify(cfg.review.exclude_paths));
   store.setScalar("poll.interval_seconds", String(cfg.poll.interval_seconds));

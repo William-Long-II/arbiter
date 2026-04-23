@@ -1,4 +1,4 @@
-import type { PrContext } from "../github/diff.ts";
+import type { FileDiff, PrContext } from "../github/diff.ts";
 import type { TicketContext } from "../intent/types.ts";
 
 /**
@@ -14,6 +14,8 @@ export function buildReviewPrompt(args: {
   pullNumber: number;
   tone: string;
   tickets?: TicketContext[];
+  /** When triage ran, the files we chose NOT to review in depth. Surfaced to Claude so the summary can mention what's been deferred. */
+  deferredFiles?: string[];
 }): string {
   const fileBlocks = args.pr.files
     .map((f) => {
@@ -32,7 +34,7 @@ DESCRIPTION:
 ${args.pr.body || "(no description)"}
 
 BASE: ${args.pr.base_ref}   HEAD: ${args.pr.head_ref}
-${intentBlock}
+${intentBlock}${renderDeferred(args.deferredFiles)}
 REVIEW TONE:
 ${args.tone}
 
@@ -71,6 +73,82 @@ DIFF:
 ${fileBlocks}
 
 Respond now with the JSON object only.`;
+}
+
+/**
+ * Triage prompt: a lightweight first pass that classifies every changed
+ * file by review priority. No diff bodies — just file stats — so the prompt
+ * stays small even on huge PRs. Claude picks which files deserve full
+ * review; the loop then builds a normal review prompt with only those.
+ */
+export function buildTriagePrompt(args: {
+  pr: PrContext;
+  repo: string;
+  pullNumber: number;
+  tickets?: TicketContext[];
+}): string {
+  const fileLines = args.pr.files
+    .map((f) => {
+      const adds = f.rightLines.size;
+      const dels = f.leftLines.size;
+      return `- ${f.path}  (${f.status}, +${adds} / -${dels})`;
+    })
+    .join("\n");
+
+  const intentBlock = renderIntent(args.tickets);
+
+  return `You are triaging pull request ${args.repo}#${args.pullNumber} to decide which files warrant deep review attention. This PR has too many files to review every one in depth; pick where a careful review pays off most.
+
+TITLE: ${args.pr.title}
+
+DESCRIPTION:
+${args.pr.body || "(no description)"}
+${intentBlock}
+FILES CHANGED (${args.pr.files.length}):
+${fileLines}
+
+TASK:
+Output ONLY a single JSON object, no prose:
+
+{
+  "priorities": [
+    {"path": "exact path from the list above", "priority": "high" | "medium" | "low", "reason": "one short sentence"}
+  ]
+}
+
+RULES:
+- Classify EVERY file. If uncertain, pick "medium".
+- "high": security-sensitive code, auth, crypto, data integrity, public API
+  surface, complex state machines, core business logic. Also files referenced
+  in the PR title or ticket context.
+- "low": test fixtures, doc-only changes, formatting, simple import sorting,
+  obvious generated code, version bumps.
+- "medium": everything else.
+- One reason per file, short.
+
+Respond now with the JSON object only.`;
+}
+
+/**
+ * Trim a PrContext to just the subset of files identified as high priority.
+ * Called by the loop after a successful triage. Keeps PrContext's metadata
+ * (title, body, head_sha, etc) unchanged; only the files[] array shrinks.
+ */
+export function narrowToFiles(pr: PrContext, paths: Set<string>): PrContext {
+  const files: FileDiff[] = pr.files.filter((f) => paths.has(f.path));
+  return { ...pr, files };
+}
+
+function renderDeferred(deferred: string[] | undefined): string {
+  if (!deferred || deferred.length === 0) return "";
+  const shown = deferred.slice(0, 30);
+  const more = deferred.length > shown.length ? `\n  (… and ${deferred.length - shown.length} more)` : "";
+  return `
+DEFERRED FILES (not reviewed in depth — too many files in this PR to deep-review each one):
+  ${shown.join("\n  ")}${more}
+
+Mention this in your summary so the PR author knows which files you did and didn't inspect.
+`;
 }
 
 function renderIntent(tickets: TicketContext[] | undefined): string {

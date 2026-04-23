@@ -5,12 +5,14 @@ import type { PullRef, RepoRef } from "./github/discover.ts";
 import { filterReviewable, listOpenPulls, resolveWatchedRepos } from "./github/discover.ts";
 import { evaluateCi } from "./github/ci.ts";
 import { fetchPrContext } from "./github/diff.ts";
-import { buildReviewPrompt } from "./claude/prompt.ts";
-import { invokeClaude } from "./claude/invoke.ts";
+import { buildReviewPrompt, buildTriagePrompt, narrowToFiles } from "./claude/prompt.ts";
+import { invokeClaude, invokeClaudeJson } from "./claude/invoke.ts";
+import { TriageResult } from "./claude/schema.ts";
 import { validateReview } from "./review/validate.ts";
 import { postReview } from "./review/post.ts";
 import { resolveTone } from "./review/tone.ts";
 import { filterFiles } from "./review/file-filter.ts";
+import { pickDeepReviewFiles, shouldTriage } from "./review/large-pr.ts";
 import type { Breaker } from "./review/breaker.ts";
 import { resolveIntent } from "./intent/resolve.ts";
 import type { TicketContext } from "./intent/types.ts";
@@ -264,12 +266,106 @@ async function processPrInner(
     });
   }
 
+  // Large-PR path: if the PR crosses either threshold, run a lightweight
+  // triage over filenames+stats, pick the top-priority subset, and deep-
+  // review only those. Two Claude calls per large PR (triage + review) vs
+  // one for small PRs — hard cap on quota multiplication.
+  let triageSummary: {
+    ran: boolean;
+    deep: string[];
+    deferred: string[];
+    entries: Array<{ path: string; priority: "high" | "medium" | "low"; reason: string }>;
+  } = { ran: false, deep: [], deferred: [], entries: [] };
+
+  if (shouldTriage(ctx, {
+    fileCount: cfg.review.large_pr_threshold_files,
+    diffBytes: cfg.review.large_pr_threshold_bytes,
+    deepReviewFiles: cfg.review.large_pr_deep_review_files,
+  })) {
+    const triageAcquire = breaker.tryAcquire();
+    if (!triageAcquire.allowed) {
+      // Fall through to the normal breaker-deferred path below — no triage,
+      // no review, PR picked up next tick after breaker closes.
+    } else {
+      const triagePrompt = buildTriagePrompt({
+        pr: ctx,
+        repo: repoSlug,
+        pullNumber: pr.number,
+        tickets: intent.tickets,
+      });
+      log.info("triage.invoke", {
+        ...tag,
+        files: ctx.files.length,
+        promptBytes: triagePrompt.length,
+      });
+      const tRes = await invokeClaudeJson({
+        command: cfg.claude.command,
+        prompt: triagePrompt,
+        timeoutSeconds: cfg.claude.timeout_seconds,
+        schema: TriageResult,
+      });
+      if (!tRes.ok) {
+        // Triage failed: record, surface via breaker, and fall back to
+        // reviewing everything (imperfect but better than skipping the PR
+        // entirely). Breaker takes the failure so repeated triage errors
+        // trip it system-wide.
+        breaker.recordFailure(tRes.error);
+        log.error("triage.failed", { ...tag, error: tRes.error });
+        store.recordEvent({
+          level: "error",
+          kind: "triage.failed",
+          message: tRes.error,
+          repo: repoSlug,
+          prNumber: pr.number,
+          headSha: pr.head_sha,
+          payload: { stderr: tRes.stderr?.slice(0, 2000), stdoutSample: tRes.stdoutSample?.slice(0, 500) },
+        });
+        // We could bail entirely here. Instead fall through to normal review
+        // with all files — at worst it's a generic-sounding review on a big
+        // PR, which is what we had before this feature.
+      } else {
+        breaker.recordSuccess();
+        const picked = pickDeepReviewFiles({
+          triage: tRes.data.priorities,
+          allFiles: ctx.files,
+          limit: cfg.review.large_pr_deep_review_files,
+        });
+        triageSummary = {
+          ran: true,
+          deep: picked.kept,
+          deferred: picked.deferred,
+          entries: tRes.data.priorities,
+        };
+        // Shrink ctx.files to the kept subset — the review prompt + line-
+        // comment validator only see these. Deferred files are mentioned in
+        // the summary body so the reader knows what was skipped.
+        const keptSet = new Set(picked.kept);
+        ctx.files = ctx.files.filter((f) => keptSet.has(f.path));
+
+        store.recordEvent({
+          level: "info",
+          kind: "triage.ok",
+          message: `Large PR: deep-reviewed ${picked.kept.length} of ${picked.kept.length + picked.deferred.length} files`,
+          repo: repoSlug,
+          prNumber: pr.number,
+          headSha: pr.head_sha,
+          payload: {
+            deep: picked.kept,
+            deferred: picked.deferred.slice(0, 50),
+            deferredCount: picked.deferred.length,
+          },
+        });
+      }
+    }
+  }
+
   const prompt = buildReviewPrompt({
     pr: ctx,
     repo: repoSlug,
     pullNumber: pr.number,
     tone: resolvedTone,
     tickets: intent.tickets,
+    deferredFiles: triageSummary.deferred,
   });
 
   // Breaker gate: if Claude has failed enough times in a row the breaker is
@@ -436,7 +532,7 @@ async function processPrInner(
     prNumber: pr.number,
     headSha: pr.head_sha,
     verdict: persisted,
-    note: buildReviewNote(validated, resolvedTone, intent.tickets),
+    note: buildReviewNote(validated, resolvedTone, intent.tickets, triageSummary),
   });
   // Any prior failure counter for this SHA is now stale — a successful review
   // means we've recovered.
@@ -475,6 +571,12 @@ function buildReviewNote(
   },
   toneUsed: string,
   tickets: TicketContext[],
+  triage: {
+    ran: boolean;
+    deep: string[];
+    deferred: string[];
+    entries: Array<{ path: string; priority: "high" | "medium" | "low"; reason: string }>;
+  },
 ): string {
   const payload = {
     verdict: v.verdict,
@@ -491,6 +593,17 @@ function buildReviewNote(
       url: t.url,
       isPullRequest: t.isPullRequest ?? false,
     })),
+    // Present only when triage actually ran. Omitted otherwise so the note
+    // JSON stays compact for the overwhelming majority of small PRs.
+    ...(triage.ran
+      ? {
+          triage: {
+            deep: triage.deep,
+            deferred: triage.deferred,
+            entries: triage.entries,
+          },
+        }
+      : {}),
   };
   const json = JSON.stringify(payload);
   return json.slice(0, 512 * 1024);

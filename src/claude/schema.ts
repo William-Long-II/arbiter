@@ -28,3 +28,25 @@ export const ReviewResult = z
 
 export type ReviewResult = z.infer<typeof ReviewResult>;
 export type LineComment = z.infer<typeof LineComment>;
+
+/**
+ * Triage schema — first-pass classification on large PRs. Claude decides
+ * which files warrant deep review; the loop then only sends those files'
+ * diffs to the review prompt. Priority is the sort key; reason is a
+ * one-liner the operator will see on the detail page.
+ */
+export const TriagePriority = z.enum(["high", "medium", "low"]);
+
+export const TriageEntry = z.object({
+  path: z.string().min(1),
+  priority: TriagePriority,
+  reason: z.string().min(1).max(300),
+});
+
+export const TriageResult = z.object({
+  priorities: z.array(TriageEntry).default([]),
+});
+
+export type TriagePriority = z.infer<typeof TriagePriority>;
+export type TriageEntry = z.infer<typeof TriageEntry>;
+export type TriageResult = z.infer<typeof TriageResult>;
