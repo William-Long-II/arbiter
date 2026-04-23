@@ -14,11 +14,25 @@ export function statusApiRoute(args: { store: Store; runtime: Runtime }): Respon
   const { store, runtime } = args;
   const cfg = loadConfigFromStore(store);
   const counts = store.counts();
+  const recentReviews = store.recentReviews(50).map((r) => {
+    const [owner, name] = r.repo.split("/");
+    return {
+      repo: r.repo,
+      pr_number: r.pr_number,
+      head_sha: r.head_sha,
+      verdict: r.verdict,
+      reviewed_at: r.reviewed_at,
+      // Pre-computed URL so the client doesn't have to know the routing
+      // scheme. Uses the same two-segment form as the server-side matcher.
+      detail_url: `/reviews/${encodeURIComponent(owner ?? "")}/${encodeURIComponent(name ?? "")}/${r.pr_number}`,
+    };
+  });
   const body = {
     now: new Date().toISOString(),
     mode: cfg.review.dry_run ? "dry-run" : "live",
     approvalsInLastHour: store.approvalsInLastHour(),
     approvalCap: cfg.review.max_approvals_per_hour,
+    pollIntervalSeconds: cfg.poll.interval_seconds,
     lastTickStart: runtime.lastTickStart,
     lastTickEnd: runtime.lastTickEnd,
     lastTickError: runtime.lastTickError,
@@ -32,6 +46,7 @@ export function statusApiRoute(args: { store: Store; runtime: Runtime }): Respon
       sizeBytes: store.meta.sizeBytes,
       counts,
     },
+    recentReviews,
   };
   return new Response(JSON.stringify(body), {
     status: 200,
