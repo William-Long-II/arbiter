@@ -237,7 +237,7 @@ claude:
     try {
       const { Database } = await import("bun:sqlite");
       const legacy = new Database(path, { create: true });
-      legacy.exec(`
+      legacy.run(`
         CREATE TABLE config_watch_orgs (
           name TEXT PRIMARY KEY,
           mode TEXT NOT NULL,
