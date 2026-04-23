@@ -31,3 +31,18 @@ services:
 
       # Persistent state: reviews + events + config lives here.
       - ./data:/app/data
+
+  # Optional Cloudflare Tunnel sidecar. Uncomment + set CLOUDFLARE_TUNNEL_TOKEN
+  # in .env to expose /webhook/github to the internet without opening firewall
+  # ports. Route the tunnel's public hostname at the auto-reviewer:8787 service
+  # in the Cloudflare dashboard. Point your GitHub webhook at
+  # https://<your-tunnel-hostname>/webhook/github with the same secret as
+  # GITHUB_WEBHOOK_SECRET.
+  #
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   container_name: auto-reviewer-tunnel
+  #   restart: unless-stopped
+  #   command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+  #   depends_on:
+  #     - auto-reviewer

@@ -24,7 +24,7 @@ import type { ActivePr, Runtime } from "./web/runtime.ts";
  * Progress-reporting slice of Runtime that the loop needs. Taking only these
  * fields keeps runTick testable without pulling in every unrelated runtime field.
  */
-type Progress = Pick<Runtime, "currentPrs" | "lastActivityAt">;
+type Progress = Pick<Runtime, "currentPrs" | "lastActivityAt" | "webhookQueue">;
 
 export async function runTick(args: {
   gh: GH;
@@ -42,6 +42,34 @@ export async function runTick(args: {
 
   const eligible: PullRef[] = [];
   const deadLetterThreshold = cfg.review.dead_letter_threshold;
+
+  // Drain the webhook queue first. Each entry is already scoped to a
+  // specific repo+PR+SHA; we apply the same dedupe + dead-letter filters
+  // here that polling discovery applies below. Duplicate entries (whether
+  // from the queue or from concurrent polling) are fine — hasReviewed
+  // gates the second processing attempt.
+  const drained = progress.webhookQueue.splice(0, progress.webhookQueue.length);
+  for (const ref of drained) {
+    const s = `${ref.repo.owner}/${ref.repo.name}`;
+    if (store.hasReviewed(s, ref.number, ref.head_sha)) continue;
+    if (deadLetterThreshold > 0) {
+      const f = store.getFailure(s, ref.number, ref.head_sha);
+      if (f && f.failure_count >= deadLetterThreshold) continue;
+    }
+    eligible.push({
+      repo: ref.repo,
+      number: ref.number,
+      head_sha: ref.head_sha,
+      // Webhook payloads don't carry the PullRef author/title fields the
+      // poller normally fills in. fetchPrContext re-fetches everything
+      // we actually need for the prompt, so these empty defaults never
+      // reach a user-visible surface.
+      author: "",
+      author_is_bot: false,
+      draft: false,
+      title: "",
+    });
+  }
   for (const repo of repos) {
     try {
       const prs = filterReviewable(await listOpenPulls(gh, repo), cfg);
