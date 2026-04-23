@@ -19,6 +19,7 @@ import {
   handleToggleDryRun,
 } from "./routes/actions.ts";
 import { statusApiRoute } from "./routes/status-api.ts";
+import { metricsApiRoute } from "./routes/metrics-api.ts";
 import { redirect } from "./html.ts";
 import { log } from "../log.ts";
 import { requireAuth } from "./auth.ts";
@@ -69,6 +70,11 @@ function buildRoutes(): Route[] {
       method: "GET",
       pattern: "/api/status",
       handler: ({ store, runtime }) => statusApiRoute({ store, runtime }),
+    },
+    {
+      method: "GET",
+      pattern: "/api/metrics",
+      handler: ({ store, url }) => metricsApiRoute({ store, url }),
     },
 
     // Config GETs.
