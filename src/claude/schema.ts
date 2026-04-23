@@ -50,3 +50,19 @@ export const TriageResult = z.object({
 export type TriagePriority = z.infer<typeof TriagePriority>;
 export type TriageEntry = z.infer<typeof TriageEntry>;
 export type TriageResult = z.infer<typeof TriageResult>;
+
+/**
+ * Reply result — used by the threaded-iteration path (#136). The bot
+ * answers one human reply per invocation, producing a single reply
+ * body. No structured fields beyond the text: we deliberately keep
+ * this narrow so the prompt has no incentive to invent additional
+ * line comments or verdict changes.
+ */
+export const ReplyResult = z.object({
+  reply: z
+    .string()
+    .min(1)
+    .max(10_000, "reply text too long"),
+});
+
+export type ReplyResult = z.infer<typeof ReplyResult>;

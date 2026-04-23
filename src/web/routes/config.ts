@@ -131,6 +131,17 @@ export function configRoute(args: {
             <label title="After triage, this many top-priority files get the full review prompt. The rest are summarized as 'deferred' in the review summary.">Large-PR deep-review files</label>
             <input type="number" name="large_pr_deep_review_files" min="1" max="50" value="${cfg.review.large_pr_deep_review_files}">
           </div>
+          <div>
+            <label title="When on, each tick scans recently-reviewed PRs for new replies to the bot's line comments and responds in-thread. Off by default (costs extra Claude calls).">Threaded replies</label>
+            <select name="threaded_replies">
+              <option value="true" ${cfg.review.threaded_replies ? "selected" : ""}>true (iterate conversations)</option>
+              <option value="false" ${!cfg.review.threaded_replies ? "selected" : ""}>false (drive-by reviews only)</option>
+            </select>
+          </div>
+          <div>
+            <label title="How many recently-reviewed PRs to scan per tick for new thread replies. Only used when Threaded replies is true.">Threaded-replies scan depth</label>
+            <input type="number" name="threaded_replies_scan_recent" min="1" max="200" value="${cfg.review.threaded_replies_scan_recent}">
+          </div>
         </div>
 
         <p class="muted space" style="font-size:12px">
@@ -330,6 +341,8 @@ export async function handleGeneralPost(
       large_pr_threshold_files: clampInt(form.get("large_pr_threshold_files"), 5, 500, 25),
       large_pr_threshold_bytes: clampInt(form.get("large_pr_threshold_bytes"), 10_000, 10_000_000, 100_000),
       large_pr_deep_review_files: clampInt(form.get("large_pr_deep_review_files"), 1, 50, 15),
+      threaded_replies: String(form.get("threaded_replies") ?? "false") === "true",
+      threaded_replies_scan_recent: clampInt(form.get("threaded_replies_scan_recent"), 1, 200, 25),
       include_paths: splitLines(form.get("include_paths")),
       exclude_paths: splitLines(form.get("exclude_paths")),
     },
@@ -374,6 +387,8 @@ export async function handleGeneralPost(
   store.setScalar("review.large_pr_threshold_files", String(cfg.review.large_pr_threshold_files));
   store.setScalar("review.large_pr_threshold_bytes", String(cfg.review.large_pr_threshold_bytes));
   store.setScalar("review.large_pr_deep_review_files", String(cfg.review.large_pr_deep_review_files));
+  store.setScalar("review.threaded_replies", String(cfg.review.threaded_replies));
+  store.setScalar("review.threaded_replies_scan_recent", String(cfg.review.threaded_replies_scan_recent));
   store.setScalar("review.include_paths", JSON.stringify(cfg.review.include_paths));
   store.setScalar("review.exclude_paths", JSON.stringify(cfg.review.exclude_paths));
 

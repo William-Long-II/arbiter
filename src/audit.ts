@@ -163,6 +163,16 @@ export function diffGeneralConfig(before: Config, after: Config): AuditChange[] 
     before.review.large_pr_deep_review_files,
     after.review.large_pr_deep_review_files,
   );
+  scalar(
+    "review.threaded_replies",
+    before.review.threaded_replies,
+    after.review.threaded_replies,
+  );
+  scalar(
+    "review.threaded_replies_scan_recent",
+    before.review.threaded_replies_scan_recent,
+    after.review.threaded_replies_scan_recent,
+  );
   scalar("poll.interval_seconds", before.poll.interval_seconds, after.poll.interval_seconds);
   scalar("claude.command", before.claude.command, after.claude.command);
   scalar("claude.timeout_seconds", before.claude.timeout_seconds, after.claude.timeout_seconds);

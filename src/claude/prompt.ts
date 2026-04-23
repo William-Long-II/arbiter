@@ -8,6 +8,67 @@ import type { TicketContext } from "../intent/types.ts";
  */
 const MAX_TICKET_BODY_CHARS = 2000;
 
+/**
+ * Reply prompt — used by the threaded-iteration path (#136). Claude has
+ * already posted a review on this PR; a human replied to one of its
+ * line comments and now expects a direct response. We feed the full
+ * comment chain, the file diff at the affected path, and the tone.
+ *
+ * Output is a single-field JSON object with the reply body. Kept
+ * deliberately narrow (no verdict, no additional comments) so the
+ * prompt has no incentive to escalate into posting more surface area.
+ */
+export function buildReplyPrompt(args: {
+  repo: string;
+  pullNumber: number;
+  tone: string;
+  /** The file path this thread is attached to. Included so Claude can
+   *  ground its answer in the specific diff, not just the comment text. */
+  path: string;
+  /** The diff body for that path (GitHub's patch format). When absent
+   *  (e.g. the file was later removed from the PR), we skip this block. */
+  patch: string | undefined;
+  /** Ordered chain: bot's original comment first, then every reply in
+   *  chronological order. Each block labels the author so Claude can
+   *  see who said what without reconstructing it from context clues. */
+  chain: Array<{ author: string; body: string }>;
+}): string {
+  const chainBlock = args.chain
+    .map((m, i) => `[${i === 0 ? "you (original comment)" : m.author}]\n${m.body}`)
+    .join("\n\n---\n\n");
+
+  const diffBlock = args.patch
+    ? `\n\nDIFF (${args.path}):\n${args.patch}`
+    : `\n\n(The file ${args.path} is no longer in the PR diff; respond from the thread context alone.)`;
+
+  return `You are continuing a review conversation on pull request ${args.repo}#${args.pullNumber}.
+
+You posted the first comment in the thread below. A human replied. Respond to the most recent reply directly, grounded in the diff you originally commented on.
+
+REVIEW TONE:
+${args.tone}
+
+CONVERSATION (most recent reply is last):
+${chainBlock}${diffBlock}
+
+TASK:
+Write a single reply. Your output MUST be a single JSON object on stdout and NOTHING else — no prose before or after, no markdown fences.
+
+JSON schema:
+{
+  "reply": "Plain text. 1-6 sentences, markdown OK. Answer the most recent reply directly: clarify, agree, push back with specifics, or ask for information. If the conversation is resolved on their side, acknowledge and stop."
+}
+
+RULES:
+- Be kind. The author is a capable teammate. Explain, don't scold.
+- Don't repeat yourself or restate the original comment — the human already read it.
+- If you're wrong or they've convinced you, say so explicitly.
+- Do not invent additional line comments, verdicts, or file changes; the only output is the reply body.
+- Do not reply with "Thanks!" or other content-free acknowledgements when there's nothing substantive to add.
+
+Respond now with the JSON object only.`;
+}
+
 export function buildReviewPrompt(args: {
   pr: PrContext;
   repo: string;

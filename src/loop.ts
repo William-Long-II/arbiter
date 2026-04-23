@@ -14,6 +14,7 @@ import { resolveTone } from "./review/tone.ts";
 import { applyToneTemplates } from "./review/tone-templates.ts";
 import { filterFiles } from "./review/file-filter.ts";
 import { pickDeepReviewFiles, shouldTriage } from "./review/large-pr.ts";
+import { respondToThreads } from "./threads/respond.ts";
 import type { Breaker } from "./review/breaker.ts";
 import { resolveIntent } from "./intent/resolve.ts";
 import type { TicketContext } from "./intent/types.ts";
@@ -124,6 +125,54 @@ export async function runTick(args: {
     }
   });
   await Promise.all(workers);
+
+  // Phase 3 (#136): threaded reply iteration. Feature-flagged off by
+  // default — when on, scan the N most-recently-reviewed PRs for new
+  // human replies on the bot's line comments and respond in-thread.
+  // Runs after the main review workers so it can't starve a fresh
+  // review of its quota slot, and uses the shared breaker + per-hour
+  // approval budget so it can't go runaway.
+  if (cfg.review.threaded_replies) {
+    const recent = store.recentReviews(cfg.review.threaded_replies_scan_recent);
+    let totalPosted = 0;
+    let totalSkipped = 0;
+    for (const r of recent) {
+      const [owner, name] = r.repo.split("/");
+      if (!owner || !name) continue;
+      try {
+        const result = await respondToThreads({
+          gh,
+          cfg,
+          store,
+          repo: { owner, name },
+          prNumber: r.pr_number,
+          breaker,
+        });
+        totalPosted += result.repliesPosted;
+        totalSkipped += result.skipped;
+      } catch (e) {
+        log.error("threads.unhandled", {
+          repo: r.repo,
+          pr: r.pr_number,
+          error: (e as Error).message,
+        });
+        store.recordEvent({
+          level: "error",
+          kind: "threads.unhandled",
+          message: `threaded-reply sweep failed on ${r.repo}#${r.pr_number}: ${(e as Error).message}`,
+          repo: r.repo,
+          prNumber: r.pr_number,
+        });
+      }
+    }
+    if (totalPosted > 0 || totalSkipped > 0) {
+      log.info("threads.sweep", {
+        scanned: recent.length,
+        posted: totalPosted,
+        skipped: totalSkipped,
+      });
+    }
+  }
 }
 
 async function processPr(

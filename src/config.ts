@@ -93,6 +93,21 @@ export const ConfigSchema = z.object({
     large_pr_threshold_bytes: z.number().int().min(10_000).max(10_000_000).default(100_000),
     large_pr_deep_review_files: z.number().int().min(1).max(50).default(15),
     /**
+     * When true, the loop checks each reviewed PR for new replies to the
+     * bot's line comments and iterates the conversation (#136). Off by
+     * default — it costs an extra Claude call per pending thread and
+     * roughly-one `GET /pulls/:n/comments` per PR per tick, which is
+     * wasted work when the operator isn't using the feature.
+     */
+    threaded_replies: z.boolean().default(false),
+    /**
+     * How many previously-reviewed PRs to scan per tick for new replies.
+     * Polling all reviewed PRs is expensive; scanning the most recent N
+     * catches active conversations without unbounded work. Tune up if
+     * slow-moving discussions go unanswered.
+     */
+    threaded_replies_scan_recent: z.number().int().min(1).max(200).default(25),
+    /**
      * Glob-list filters applied to the diff before Claude sees it.
      * include_paths empty = every file passes the include check. Non-empty
      * acts as a whitelist. exclude_paths drops any match after include.
@@ -159,6 +174,8 @@ export const SCALAR_DEFAULTS: Record<string, string> = {
   "review.large_pr_threshold_files": "25",
   "review.large_pr_threshold_bytes": "100000",
   "review.large_pr_deep_review_files": "15",
+  "review.threaded_replies": "false",
+  "review.threaded_replies_scan_recent": "25",
   "review.include_paths": "[]",
   "review.exclude_paths": JSON.stringify(DEFAULT_EXCLUDE_PATHS),
   "poll.interval_seconds": "60",
@@ -203,6 +220,8 @@ export function loadConfigFromStore(store: Store): Config {
       large_pr_threshold_files: asInt(scalars["review.large_pr_threshold_files"], 25),
       large_pr_threshold_bytes: asInt(scalars["review.large_pr_threshold_bytes"], 100_000),
       large_pr_deep_review_files: asInt(scalars["review.large_pr_deep_review_files"], 15),
+      threaded_replies: asBool(scalars["review.threaded_replies"], false),
+      threaded_replies_scan_recent: asInt(scalars["review.threaded_replies_scan_recent"], 25),
       include_paths: safeJsonArray(scalars["review.include_paths"] ?? "[]"),
       exclude_paths: safeJsonArray(scalars["review.exclude_paths"] ?? "[]"),
     },
@@ -256,6 +275,8 @@ export function bootstrapFromYaml(store: Store, yamlPath: string): boolean {
   store.setScalar("review.large_pr_threshold_files", String(cfg.review.large_pr_threshold_files));
   store.setScalar("review.large_pr_threshold_bytes", String(cfg.review.large_pr_threshold_bytes));
   store.setScalar("review.large_pr_deep_review_files", String(cfg.review.large_pr_deep_review_files));
+  store.setScalar("review.threaded_replies", String(cfg.review.threaded_replies));
+  store.setScalar("review.threaded_replies_scan_recent", String(cfg.review.threaded_replies_scan_recent));
   store.setScalar("review.include_paths", JSON.stringify(cfg.review.include_paths));
   store.setScalar("review.exclude_paths", JSON.stringify(cfg.review.exclude_paths));
   store.setScalar("poll.interval_seconds", String(cfg.poll.interval_seconds));
