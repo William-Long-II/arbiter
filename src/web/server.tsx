@@ -1,7 +1,15 @@
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Hono } from 'hono';
+import { serveStatic } from 'hono/bun';
 import { mountGithubOAuth } from '../github/oauth.ts';
 import { sql } from '../db.ts';
-import { currentUser } from './auth.ts';
+import { currentUser, requireUser } from './auth.ts';
+import { filterRepos, listAccessibleRepos } from '../github/repos.ts';
+import { ReposPage } from './views/repos.tsx';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const staticRoot = join(here, 'static');
 
 export function buildApp(): Hono {
   const app = new Hono();
@@ -14,6 +22,8 @@ export function buildApp(): Hono {
       return c.json({ ok: false, error: String(err) }, 503);
     }
   });
+
+  app.use('/static/*', serveStatic({ root: relativeTo(staticRoot, process.cwd()), rewriteRequestPath: (p) => p.replace(/^\/static/, '') }));
 
   app.get('/', async (c) => {
     const user = await currentUser(c);
@@ -32,9 +42,33 @@ export function buildApp(): Hono {
     });
   });
 
+  app.get('/api/repos', requireUser, async (c) => {
+    const user = c.get('user');
+    const repos = await listAccessibleRepos(user.githubToken);
+    return c.json({ repos });
+  });
+
+  app.get('/repos', requireUser, async (c) => {
+    const user = c.get('user');
+    const query = c.req.query('q') ?? '';
+    const all = await listAccessibleRepos(user.githubToken);
+    const repos = filterRepos(all, query);
+    return c.html(<ReposPage user={user} repos={repos} query={query} />);
+  });
+
   mountGithubOAuth(app);
 
   return app;
+}
+
+function relativeTo(target: string, from: string): string {
+  // hono/bun serveStatic wants a path relative to the process cwd.
+  const targetNormalized = target.replace(/\\/g, '/');
+  const fromNormalized = from.replace(/\\/g, '/');
+  if (targetNormalized.startsWith(fromNormalized + '/')) {
+    return targetNormalized.slice(fromNormalized.length + 1);
+  }
+  return targetNormalized;
 }
 
 function landingPage(login: string | null): string {
