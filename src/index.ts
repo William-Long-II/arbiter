@@ -1,6 +1,6 @@
 import { config } from './config.ts';
 import { runMigrations } from './db.ts';
-import { buildApp } from './web/server.ts';
+import { buildApp } from './web/server.tsx';
 import { startWorker, stopWorker } from './worker.ts';
 import { startPoller, stopPoller } from './github/poller.ts';
 
