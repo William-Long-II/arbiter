@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: reviewme
+      POSTGRES_PASSWORD: reviewme
+      POSTGRES_DB: reviewme
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reviewme"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: 8787
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8787}
+      DATABASE_URL: postgres://reviewme:reviewme@db:5432/reviewme
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      CLAUDE_DEFAULT_MODE: ${CLAUDE_DEFAULT_MODE:-subscription}
+      CLAUDE_BIN: ${CLAUDE_BIN:-claude}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-180}
+      WORKER_INTERVAL_SECONDS: ${WORKER_INTERVAL_SECONDS:-5}
+    volumes:
+      # Mount host ~/.claude/ so the container can use the user's
+      # Claude Code subscription credentials when running `claude -p`.
+      # Comment out if you only use api mode.
+      - ${HOME:-/root}/.claude:/root/.claude
+    ports:
+      - "8787:8787"
+
+volumes:
+  db-data:
