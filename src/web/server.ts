@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { mountGithubOAuth } from '../github/oauth.ts';
 import { sql } from '../db.ts';
+import { currentUser } from './auth.ts';
 
 export function buildApp(): Hono {
   const app = new Hono();
@@ -14,8 +15,21 @@ export function buildApp(): Hono {
     }
   });
 
-  app.get('/', (c) => {
-    return c.html(landingPage());
+  app.get('/', async (c) => {
+    const user = await currentUser(c);
+    return c.html(landingPage(user?.githubLogin ?? null));
+  });
+
+  app.get('/me', async (c) => {
+    const user = await currentUser(c);
+    if (!user) return c.json({ user: null }, 401);
+    return c.json({
+      user: {
+        id: user.id,
+        login: user.githubLogin,
+        avatarUrl: user.avatarUrl,
+      },
+    });
   });
 
   mountGithubOAuth(app);
@@ -23,7 +37,12 @@ export function buildApp(): Hono {
   return app;
 }
 
-function landingPage(): string {
+function landingPage(login: string | null): string {
+  const right = login
+    ? `<form method="POST" action="/auth/logout" style="display:inline">
+         <button class="cta-secondary">Sign out (${escapeHtml(login)})</button>
+       </form>`
+    : `<a class="cta" href="/auth/github">Sign in with GitHub</a>`;
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -34,7 +53,13 @@ function landingPage(): string {
     main { max-width:560px; padding:96px 24px; margin:0 auto; }
     h1 { font-size:32px; font-weight:600; letter-spacing:-0.6px; margin:0 0 8px; }
     p { color:#8a8f98; font-size:14px; line-height:1.5; }
-    a.cta { display:inline-block; background:#cc785c; color:#fff; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:500; text-decoration:none; margin-top:24px; }
+    a.cta, button.cta-secondary {
+      display:inline-block; padding:8px 14px; border-radius:8px;
+      font-size:13px; font-weight:500; text-decoration:none; margin-top:24px;
+      border: none; cursor: pointer; font-family: inherit;
+    }
+    a.cta { background:#cc785c; color:#fff; }
+    button.cta-secondary { background:#0f1011; color:#f7f8f8; border:1px solid #23252a; }
     code { font-family: "JetBrains Mono", ui-monospace, monospace; color:#d0d6e0; }
   </style>
 </head>
@@ -43,8 +68,17 @@ function landingPage(): string {
     <h1>reviewme</h1>
     <p>Greenfield rewrite. Web UI not implemented yet — this is a placeholder.</p>
     <p>Health: <code>GET /healthz</code></p>
-    <a class="cta" href="/auth/github">Sign in with GitHub</a>
+    ${right}
   </main>
 </body>
 </html>`;
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
