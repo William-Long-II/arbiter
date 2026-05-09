@@ -214,34 +214,36 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
 }
 .repo-group-list { padding: 4px 0; }
 
-/* Repos page: rows. Pack name → tags → time left-to-right with a normal
-   gap so the eye reads them as one cluster. The right side of the card is
-   intentionally empty. (The previous grid `1fr` for the name column ate
-   all available space and shoved metadata to the far edge, defeating the
-   point of the redesign.) */
-.repo-row {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 6px 16px;
-  min-height: 28px;
+/* Repos page: real table so columns auto-align across all rows in the
+   group. Flex couldn't do this — a row without a `private` chip would
+   shrink and the time column would land at a different x position. The
+   eye couldn't scan a column. Tables solve this for free. */
+.repo-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
 }
-.repo-row + .repo-row { border-top: 1px solid var(--surface-2); }
-.repo-row:hover { background: var(--surface-2); }
-.repo-row-name {
-  color: var(--ink); font-size: 13px;
-  /* Allow the name to shrink if it's pathologically long, and ellipsis. */
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  /* But don't grow to fill the row — that's what was pushing meta away. */
-  flex: 0 1 auto;
+.repo-row td {
+  padding: 6px 0;
+  vertical-align: middle;
 }
-.repo-row-tags { display: flex; gap: 8px; flex-shrink: 0; }
+.repo-row td:first-child { padding-left: 16px; }
+.repo-row td + td { padding-left: 16px; }
+.repo-row + .repo-row td { border-top: 1px solid var(--surface-2); }
+.repo-row:hover td { background: var(--surface-2); }
+.repo-row-name { color: var(--ink); white-space: nowrap; }
+.repo-row-tags { white-space: nowrap; }
 .repo-row-tag {
   font-size: 11px; color: var(--ink-subtle); font-weight: 500;
   text-transform: uppercase; letter-spacing: 0.4px;
+  margin-right: 8px;
 }
+.repo-row-tag:last-child { margin-right: 0; }
 .repo-row-tag-warn { color: #b8742d; }
-.repo-row-time { color: var(--ink-subtle); font-size: 12px; flex-shrink: 0; }
+.repo-row-time { color: var(--ink-subtle); font-size: 12px; white-space: nowrap; }
+/* Filler column absorbs unused row width so the data cells pack left
+   while hover and dividers still span the full card width. */
+.repo-row-filler { width: 100%; padding: 0 16px 0 0; }
 
 /* Pills */
 .badge-pill {

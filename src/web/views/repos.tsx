@@ -100,11 +100,18 @@ const RepoGroup: FC<{ owner: string; repos: Repo[]; defaultOpen: boolean }> = ({
         <span class="mono-sm repo-group-owner">{owner}</span>
         <span class="repo-group-count">{repos.length}</span>
       </summary>
-      <ul class="row-list repo-group-list">
-        {repos.map((r) => (
-          <RepoRow repo={r} />
-        ))}
-      </ul>
+      {/*
+        Real <table> here so the browser auto-aligns columns. With a flex
+        list, rows without a `private` chip shrunk and the time column
+        landed at a different x — the eye couldn't scan a column.
+      */}
+      <table class="repo-table">
+        <tbody>
+          {repos.map((r) => (
+            <RepoRow repo={r} />
+          ))}
+        </tbody>
+      </table>
     </details>
   );
 };
@@ -112,16 +119,17 @@ const RepoGroup: FC<{ owner: string; repos: Repo[]; defaultOpen: boolean }> = ({
 const RepoRow: FC<{ repo: Repo }> = ({ repo }) => {
   const name = repo.fullName.split('/').slice(1).join('/');
   return (
-    <li class="repo-row">
-      <span class="mono repo-row-name">{name}</span>
-      <span class="repo-row-tags">
+    <tr class="repo-row">
+      <td class="mono repo-row-name">{name}</td>
+      <td class="repo-row-tags">
         {repo.private ? <span class="repo-row-tag">private</span> : null}
         {repo.archived ? <span class="repo-row-tag repo-row-tag-warn">archived</span> : null}
-      </span>
-      {repo.pushedAt ? (
-        <span class="repo-row-time">{formatRelative(repo.pushedAt)}</span>
-      ) : null}
-    </li>
+      </td>
+      <td class="repo-row-time">
+        {repo.pushedAt ? formatRelative(repo.pushedAt) : ''}
+      </td>
+      <td class="repo-row-filler" />
+    </tr>
   );
 };
 
