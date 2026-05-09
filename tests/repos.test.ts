@@ -1,6 +1,11 @@
 import { describe, expect, test, mock, beforeEach } from 'bun:test';
 import * as api from '../src/github/api.ts';
-import { filterRepos, type Repo } from '../src/github/repos.ts';
+import {
+  excludeArchived,
+  filterRepos,
+  groupReposByOwner,
+  type Repo,
+} from '../src/github/repos.ts';
 
 type FakeOctokit = ReturnType<typeof makeOctokit>;
 
@@ -191,6 +196,92 @@ describe('listAccessibleRepos — org fan-out', () => {
     const { repos, sources } = await freshListAccessibleRepos(fake);
     expect(repos.map((r: Repo) => r.fullName)).toEqual(['me/r']);
     expect(sources).toEqual([{ kind: 'user', status: 'ok', count: 1 }]);
+  });
+
+  test('org-owner case: org repos appearing in BOTH endpoints are attributed to the org', async () => {
+    // When the user is an org owner, GitHub returns the org's repos under
+    // their /user/repos with affiliation=owner. Without unique-attribution
+    // counting, the user pill would inflate to include all org repos.
+    const fake = makeOctokit({
+      userPages: [
+        [
+          ghRepo({ full_name: 'me/personal' }),
+          ghRepo({ full_name: 'acme/one' }),
+          ghRepo({ full_name: 'acme/two' }),
+          ghRepo({ full_name: 'acme/three' }),
+        ],
+      ],
+      orgsPages: [[ghOrg('acme')]],
+      orgRepos: {
+        acme: [
+          [
+            ghRepo({ full_name: 'acme/one' }),
+            ghRepo({ full_name: 'acme/two' }),
+            ghRepo({ full_name: 'acme/three' }),
+          ],
+        ],
+      },
+    });
+    const { repos, sources } = await freshListAccessibleRepos(fake);
+    expect(repos.map((r: Repo) => r.fullName).sort()).toEqual([
+      'acme/one',
+      'acme/three',
+      'acme/two',
+      'me/personal',
+    ]);
+    // user pill is 1 (only me/personal is uniquely attributable to the user),
+    // not 4. The 3 acme repos are attributed to the acme org pill.
+    expect(sources).toEqual([
+      { kind: 'user', status: 'ok', count: 1 },
+      { kind: 'org', org: 'acme', status: 'ok', count: 3 },
+    ]);
+  });
+});
+
+describe('excludeArchived', () => {
+  test('drops archived repos', () => {
+    const repos: Repo[] = [
+      repoFixture('a/b'),
+      { ...repoFixture('a/c'), archived: true },
+      repoFixture('a/d'),
+    ];
+    expect(excludeArchived(repos).map((r) => r.fullName)).toEqual(['a/b', 'a/d']);
+  });
+
+  test('returns same list when nothing is archived', () => {
+    const repos: Repo[] = [repoFixture('a/b'), repoFixture('a/c')];
+    expect(excludeArchived(repos)).toHaveLength(2);
+  });
+});
+
+describe('groupReposByOwner', () => {
+  test('groups by owner login (the part before the slash)', () => {
+    const repos: Repo[] = [
+      repoFixture('acme/one'),
+      repoFixture('acme/two'),
+      repoFixture('me/personal'),
+      repoFixture('beta-org/x'),
+    ];
+    const groups = groupReposByOwner(repos);
+    expect(groups.map((g) => g.owner)).toEqual(['acme', 'me', 'beta-org']);
+    expect(groups.find((g) => g.owner === 'acme')!.repos).toHaveLength(2);
+  });
+
+  test('puts firstOwner at the head of the list', () => {
+    const repos: Repo[] = [
+      repoFixture('acme/one'),
+      repoFixture('me/personal'),
+      repoFixture('beta-org/x'),
+    ];
+    const groups = groupReposByOwner(repos, 'me');
+    expect(groups[0]!.owner).toBe('me');
+    expect(groups.slice(1).map((g) => g.owner).sort()).toEqual(['acme', 'beta-org']);
+  });
+
+  test('firstOwner with no matching repos is ignored', () => {
+    const repos: Repo[] = [repoFixture('acme/one')];
+    const groups = groupReposByOwner(repos, 'someone-else');
+    expect(groups.map((g) => g.owner)).toEqual(['acme']);
   });
 });
 

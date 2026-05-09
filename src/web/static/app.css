@@ -138,6 +138,52 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
 .queue-row .repo-meta { display: flex; align-items: center; gap: 8px; color: var(--ink-muted); }
 .queue-row .branch { color: var(--ink-subtle); }
 
+/* Repos page: toolbar */
+.repos-toolbar { align-items: center; flex-wrap: wrap; }
+.toolbar-checkbox { gap: 6px; user-select: none; }
+
+/* Repos page: groups */
+.repo-groups { display: flex; flex-direction: column; gap: 4px; }
+.repo-group { border-radius: 4px; }
+.repo-group-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  list-style: none;
+  border-radius: 4px;
+  user-select: none;
+}
+.repo-group-header::-webkit-details-marker { display: none; }
+.repo-group-header:hover { background: var(--surface-1); }
+.repo-group-marker {
+  display: inline-block;
+  color: var(--ink-subtle);
+  font-size: 11px;
+  width: 8px;
+  transition: transform 120ms ease;
+}
+.repo-group[open] > .repo-group-header > .repo-group-marker { transform: rotate(90deg); }
+.repo-group-owner { color: var(--ink); font-size: 13px; }
+.repo-group-count { color: var(--ink-subtle); font-size: 12px; font-weight: 400; }
+.repo-group-list { padding-left: 22px; padding-bottom: 4px; }
+
+/* Repos page: rows (denser than the generic queue-row) */
+.repo-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 4px 12px;
+  border-radius: 4px;
+  min-height: 26px;
+}
+.repo-row:hover { background: var(--surface-1); }
+.repo-row-name { color: var(--ink); font-size: 13px; }
+.repo-row-meta { display: flex; align-items: center; gap: 8px; }
+.repo-row-tag {
+  font-size: 11px; color: var(--ink-subtle); font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.4px;
+}
+.repo-row-tag-warn { color: #b8742d; }
+.repo-row-time { color: var(--ink-subtle); font-size: 12px; min-width: 60px; text-align: right; }
+
 /* Pills */
 .badge-pill {
   display: inline-flex; align-items: center; gap: 6px;
