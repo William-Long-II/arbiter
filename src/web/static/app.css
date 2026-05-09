@@ -76,13 +76,44 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
 .side-nav-item.active { background: var(--surface-1); color: var(--ink); }
 
 /* Page */
-.page { flex: 1; padding: 24px; max-width: 1200px; }
+.page { flex: 1; padding: 24px; max-width: 980px; }
 .page-header h1 {
   margin: 0 0 4px;
   font-size: 24px; font-weight: 600; letter-spacing: -0.4px;
 }
 .page-subhead { margin: 0 0 24px; color: var(--ink-muted); font-size: 14px; }
-.page-toolbar { margin-bottom: 16px; display: flex; gap: 8px; }
+.page-toolbar { margin-bottom: 16px; display: flex; gap: 8px; align-items: center; }
+
+/* Generic content card — used to frame lists and empty states so content
+   doesn't float on the dark canvas at wide viewports. */
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+/* List card: a card whose direct children are a header strip and a row list. */
+.list-card-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px 100px 64px;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--ink-subtle);
+  font-size: 11px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.6px;
+}
+
+/* Empty-state card — replaces the bare .empty-state for lists that should
+   look intentional (Scopes) rather than ghosted. */
+.empty-card {
+  padding: 32px 24px;
+  text-align: center;
+}
+.empty-card-title { margin: 0 0 4px; color: var(--ink); font-size: 16px; font-weight: 500; }
+.empty-card-body { margin: 0 0 20px; color: var(--ink-muted); font-size: 14px; }
 
 /* Buttons */
 .cta, .cta-primary {
@@ -139,22 +170,34 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
 .queue-row .branch { color: var(--ink-subtle); }
 
 /* Repos page: toolbar */
-.repos-toolbar { align-items: center; flex-wrap: wrap; }
+.repos-toolbar { flex-wrap: wrap; }
 .toolbar-checkbox { gap: 6px; user-select: none; }
+.toolbar-apply { position: relative; min-width: 64px; }
+.toolbar-apply-loading { display: none; }
+.repos-toolbar.is-loading .toolbar-apply { opacity: 0.7; cursor: progress; }
+.repos-toolbar.is-loading .toolbar-apply-label { display: none; }
+.repos-toolbar.is-loading .toolbar-apply-loading { display: inline; }
+.toolbar-refresh { color: var(--ink-subtle); font-size: 12px; }
+.toolbar-refresh:hover { color: var(--ink-muted); }
 
-/* Repos page: groups */
-.repo-groups { display: flex; flex-direction: column; gap: 4px; }
-.repo-group { border-radius: 4px; }
+/* Repos page: each owner becomes a card */
+.repo-groups { display: flex; flex-direction: column; gap: 8px; }
+.repo-group {
+  background: var(--surface-1);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
 .repo-group-header {
   display: flex; align-items: center; gap: 10px;
-  padding: 8px 12px;
+  padding: 12px 16px;
   cursor: pointer;
   list-style: none;
-  border-radius: 4px;
   user-select: none;
 }
 .repo-group-header::-webkit-details-marker { display: none; }
-.repo-group-header:hover { background: var(--surface-1); }
+.repo-group-header:hover { background: var(--surface-2); }
+.repo-group[open] > .repo-group-header { border-bottom: 1px solid var(--hairline); }
 .repo-group-marker {
   display: inline-block;
   color: var(--ink-subtle);
@@ -163,26 +206,33 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
   transition: transform 120ms ease;
 }
 .repo-group[open] > .repo-group-header > .repo-group-marker { transform: rotate(90deg); }
-.repo-group-owner { color: var(--ink); font-size: 13px; }
-.repo-group-count { color: var(--ink-subtle); font-size: 12px; font-weight: 400; }
-.repo-group-list { padding-left: 22px; padding-bottom: 4px; }
-
-/* Repos page: rows (denser than the generic queue-row) */
-.repo-row {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 4px 12px;
-  border-radius: 4px;
-  min-height: 26px;
+.repo-group-owner { color: var(--ink); font-size: 14px; font-weight: 500; }
+.repo-group-count {
+  color: var(--ink-subtle); font-size: 11px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.6px;
+  margin-left: 4px;
 }
-.repo-row:hover { background: var(--surface-1); }
-.repo-row-name { color: var(--ink); font-size: 13px; }
-.repo-row-meta { display: flex; align-items: center; gap: 8px; }
+.repo-group-list { padding: 4px 0; }
+
+/* Repos page: rows. Grid pulls metadata into fixed columns next to the
+   name so the eye doesn't have to track 1000px to find the timestamp. */
+.repo-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 80px;
+  gap: 16px; align-items: center;
+  padding: 6px 16px;
+  min-height: 28px;
+}
+.repo-row + .repo-row { border-top: 1px solid var(--surface-2); }
+.repo-row:hover { background: var(--surface-2); }
+.repo-row-name { color: var(--ink); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repo-row-tags { display: flex; gap: 8px; }
 .repo-row-tag {
   font-size: 11px; color: var(--ink-subtle); font-weight: 500;
   text-transform: uppercase; letter-spacing: 0.4px;
 }
 .repo-row-tag-warn { color: #b8742d; }
-.repo-row-time { color: var(--ink-subtle); font-size: 12px; min-width: 60px; text-align: right; }
+.repo-row-time { color: var(--ink-subtle); font-size: 12px; text-align: right; }
 
 /* Pills */
 .badge-pill {
@@ -236,10 +286,22 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
 .scrutiny-light { color: #5db8a6; }
 .scrutiny-strict { color: var(--primary); }
 
-/* Scope rows */
-.scope-list .scope-row { padding: 14px 16px; }
+/* Scope rows — laid out as grid columns matching .list-card-header */
+.scope-list { display: flex; flex-direction: column; }
+.scope-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px 100px 64px;
+  gap: 16px; align-items: center;
+  padding: 14px 16px;
+  font-size: 13px;
+}
+.scope-row + .scope-row { border-top: 1px solid var(--surface-2); }
+.scope-row:hover { background: var(--surface-2); }
 .scope-row-disabled { opacity: 0.55; }
-.scope-row-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.scope-row-target { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.scope-row-target-name { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scope-row-branch { color: var(--ink-subtle); }
+.scope-row-edit { padding: 4px 10px; height: auto; justify-self: end; }
 .scope-kind {
   font-family: "JetBrains Mono", ui-monospace, monospace;
   font-size: 11px;
@@ -249,9 +311,8 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
   background: var(--surface-2);
   padding: 1px 6px;
   border-radius: 4px;
+  flex-shrink: 0;
 }
-.scope-arrow { color: var(--ink-subtle); }
-.scope-row-meta { display: flex; align-items: center; gap: 8px; }
 
 /* Forms */
 .form { max-width: 640px; }

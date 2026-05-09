@@ -36,7 +36,12 @@ export const ReposPage: FC<Props> = ({
 
       <SourcesPanel sources={sources} githubClientId={githubClientId} />
 
-      <form class="page-toolbar repos-toolbar" method="get" action="/repos">
+      <form
+        class="page-toolbar repos-toolbar"
+        method="get"
+        action="/repos"
+        onsubmit="this.classList.add('is-loading')"
+      >
         <input
           class="text-input"
           name="q"
@@ -53,7 +58,13 @@ export const ReposPage: FC<Props> = ({
           />
           <span>Include archived</span>
         </label>
-        <button class="cta-secondary" type="submit">Apply</button>
+        <button class="cta-secondary toolbar-apply" type="submit">
+          <span class="toolbar-apply-label">Apply</span>
+          <span class="toolbar-apply-loading" aria-hidden="true">Loading…</span>
+        </button>
+        <a class="cta-tertiary toolbar-refresh" href="/repos?refresh=1" title="Refetch from GitHub (bypass 60s cache)">
+          ↻ Refresh
+        </a>
       </form>
 
       {repos.length === 0 ? (
@@ -103,13 +114,13 @@ const RepoRow: FC<{ repo: Repo }> = ({ repo }) => {
   return (
     <li class="repo-row">
       <span class="mono repo-row-name">{name}</span>
-      <span class="repo-row-meta">
+      <span class="repo-row-tags">
         {repo.private ? <span class="repo-row-tag">private</span> : null}
         {repo.archived ? <span class="repo-row-tag repo-row-tag-warn">archived</span> : null}
-        {repo.pushedAt ? (
-          <span class="repo-row-time">{formatRelative(repo.pushedAt)}</span>
-        ) : null}
       </span>
+      {repo.pushedAt ? (
+        <span class="repo-row-time">{formatRelative(repo.pushedAt)}</span>
+      ) : <span class="repo-row-time" />}
     </li>
   );
 };
