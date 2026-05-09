@@ -198,11 +198,23 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
 
 /* Sources panel */
 .sources-panel { margin-bottom: 16px; }
-.sources-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.sources-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .sources-hint {
   margin: 8px 0 0; color: var(--ink-subtle); font-size: 12px; line-height: 1.5;
 }
 .sources-hint-error { color: #c64545; }
+.sources-manage {
+  display: inline-flex; align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  color: var(--ink-subtle); font-size: 12px; font-weight: 500;
+  border: 1px solid var(--hairline);
+}
+.sources-manage:hover { color: var(--ink-muted); border-color: var(--hairline-strong); }
+
+/* Inline accent text link — used inside hints, prose, and form copy. */
+.text-link { color: var(--primary); }
+.text-link:hover { color: var(--primary-hover); }
 
 /* Empty state */
 .empty-state {

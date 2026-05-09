@@ -7,6 +7,7 @@ import { sql } from '../db.ts';
 import { currentUser, requireUser } from './auth.ts';
 import { excludeArchived, filterRepos, listAccessibleRepos } from '../github/repos.ts';
 import { ReposPage } from './views/repos.tsx';
+import { config } from '../config.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const staticRoot = join(here, 'static');
@@ -61,6 +62,7 @@ export function buildApp(): Hono {
         sources={sources}
         query={query}
         includeArchived={includeArchived}
+        githubClientId={config.github.clientId}
       />,
     );
   });

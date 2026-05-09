@@ -9,9 +9,18 @@ type Props = {
   sources: RepoSource[];
   query: string;
   includeArchived: boolean;
+  /** GitHub OAuth client ID — used to link to the user's app authorization page. */
+  githubClientId: string;
 };
 
-export const ReposPage: FC<Props> = ({ user, repos, sources, query, includeArchived }) => {
+export const ReposPage: FC<Props> = ({
+  user,
+  repos,
+  sources,
+  query,
+  includeArchived,
+  githubClientId,
+}) => {
   const groups = groupReposByOwner(repos, user.githubLogin);
   const isFiltering = query.trim().length > 0;
 
@@ -25,7 +34,7 @@ export const ReposPage: FC<Props> = ({ user, repos, sources, query, includeArchi
         </p>
       </header>
 
-      <SourcesPanel sources={sources} />
+      <SourcesPanel sources={sources} githubClientId={githubClientId} />
 
       <form class="page-toolbar repos-toolbar" method="get" action="/repos">
         <input
@@ -105,18 +114,43 @@ const RepoRow: FC<{ repo: Repo }> = ({ repo }) => {
   );
 };
 
-const SourcesPanel: FC<{ sources: RepoSource[] }> = ({ sources }) => {
+const SourcesPanel: FC<{ sources: RepoSource[]; githubClientId: string }> = ({
+  sources,
+  githubClientId,
+}) => {
   const emptyOrgs = sources.filter(
     (s): s is Extract<RepoSource, { kind: 'org' }> => s.kind === 'org' && s.status === 'empty',
   );
   const errorSources = sources.filter((s) => s.status === 'error');
+  // GitHub's per-app authorization page where the user manages org access.
+  const orgAccessUrl = githubClientId
+    ? `https://github.com/settings/connections/applications/${githubClientId}`
+    : null;
   return (
     <div class="sources-panel">
       <div class="sources-row">
         {sources.map((s) => (
           <SourcePill source={s} />
         ))}
+        {orgAccessUrl ? (
+          <a class="sources-manage" href={orgAccessUrl} target="_blank" rel="noopener noreferrer">
+            Manage org access ↗
+          </a>
+        ) : null}
       </div>
+      <p class="sources-hint">
+        Missing an org you're a member of? It probably hasn't approved the reviewme OAuth app
+        yet. {orgAccessUrl ? (
+          <>
+            Open <a class="text-link" href={orgAccessUrl} target="_blank" rel="noopener noreferrer">your app authorizations</a>{' '}
+            on GitHub and request or grant access for the org.
+          </>
+        ) : (
+          <>
+            Open your GitHub OAuth authorizations and request or grant access for the org.
+          </>
+        )}
+      </p>
       {emptyOrgs.length > 0 ? (
         <p class="sources-hint">
           {emptyOrgs.length === 1 ? 'Org' : 'Orgs'}{' '}
