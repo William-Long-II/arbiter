@@ -26,7 +26,12 @@ import {
   updateScope,
 } from '../db/scopes.ts';
 import { fetchPullRequest } from '../github/pulls.ts';
-import { runReview } from '../review/runner.ts';
+import {
+  DiffTooLargeError,
+  MAX_DIFF_BYTES,
+  ReviewTimeoutError,
+  runReview,
+} from '../review/runner.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const staticRoot = join(here, 'static');
@@ -212,6 +217,15 @@ export function buildApp(): Hono {
         review: { body: result.body, costUsd: result.costUsd ?? null },
       });
     } catch (err) {
+      if (err instanceof DiffTooLargeError) {
+        return c.json(
+          { error: err.message, diffBytes: err.bytes, limit: MAX_DIFF_BYTES },
+          413,
+        );
+      }
+      if (err instanceof ReviewTimeoutError) {
+        return c.json({ error: err.message }, 504);
+      }
       const message = err instanceof Error ? err.message : String(err);
       return c.json({ error: message }, 500);
     }
