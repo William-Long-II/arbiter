@@ -140,11 +140,23 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
 
 /* Pills */
 .badge-pill {
+  display: inline-flex; align-items: center; gap: 6px;
   background: var(--surface-2); color: var(--ink-muted);
   padding: 2px 8px;
   border-radius: var(--radius-pill);
   font-size: 12px; font-weight: 500;
 }
+.badge-pill-muted { color: var(--ink-subtle); }
+.badge-pill-error { color: #c64545; }
+.badge-count { color: var(--ink-subtle); font-weight: 400; }
+
+/* Sources panel */
+.sources-panel { margin-bottom: 16px; }
+.sources-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.sources-hint {
+  margin: 8px 0 0; color: var(--ink-subtle); font-size: 12px; line-height: 1.5;
+}
+.sources-hint-error { color: #c64545; }
 
 /* Empty state */
 .empty-state {

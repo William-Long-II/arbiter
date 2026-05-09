@@ -44,16 +44,16 @@ export function buildApp(): Hono {
 
   app.get('/api/repos', requireUser, async (c) => {
     const user = c.get('user');
-    const repos = await listAccessibleRepos(user.githubToken);
-    return c.json({ repos });
+    const result = await listAccessibleRepos(user.githubToken);
+    return c.json(result);
   });
 
   app.get('/repos', requireUser, async (c) => {
     const user = c.get('user');
     const query = c.req.query('q') ?? '';
-    const all = await listAccessibleRepos(user.githubToken);
+    const { repos: all, sources } = await listAccessibleRepos(user.githubToken);
     const repos = filterRepos(all, query);
-    return c.html(<ReposPage user={user} repos={repos} query={query} />);
+    return c.html(<ReposPage user={user} repos={repos} sources={sources} query={query} />);
   });
 
   mountGithubOAuth(app);
