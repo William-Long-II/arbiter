@@ -5,7 +5,7 @@ import { serveStatic } from 'hono/bun';
 import { mountGithubOAuth } from '../github/oauth.ts';
 import { sql } from '../db.ts';
 import { currentUser, requireUser } from './auth.ts';
-import { filterRepos, listAccessibleRepos } from '../github/repos.ts';
+import { excludeArchived, filterRepos, listAccessibleRepos } from '../github/repos.ts';
 import { ReposPage } from './views/repos.tsx';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -51,9 +51,18 @@ export function buildApp(): Hono {
   app.get('/repos', requireUser, async (c) => {
     const user = c.get('user');
     const query = c.req.query('q') ?? '';
+    const includeArchived = c.req.query('include_archived') === '1';
     const { repos: all, sources } = await listAccessibleRepos(user.githubToken);
-    const repos = filterRepos(all, query);
-    return c.html(<ReposPage user={user} repos={repos} sources={sources} query={query} />);
+    const filtered = filterRepos(includeArchived ? all : excludeArchived(all), query);
+    return c.html(
+      <ReposPage
+        user={user}
+        repos={filtered}
+        sources={sources}
+        query={query}
+        includeArchived={includeArchived}
+      />,
+    );
   });
 
   mountGithubOAuth(app);

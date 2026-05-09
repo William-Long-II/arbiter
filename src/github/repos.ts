@@ -59,42 +59,70 @@ type Octo = ReturnType<typeof octokitFor>;
  */
 export async function listAccessibleRepos(token: string): Promise<ListAccessibleReposResult> {
   const octokit = octokitFor(token);
-  const sources: RepoSource[] = [];
   const collected = new Map<string, Repo>();
 
-  try {
-    const userRepos = await listForAuthenticatedUser(octokit);
-    sources.push({ kind: 'user', status: 'ok', count: userRepos.length });
-    for (const r of userRepos) collected.set(r.fullName, r);
-  } catch (err) {
-    sources.push({ kind: 'user', status: 'error', count: 0, error: errorMessage(err) });
-  }
+  // Fetch user-endpoint and orgs in parallel.
+  const [userResult, orgsListResult] = await Promise.all([
+    safe(() => listForAuthenticatedUser(octokit)),
+    safe(() => listUserOrgs(octokit)),
+  ]);
 
-  let orgs: string[] = [];
-  try {
-    orgs = await listUserOrgs(octokit);
-  } catch {
-    // Some tokens can't list orgs; we still have whatever /user/repos returned.
-  }
+  // Fan out per-org in parallel. If listing orgs failed, this is just [].
+  const orgs = orgsListResult.ok ? orgsListResult.value : [];
+  const orgResults = await Promise.all(orgs.map((org) => listForOrgSafe(octokit, org)));
 
-  const orgResults = await Promise.all(
-    orgs.map((org) => listForOrgSafe(octokit, org)),
-  );
-
+  // Attribution priority: orgs first. A repo accessible via an org gets
+  // attributed to that org (not the user pill), even if /user/repos also
+  // returned it (which happens when the user is an org owner — GitHub
+  // surfaces the org's repos under affiliation=owner too).
+  const orgSources: RepoSource[] = [];
   for (const r of orgResults) {
-    sources.push({
+    let uniqueAdded = 0;
+    for (const repo of r.repos) {
+      if (!collected.has(repo.fullName)) {
+        collected.set(repo.fullName, repo);
+        uniqueAdded++;
+      }
+    }
+    orgSources.push({
       kind: 'org',
       org: r.org,
-      status: r.status,
-      count: r.repos.length,
+      status: r.repos.length === 0 && r.status !== 'error' ? 'empty' : r.status,
+      count: uniqueAdded,
       ...(r.error ? { error: r.error } : {}),
     });
-    for (const repo of r.repos) {
-      if (!collected.has(repo.fullName)) collected.set(repo.fullName, repo);
-    }
   }
 
-  return { repos: [...collected.values()], sources };
+  // Now the user pill counts only repos that DIDN'T come from any org.
+  let userSource: RepoSource;
+  if (!userResult.ok) {
+    userSource = {
+      kind: 'user',
+      status: 'error',
+      count: 0,
+      error: errorMessage(userResult.error),
+    };
+  } else {
+    let userUnique = 0;
+    for (const repo of userResult.value) {
+      if (!collected.has(repo.fullName)) {
+        collected.set(repo.fullName, repo);
+        userUnique++;
+      }
+    }
+    userSource = { kind: 'user', status: 'ok', count: userUnique };
+  }
+
+  return { repos: [...collected.values()], sources: [userSource, ...orgSources] };
+}
+
+type Result<T> = { ok: true; value: T } | { ok: false; error: unknown };
+async function safe<T>(fn: () => Promise<T>): Promise<Result<T>> {
+  try {
+    return { ok: true, value: await fn() };
+  } catch (error) {
+    return { ok: false, error };
+  }
 }
 
 async function listForAuthenticatedUser(octokit: Octo): Promise<Repo[]> {
@@ -105,7 +133,11 @@ async function listForAuthenticatedUser(octokit: Octo): Promise<Repo[]> {
       per_page: PER_PAGE,
       page,
       sort: 'pushed',
-      affiliation: 'owner,collaborator,organization_member',
+      // Intentionally omit `organization_member` — those repos come through
+      // the per-org fan-out (listForOrg) below and would double-count here.
+      // "your account" should mean "personal repos + repos you're a direct
+      // collaborator on," not "every repo your token can see."
+      affiliation: 'owner,collaborator',
     });
     if (res.data.length === 0) break;
     for (const r of res.data) all.push(projectRepo(r));
@@ -187,4 +219,39 @@ export function filterRepos(repos: Repo[], query: string): Repo[] {
   const q = query.trim().toLowerCase();
   if (!q) return repos;
   return repos.filter((r) => r.fullName.toLowerCase().includes(q));
+}
+
+export function excludeArchived(repos: Repo[]): Repo[] {
+  return repos.filter((r) => !r.archived);
+}
+
+/**
+ * Group repos by owner ("owner/name" → keyed by "owner"), preserving the
+ * order each owner first appeared. The optional `firstOwner` is moved to the
+ * front of the result regardless of where it first appeared (typically used
+ * to surface the signed-in user's own login first).
+ */
+export function groupReposByOwner(
+  repos: Repo[],
+  firstOwner?: string,
+): Array<{ owner: string; repos: Repo[] }> {
+  const buckets = new Map<string, Repo[]>();
+  for (const r of repos) {
+    const owner = r.fullName.split('/')[0] ?? '';
+    let bucket = buckets.get(owner);
+    if (!bucket) {
+      bucket = [];
+      buckets.set(owner, bucket);
+    }
+    bucket.push(r);
+  }
+  const groups: Array<{ owner: string; repos: Repo[] }> = [];
+  if (firstOwner && buckets.has(firstOwner)) {
+    groups.push({ owner: firstOwner, repos: buckets.get(firstOwner)! });
+    buckets.delete(firstOwner);
+  }
+  for (const [owner, items] of buckets) {
+    groups.push({ owner, repos: items });
+  }
+  return groups;
 }
