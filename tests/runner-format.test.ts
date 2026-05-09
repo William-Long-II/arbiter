@@ -30,6 +30,32 @@ describe('formatUserMessage', () => {
     });
     expect(msg).toContain(diff);
   });
+
+  test('chooses a fence longer than the longest backtick run inside the diff', () => {
+    // A diff that itself contains "``````" (6 ticks) should be wrapped in
+    // at least 7 ticks, so the closing fence still terminates the block.
+    const diff = 'before\n``````\nfaux fence inside\n``````\nafter';
+    const msg = formatUserMessage({
+      scrutiny: 'standard',
+      diff,
+      prTitle: 't',
+      prAuthor: 'a',
+      repoFull: 'r/r',
+    });
+    expect(msg).toContain('```````diff');  // 7 backticks + "diff"
+    expect(msg).toContain('\n```````');    // closing 7 backticks
+  });
+
+  test('uses 3-backtick fence when diff has no backticks', () => {
+    const msg = formatUserMessage({
+      scrutiny: 'standard',
+      diff: '+ ok\n- nope',
+      prTitle: 't',
+      prAuthor: 'a',
+      repoFull: 'r/r',
+    });
+    expect(msg).toContain('```diff');
+  });
 });
 
 describe('parseClaudeCliOutput', () => {

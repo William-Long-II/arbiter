@@ -19,8 +19,15 @@ export type ReviewOutput = {
 /**
  * Build the user message we send to Claude. Includes PR metadata and the
  * unified diff in a fenced block so Claude knows to read it as code.
+ *
+ * The diff fence uses a longer backtick run than anything that appears
+ * inside the diff so a literal "```" in the patch can't close the block
+ * early. CommonMark allows fences of >= 3 backticks; the closing fence
+ * must match the opening length, so we choose `openingTicks` to be one
+ * longer than the longest run already in the diff.
  */
 export function formatUserMessage(input: ReviewInput): string {
+  const fence = pickFence(input.diff);
   return [
     `Please review the following pull request.`,
     ``,
@@ -30,10 +37,20 @@ export function formatUserMessage(input: ReviewInput): string {
     `Scrutiny tier: ${input.scrutiny}`,
     ``,
     `Unified diff:`,
-    '```diff',
+    `${fence}diff`,
     input.diff,
-    '```',
+    fence,
   ].join('\n');
+}
+
+function pickFence(content: string): string {
+  let longest = 0;
+  const re = /`+/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) {
+    if (m[0].length > longest) longest = m[0].length;
+  }
+  return '`'.repeat(Math.max(3, longest + 1));
 }
 
 /**
