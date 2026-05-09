@@ -1,21 +1,24 @@
 import type { FC } from 'hono/jsx';
 import type { User } from '../../db/users.ts';
-import type { Repo } from '../../github/repos.ts';
+import type { Repo, RepoSource } from '../../github/repos.ts';
 import { Layout } from './layout.tsx';
 
 type Props = {
   user: User;
   repos: Repo[];
+  sources: RepoSource[];
   query: string;
 };
 
-export const ReposPage: FC<Props> = ({ user, repos, query }) => {
+export const ReposPage: FC<Props> = ({ user, repos, sources, query }) => {
   return (
     <Layout title="Repos" user={user} active="repos">
       <header class="page-header">
         <h1>Repos</h1>
         <p class="page-subhead">Repositories you can access via your GitHub account.</p>
       </header>
+
+      <SourcesPanel sources={sources} />
 
       <form class="page-toolbar" method="get" action="/repos">
         <input
@@ -41,6 +44,58 @@ export const ReposPage: FC<Props> = ({ user, repos, query }) => {
         </ul>
       )}
     </Layout>
+  );
+};
+
+const SourcesPanel: FC<{ sources: RepoSource[] }> = ({ sources }) => {
+  const emptyOrgs = sources.filter(
+    (s): s is Extract<RepoSource, { kind: 'org' }> => s.kind === 'org' && s.status === 'empty',
+  );
+  const errorSources = sources.filter((s) => s.status === 'error');
+  return (
+    <div class="sources-panel">
+      <div class="sources-row">
+        {sources.map((s) => (
+          <SourcePill source={s} />
+        ))}
+      </div>
+      {emptyOrgs.length > 0 ? (
+        <p class="sources-hint">
+          {emptyOrgs.length === 1 ? 'Org' : 'Orgs'}{' '}
+          {emptyOrgs.map((s, i) => (
+            <>
+              {i > 0 ? ', ' : ''}
+              <code class="mono-sm">{s.org}</code>
+            </>
+          ))}{' '}
+          returned no repos. If you expected repos there, the reviewme OAuth app
+          likely needs approval at{' '}
+          <code class="mono-sm">github.com/orgs/{'{org}'}/policies/applications</code>.
+        </p>
+      ) : null}
+      {errorSources.length > 0 ? (
+        <p class="sources-hint sources-hint-error">
+          {errorSources.length} source{errorSources.length === 1 ? '' : 's'} failed —
+          see <code class="mono-sm">/api/repos</code> for details.
+        </p>
+      ) : null}
+    </div>
+  );
+};
+
+const SourcePill: FC<{ source: RepoSource }> = ({ source }) => {
+  const label = source.kind === 'user' ? 'your account' : source.org;
+  const cls =
+    source.status === 'error'
+      ? 'badge-pill badge-pill-error'
+      : source.status === 'empty'
+        ? 'badge-pill badge-pill-muted'
+        : 'badge-pill';
+  return (
+    <span class={cls}>
+      <span class="mono-sm">{label}</span>
+      <span class="badge-count">{source.count}</span>
+    </span>
   );
 };
 
