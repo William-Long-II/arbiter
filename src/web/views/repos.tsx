@@ -119,9 +119,21 @@ const RepoGroup: FC<{
         landed at a different x — the eye couldn't scan a column.
       */}
       <table class="repo-table">
+        {/*
+          Explicit column widths via <colgroup> + table-layout: fixed
+          so columns align ACROSS tables, not just within. min-width on
+          cells wasn't enough — auto-layout distributes leftover row
+          width differently per table even with matching min-widths.
+        */}
+        <colgroup>
+          <col style={`width:${maxNameChars + 1}ch`} />
+          <col style="width:140px" />
+          <col style="width:80px" />
+          <col />
+        </colgroup>
         <tbody>
           {repos.map((r) => (
-            <RepoRow repo={r} maxNameChars={maxNameChars} />
+            <RepoRow repo={r} />
           ))}
         </tbody>
       </table>
@@ -129,11 +141,11 @@ const RepoGroup: FC<{
   );
 };
 
-const RepoRow: FC<{ repo: Repo; maxNameChars: number }> = ({ repo, maxNameChars }) => {
+const RepoRow: FC<{ repo: Repo }> = ({ repo }) => {
   const name = repoDisplayName(repo);
   return (
     <tr class="repo-row">
-      <td class="mono repo-row-name" style={`min-width:${maxNameChars}ch`}>{name}</td>
+      <td class="mono repo-row-name">{name}</td>
       <td class="repo-row-tags">
         {repo.private ? <span class="repo-row-tag">private</span> : null}
         {repo.archived ? <span class="repo-row-tag repo-row-tag-warn">archived</span> : null}
