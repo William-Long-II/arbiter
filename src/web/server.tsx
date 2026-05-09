@@ -1,6 +1,6 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Hono } from 'hono';
+import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { serveStatic } from 'hono/bun';
 import { mountGithubOAuth } from '../github/oauth.ts';
 import { sql } from '../db.ts';
@@ -8,12 +8,31 @@ import { currentUser, requireUser } from './auth.ts';
 import { excludeArchived, filterRepos, listAccessibleRepos } from '../github/repos.ts';
 import { ReposPage } from './views/repos.tsx';
 import { config } from '../config.ts';
+import { ScopesListPage } from './views/scopes-list.tsx';
+import { ScopeFormPage } from './views/scope-form.tsx';
+import {
+  createScope,
+  deleteScope,
+  getScope,
+  isClaudeMode,
+  isScrutiny,
+  isTargetKind,
+  listScopes,
+  parseScopeForm,
+  updateScope,
+} from '../db/scopes.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const staticRoot = join(here, 'static');
 
 export function buildApp(): Hono {
   const app = new Hono();
+
+  // CSRF guard: any state-changing request must come from our own origin.
+  // SameSite=Lax cookies stop most cross-origin POSTs, but Lax permits
+  // top-level form-driven POSTs from other sites. Origin/Referer matching
+  // closes that gap. GETs are skipped (idempotent by convention).
+  app.use('*', requireSameOrigin);
 
   app.get('/healthz', async (c) => {
     try {
@@ -67,9 +86,131 @@ export function buildApp(): Hono {
     );
   });
 
+  app.get('/scopes', requireUser, async (c) => {
+    const user = c.get('user');
+    const scopes = await listScopes(user.id);
+    return c.html(<ScopesListPage user={user} scopes={scopes} />);
+  });
+
+  app.get('/scopes/new', requireUser, (c) => {
+    const user = c.get('user');
+    return c.html(<ScopeFormPage user={user} scope={null} />);
+  });
+
+  app.post('/scopes', requireUser, async (c) => {
+    const user = c.get('user');
+    const form = await readFormStrings(c);
+    const parsed = parseScopeForm(form);
+    if (!parsed.ok) {
+      return c.html(
+        <ScopeFormPage user={user} scope={null} values={partialFromForm(form)} errors={parsed.errors} />,
+        400,
+      );
+    }
+    await createScope(user.id, parsed.input);
+    return c.redirect('/scopes');
+  });
+
+  app.get('/scopes/:id', requireUser, async (c) => {
+    const user = c.get('user');
+    const id = parseInt(c.req.param('id'), 10);
+    if (Number.isNaN(id)) return c.notFound();
+    const scope = await getScope(user.id, id);
+    if (!scope) return c.notFound();
+    return c.html(<ScopeFormPage user={user} scope={scope} />);
+  });
+
+  app.post('/scopes/:id', requireUser, async (c) => {
+    const user = c.get('user');
+    const id = parseInt(c.req.param('id'), 10);
+    if (Number.isNaN(id)) return c.notFound();
+    const existing = await getScope(user.id, id);
+    if (!existing) return c.notFound();
+
+    const form = await readFormStrings(c);
+    const parsed = parseScopeForm(form);
+    if (!parsed.ok) {
+      return c.html(
+        <ScopeFormPage user={user} scope={existing} values={partialFromForm(form)} errors={parsed.errors} />,
+        400,
+      );
+    }
+    await updateScope(user.id, id, parsed.input);
+    return c.redirect('/scopes');
+  });
+
+  app.post('/scopes/:id/delete', requireUser, async (c) => {
+    const user = c.get('user');
+    const id = parseInt(c.req.param('id'), 10);
+    if (Number.isNaN(id)) return c.notFound();
+    await deleteScope(user.id, id);
+    return c.redirect('/scopes');
+  });
+
   mountGithubOAuth(app);
 
   return app;
+}
+
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+const requireSameOrigin: MiddlewareHandler = async (c, next) => {
+  if (SAFE_METHODS.has(c.req.method.toUpperCase())) return next();
+  const expected = safeOrigin(config.publicUrl);
+  const origin = c.req.header('origin');
+  const referer = c.req.header('referer');
+  if (origin) {
+    if (origin === expected) return next();
+    return c.text('Cross-origin request rejected (origin mismatch)', 403);
+  }
+  if (referer) {
+    const refOrigin = safeOrigin(referer);
+    if (refOrigin && refOrigin === expected) return next();
+    return c.text('Cross-origin request rejected (referer mismatch)', 403);
+  }
+  return c.text('Cross-origin request rejected (missing Origin/Referer)', 403);
+};
+
+function safeOrigin(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read form data, dropping any non-string entries (e.g. uploaded Files).
+ * Form parsers downstream call `.trim()` etc. and would crash on non-strings.
+ */
+async function readFormStrings(c: Context): Promise<Record<string, string>> {
+  const data = await c.req.formData();
+  const out: Record<string, string> = {};
+  for (const [k, v] of data.entries()) {
+    if (typeof v === 'string') out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * Project a raw form submission into a Partial<ScopeInput> for re-rendering
+ * the form after a validation failure (so the user doesn't lose what they
+ * typed). All enum-typed fields are validated here so we don't pass invalid
+ * values through with a type assertion.
+ */
+function partialFromForm(form: Record<string, string>): Parameters<typeof ScopeFormPage>[0]['values'] {
+  return {
+    targetKind: isTargetKind(form.target_kind) ? form.target_kind : 'repo',
+    target: form.target ?? '',
+    baseBranchPattern: form.base_branch_pattern ?? '*',
+    scrutiny: isScrutiny(form.scrutiny) ? form.scrutiny : 'standard',
+    excludeAuthors: (form.exclude_authors ?? '')
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean),
+    claudeMode: isClaudeMode(form.claude_mode) ? form.claude_mode : 'default',
+    enabled: form.enabled === 'on' || form.enabled === 'true',
+  };
 }
 
 function relativeTo(target: string, from: string): string {
