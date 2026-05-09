@@ -120,7 +120,7 @@ const RepoRow: FC<{ repo: Repo }> = ({ repo }) => {
       </span>
       {repo.pushedAt ? (
         <span class="repo-row-time">{formatRelative(repo.pushedAt)}</span>
-      ) : <span class="repo-row-time" />}
+      ) : null}
     </li>
   );
 };

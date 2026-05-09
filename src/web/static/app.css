@@ -76,7 +76,7 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
 .side-nav-item.active { background: var(--surface-1); color: var(--ink); }
 
 /* Page */
-.page { flex: 1; padding: 24px; max-width: 980px; }
+.page { flex: 1; padding: 24px; max-width: 760px; }
 .page-header h1 {
   margin: 0 0 4px;
   font-size: 24px; font-weight: 600; letter-spacing: -0.4px;
@@ -214,25 +214,34 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
 }
 .repo-group-list { padding: 4px 0; }
 
-/* Repos page: rows. Grid pulls metadata into fixed columns next to the
-   name so the eye doesn't have to track 1000px to find the timestamp. */
+/* Repos page: rows. Pack name → tags → time left-to-right with a normal
+   gap so the eye reads them as one cluster. The right side of the card is
+   intentionally empty. (The previous grid `1fr` for the name column ate
+   all available space and shoved metadata to the far edge, defeating the
+   point of the redesign.) */
 .repo-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 80px;
-  gap: 16px; align-items: center;
+  display: flex;
+  align-items: center;
+  gap: 16px;
   padding: 6px 16px;
   min-height: 28px;
 }
 .repo-row + .repo-row { border-top: 1px solid var(--surface-2); }
 .repo-row:hover { background: var(--surface-2); }
-.repo-row-name { color: var(--ink); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.repo-row-tags { display: flex; gap: 8px; }
+.repo-row-name {
+  color: var(--ink); font-size: 13px;
+  /* Allow the name to shrink if it's pathologically long, and ellipsis. */
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* But don't grow to fill the row — that's what was pushing meta away. */
+  flex: 0 1 auto;
+}
+.repo-row-tags { display: flex; gap: 8px; flex-shrink: 0; }
 .repo-row-tag {
   font-size: 11px; color: var(--ink-subtle); font-weight: 500;
   text-transform: uppercase; letter-spacing: 0.4px;
 }
 .repo-row-tag-warn { color: #b8742d; }
-.repo-row-time { color: var(--ink-subtle); font-size: 12px; text-align: right; }
+.repo-row-time { color: var(--ink-subtle); font-size: 12px; flex-shrink: 0; }
 
 /* Pills */
 .badge-pill {
