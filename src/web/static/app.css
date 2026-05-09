@@ -233,13 +233,23 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
 .repo-row:hover td { background: var(--surface-2); }
 .repo-row-name { color: var(--ink); white-space: nowrap; }
 .repo-row-tags { white-space: nowrap; }
+/* Subtle pill background lifts the chip off the row text so it scans as a
+   badge, not just colored prose. */
 .repo-row-tag {
-  font-size: 11px; color: var(--ink-subtle); font-weight: 500;
+  display: inline-block;
+  background: var(--surface-2);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px; color: var(--ink-subtle); font-weight: 500;
   text-transform: uppercase; letter-spacing: 0.4px;
-  margin-right: 8px;
+  margin-right: 6px;
+  vertical-align: middle;
 }
 .repo-row-tag:last-child { margin-right: 0; }
-.repo-row-tag-warn { color: #b8742d; }
+.repo-row-tag-warn {
+  background: rgba(184, 116, 45, 0.18);
+  color: #d09a55;
+}
 .repo-row-time { color: var(--ink-subtle); font-size: 12px; white-space: nowrap; }
 /* Filler column absorbs unused row width so the data cells pack left
    while hover and dividers still span the full card width. */
