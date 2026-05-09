@@ -23,6 +23,13 @@ export const ReposPage: FC<Props> = ({
 }) => {
   const groups = groupReposByOwner(repos, user.githubLogin);
   const isFiltering = query.trim().length > 0;
+  // Compute the widest repo-name string (in mono characters) across ALL
+  // groups. Each group's <table> applies this as a min-width on its name
+  // column so the columns align page-wide, not just within a group.
+  const maxNameChars = Math.max(
+    ...repos.map((r) => repoDisplayName(r).length),
+    1,
+  );
 
   return (
     <Layout title="Repos" user={user} active="repos">
@@ -80,6 +87,7 @@ export const ReposPage: FC<Props> = ({
               owner={g.owner}
               repos={g.repos}
               defaultOpen={g.owner === user.githubLogin || isFiltering || groups.length === 1}
+              maxNameChars={maxNameChars}
             />
           ))}
         </div>
@@ -88,11 +96,16 @@ export const ReposPage: FC<Props> = ({
   );
 };
 
-const RepoGroup: FC<{ owner: string; repos: Repo[]; defaultOpen: boolean }> = ({
-  owner,
-  repos,
-  defaultOpen,
-}) => {
+function repoDisplayName(r: Repo): string {
+  return r.fullName.split('/').slice(1).join('/');
+}
+
+const RepoGroup: FC<{
+  owner: string;
+  repos: Repo[];
+  defaultOpen: boolean;
+  maxNameChars: number;
+}> = ({ owner, repos, defaultOpen, maxNameChars }) => {
   return (
     <details class="repo-group" open={defaultOpen}>
       <summary class="repo-group-header">
@@ -108,7 +121,7 @@ const RepoGroup: FC<{ owner: string; repos: Repo[]; defaultOpen: boolean }> = ({
       <table class="repo-table">
         <tbody>
           {repos.map((r) => (
-            <RepoRow repo={r} />
+            <RepoRow repo={r} maxNameChars={maxNameChars} />
           ))}
         </tbody>
       </table>
@@ -116,11 +129,11 @@ const RepoGroup: FC<{ owner: string; repos: Repo[]; defaultOpen: boolean }> = ({
   );
 };
 
-const RepoRow: FC<{ repo: Repo }> = ({ repo }) => {
-  const name = repo.fullName.split('/').slice(1).join('/');
+const RepoRow: FC<{ repo: Repo; maxNameChars: number }> = ({ repo, maxNameChars }) => {
+  const name = repoDisplayName(repo);
   return (
     <tr class="repo-row">
-      <td class="mono repo-row-name">{name}</td>
+      <td class="mono repo-row-name" style={`min-width:${maxNameChars}ch`}>{name}</td>
       <td class="repo-row-tags">
         {repo.private ? <span class="repo-row-tag">private</span> : null}
         {repo.archived ? <span class="repo-row-tag repo-row-tag-warn">archived</span> : null}
@@ -202,9 +215,11 @@ const SourcePill: FC<{ source: RepoSource }> = ({ source }) => {
       : source.status === 'empty'
         ? 'badge-pill badge-pill-muted'
         : 'badge-pill';
+  // Org names are identifiers (mono); "your account" is prose (sans).
+  const labelClass = source.kind === 'org' ? 'mono-sm' : '';
   return (
     <span class={cls}>
-      <span class="mono-sm">{label}</span>
+      <span class={labelClass}>{label}</span>
       <span class="badge-count">{source.count}</span>
     </span>
   );
