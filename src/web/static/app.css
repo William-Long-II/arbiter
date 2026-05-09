@@ -224,3 +224,68 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
   font-size: 14px;
 }
 .empty-state code { color: var(--ink-muted); }
+.text-link { color: var(--primary); }
+.text-link:hover { color: var(--primary-hover); }
+
+/* Page header with right-aligned action */
+.page-header-with-action {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 24px;
+}
+
+/* Scope-specific pill colors */
+.scrutiny-light { color: #5db8a6; }
+.scrutiny-strict { color: var(--primary); }
+
+/* Scope rows */
+.scope-list .scope-row { padding: 14px 16px; }
+.scope-row-disabled { opacity: 0.55; }
+.scope-row-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.scope-kind {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--ink-subtle);
+  background: var(--surface-2);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.scope-arrow { color: var(--ink-subtle); }
+.scope-row-meta { display: flex; align-items: center; gap: 8px; }
+
+/* Forms */
+.form { max-width: 640px; }
+.form-row {
+  border: none; padding: 0; margin: 0 0 24px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.form-row legend {
+  margin: 0 0 4px; padding: 0;
+  color: var(--ink); font-size: 13px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.6px;
+}
+.form-input-wide { width: 100%; max-width: 480px; }
+.form-textarea { width: 100%; max-width: 480px; min-height: 80px; line-height: 1.4; resize: vertical; }
+.form-hint { margin: 0; color: var(--ink-subtle); font-size: 12px; }
+.form-actions { display: flex; align-items: center; gap: 12px; margin-top: 24px; }
+
+.radio, .checkbox {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 13px; color: var(--ink-muted); cursor: pointer;
+}
+.radio input, .checkbox input { accent-color: var(--primary); }
+.scrutiny-radio-light { color: #5db8a6; }
+.scrutiny-radio-strict { color: var(--primary); }
+
+.cta-tertiary-danger { color: #c64545; }
+.cta-tertiary-danger:hover { color: #d96565; }
+
+.form-errors {
+  background: var(--surface-1);
+  border-left: 2px solid #c64545;
+  padding: 12px 16px;
+  border-radius: 4px;
+  margin-bottom: 16px;
+}
+.form-errors strong { color: #c64545; }
+.form-errors ul { margin: 4px 0 0 16px; padding: 0; color: var(--ink-muted); font-size: 13px; }
