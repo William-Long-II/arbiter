@@ -215,6 +215,34 @@ function errorMessage(err: unknown): string {
   return String(err);
 }
 
+// In-memory per-user cache for the assembled repo list. The /repos page
+// fans out 1 + N GitHub API calls; at 400+ repos across multiple orgs that's
+// 6-9 round trips and several seconds. Cache for 60s so navigating away and
+// back, or toggling the "Include archived" filter, is instant.
+//
+// Pass refresh=true to bypass and refetch (for an explicit user refresh).
+const repoCache = new Map<number, { data: ListAccessibleReposResult; expiresAt: number }>();
+const REPO_CACHE_TTL_MS = 60_000;
+
+export async function listAccessibleReposCached(
+  userId: number,
+  token: string,
+  opts: { refresh?: boolean } = {},
+): Promise<ListAccessibleReposResult> {
+  const now = Date.now();
+  if (!opts.refresh) {
+    const cached = repoCache.get(userId);
+    if (cached && cached.expiresAt > now) return cached.data;
+  }
+  const data = await listAccessibleRepos(token);
+  repoCache.set(userId, { data, expiresAt: now + REPO_CACHE_TTL_MS });
+  return data;
+}
+
+export function invalidateRepoCache(userId: number): void {
+  repoCache.delete(userId);
+}
+
 export function filterRepos(repos: Repo[], query: string): Repo[] {
   const q = query.trim().toLowerCase();
   if (!q) return repos;

@@ -5,7 +5,11 @@ import { serveStatic } from 'hono/bun';
 import { mountGithubOAuth } from '../github/oauth.ts';
 import { sql } from '../db.ts';
 import { currentUser, requireUser } from './auth.ts';
-import { excludeArchived, filterRepos, listAccessibleRepos } from '../github/repos.ts';
+import {
+  excludeArchived,
+  filterRepos,
+  listAccessibleReposCached,
+} from '../github/repos.ts';
 import { ReposPage } from './views/repos.tsx';
 import { config } from '../config.ts';
 import { ScopesListPage } from './views/scopes-list.tsx';
@@ -51,8 +55,11 @@ export function buildApp(): Hono {
   });
 
   app.get('/me', async (c) => {
+    // Returns 200 + {user: null} when signed out — /me is a "describe my
+    // session" endpoint, not an auth-required one. 401 with a JSON body
+    // that looks like a successful response is the worst of both worlds.
     const user = await currentUser(c);
-    if (!user) return c.json({ user: null }, 401);
+    if (!user) return c.json({ user: null });
     return c.json({
       user: {
         id: user.id,
@@ -64,7 +71,8 @@ export function buildApp(): Hono {
 
   app.get('/api/repos', requireUser, async (c) => {
     const user = c.get('user');
-    const result = await listAccessibleRepos(user.githubToken);
+    const refresh = c.req.query('refresh') === '1';
+    const result = await listAccessibleReposCached(user.id, user.githubToken, { refresh });
     return c.json(result);
   });
 
@@ -72,7 +80,12 @@ export function buildApp(): Hono {
     const user = c.get('user');
     const query = c.req.query('q') ?? '';
     const includeArchived = c.req.query('include_archived') === '1';
-    const { repos: all, sources } = await listAccessibleRepos(user.githubToken);
+    const refresh = c.req.query('refresh') === '1';
+    const { repos: all, sources } = await listAccessibleReposCached(
+      user.id,
+      user.githubToken,
+      { refresh },
+    );
     const filtered = filterRepos(includeArchived ? all : excludeArchived(all), query);
     return c.html(
       <ReposPage
