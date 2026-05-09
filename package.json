@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.95.1",
     "@octokit/rest": "^21.1.1",
     "hono": "^4.7.0",
     "postgres": "^3.4.5"

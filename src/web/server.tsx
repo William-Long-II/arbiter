@@ -25,6 +25,8 @@ import {
   parseScopeForm,
   updateScope,
 } from '../db/scopes.ts';
+import { fetchPullRequest } from '../github/pulls.ts';
+import { runReview } from '../review/runner.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const staticRoot = join(here, 'static');
@@ -158,6 +160,61 @@ export function buildApp(): Hono {
     if (Number.isNaN(id)) return c.notFound();
     await deleteScope(user.id, id);
     return c.redirect('/scopes');
+  });
+
+  // Debug endpoint: run a review on a real PR using the user's GitHub token.
+  // Returns the review body as JSON. Does NOT post to the PR — this is a
+  // dry-run for verifying the runner pipeline before the worker is wired up.
+  //
+  //   curl -X POST -H 'origin: http://localhost:8787' \
+  //     -H 'cookie: rm_session=...' \
+  //     -H 'content-type: application/json' \
+  //     -d '{"repoFull":"owner/name","prNumber":123,"scrutiny":"standard"}' \
+  //     http://localhost:8787/api/debug/run-review
+  app.post('/api/debug/run-review', requireUser, async (c) => {
+    const user = c.get('user');
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: 'Body must be JSON' }, 400);
+    }
+    if (typeof body !== 'object' || body === null) {
+      return c.json({ error: 'Body must be a JSON object' }, 400);
+    }
+    const b = body as Record<string, unknown>;
+    const repoFull = typeof b.repoFull === 'string' ? b.repoFull : null;
+    const prNumber = typeof b.prNumber === 'number' ? b.prNumber : null;
+    if (!repoFull || !prNumber) {
+      return c.json({ error: 'repoFull (string) and prNumber (number) required' }, 400);
+    }
+    const scrutiny = isScrutiny(b.scrutiny) ? b.scrutiny : 'standard';
+    const requestedMode =
+      b.mode === 'subscription' || b.mode === 'api' ? b.mode : config.claude.defaultMode;
+
+    try {
+      const { pr, diff } = await fetchPullRequest(user.githubToken, repoFull, prNumber);
+      const result = await runReview(
+        {
+          scrutiny,
+          diff,
+          prTitle: pr.title,
+          prAuthor: pr.author,
+          repoFull: pr.repoFull,
+        },
+        requestedMode,
+      );
+      return c.json({
+        pr,
+        scrutiny,
+        mode: requestedMode,
+        diffBytes: diff.length,
+        review: { body: result.body, costUsd: result.costUsd ?? null },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 500);
+    }
   });
 
   mountGithubOAuth(app);
