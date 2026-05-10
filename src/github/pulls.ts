@@ -1,5 +1,32 @@
 import { octokitFor } from './api.ts';
 
+export type ReviewEvent = 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES';
+
+/**
+ * Post a PR review with a body. Defaults to COMMENT — neither approving
+ * nor requesting changes. Posting as the OAuth'd user (their token), so
+ * the review will be authored by them on the PR thread.
+ */
+export async function postPullRequestReview(
+  token: string,
+  repoFull: string,
+  pullNumber: number,
+  body: string,
+  event: ReviewEvent = 'COMMENT',
+): Promise<{ id: number; htmlUrl: string }> {
+  const [owner, repo] = repoFull.split('/');
+  if (!owner || !repo) throw new Error(`Invalid repoFull: ${repoFull}`);
+  const octokit = octokitFor(token);
+  const res = await octokit.rest.pulls.createReview({
+    owner,
+    repo,
+    pull_number: pullNumber,
+    body,
+    event,
+  });
+  return { id: res.data.id, htmlUrl: res.data.html_url };
+}
+
 export type PRDetails = {
   repoFull: string;
   number: number;

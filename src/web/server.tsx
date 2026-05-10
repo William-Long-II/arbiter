@@ -32,6 +32,9 @@ import {
   ReviewTimeoutError,
   runReview,
 } from '../review/runner.ts';
+import { enqueueReview, getReview, listReviews } from '../db/reviews.ts';
+import { QueuePage } from './views/queue-list.tsx';
+import { QueueDetailPage } from './views/queue-detail.tsx';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const staticRoot = join(here, 'static');
@@ -165,6 +168,77 @@ export function buildApp(): Hono {
     if (Number.isNaN(id)) return c.notFound();
     await deleteScope(user.id, id);
     return c.redirect('/scopes');
+  });
+
+  app.get('/queue', requireUser, async (c) => {
+    const user = c.get('user');
+    const reviews = await listReviews(user.id, 100);
+    return c.html(<QueuePage user={user} reviews={reviews} />);
+  });
+
+  app.get('/queue/:id', requireUser, async (c) => {
+    const user = c.get('user');
+    const id = parseInt(c.req.param('id'), 10);
+    if (Number.isNaN(id)) return c.notFound();
+    const review = await getReview(user.id, id);
+    if (!review) return c.notFound();
+    return c.html(<QueueDetailPage user={user} review={review} />);
+  });
+
+  // Enqueue a review against a real PR. The worker picks it up on its
+  // next tick, runs it, and posts the result back to the PR.
+  //
+  //   curl -X POST http://localhost:8787/api/debug/enqueue-review \
+  //     -H 'origin: http://localhost:8787' \
+  //     -H 'cookie: rm_session=...' \
+  //     -H 'content-type: application/json' \
+  //     -d '{"repoFull":"owner/name","prNumber":123,"scrutiny":"standard"}'
+  app.post('/api/debug/enqueue-review', requireUser, async (c) => {
+    const user = c.get('user');
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: 'Body must be JSON' }, 400);
+    }
+    if (typeof body !== 'object' || body === null) {
+      return c.json({ error: 'Body must be a JSON object' }, 400);
+    }
+    const b = body as Record<string, unknown>;
+    const repoFull = typeof b.repoFull === 'string' ? b.repoFull : null;
+    const prNumber = typeof b.prNumber === 'number' ? b.prNumber : null;
+    if (!repoFull || !prNumber) {
+      return c.json({ error: 'repoFull (string) and prNumber (number) required' }, 400);
+    }
+    const scrutiny = isScrutiny(b.scrutiny) ? b.scrutiny : 'standard';
+    const requestedMode =
+      b.mode === 'subscription' || b.mode === 'api' ? b.mode : config.claude.defaultMode;
+
+    try {
+      const { pr } = await fetchPullRequest(user.githubToken, repoFull, prNumber);
+      const row = await enqueueReview({
+        userId: user.id,
+        repoFull: pr.repoFull,
+        prNumber: pr.number,
+        prTitle: pr.title,
+        prAuthor: pr.author,
+        baseBranch: pr.baseBranch,
+        headBranch: pr.headBranch,
+        headSha: pr.headSha,
+        scrutiny,
+        claudeMode: requestedMode,
+      });
+      if (!row) {
+        return c.json(
+          { ok: true, alreadyQueued: true, message: 'A review for this PR + head SHA was already enqueued.' },
+          200,
+        );
+      }
+      return c.json({ ok: true, reviewId: row.id, status: row.status, queueUrl: `/queue/${row.id}` }, 202);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: message }, 500);
+    }
   });
 
   // Debug endpoint: run a review on a real PR using the user's GitHub token.
