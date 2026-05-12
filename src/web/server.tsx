@@ -348,6 +348,11 @@ export function buildApp(): Hono {
     return c.html(<SettingsPage user={user} config={snapshot} dbConnected={dbConnected} />);
   });
 
+  // Easter egg: the Arbiter unit's iconic Starcraft ability is Recall —
+  // instant teleport. /recall shortcut to the queue is a tiny nod for
+  // anyone who notices the brand reference.
+  app.get('/recall', (c) => c.redirect('/queue'));
+
   app.get('/queue', requireUser, async (c) => {
     const user = c.get('user');
     const statusParam = c.req.query('status');
