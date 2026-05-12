@@ -12,6 +12,19 @@
 ALTER TABLE scopes
   ADD COLUMN IF NOT EXISTS trigger_mode TEXT NOT NULL DEFAULT 'open';
 
-ALTER TABLE scopes
-  ADD CONSTRAINT scopes_trigger_mode_check
-  CHECK (trigger_mode IN ('open', 'review_requested'));
+-- Postgres has no `ADD CONSTRAINT IF NOT EXISTS`, so guard it manually.
+-- Without this, replaying the migration on a DB that already has the
+-- constraint (e.g. picked up under a previous filename before this one
+-- was renamed) crashes with 42710.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'scopes_trigger_mode_check'
+      AND conrelid = 'scopes'::regclass
+  ) THEN
+    ALTER TABLE scopes
+      ADD CONSTRAINT scopes_trigger_mode_check
+      CHECK (trigger_mode IN ('open', 'review_requested'));
+  END IF;
+END $$;
