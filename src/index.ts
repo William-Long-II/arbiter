@@ -3,6 +3,7 @@ import { runMigrations, startEventListener } from './db.ts';
 import { buildApp } from './web/server.tsx';
 import { startWorker, stopWorker } from './worker.ts';
 import { startPoller, stopPoller } from './github/poller.ts';
+import { startRetention, stopRetention } from './retention.ts';
 
 async function main(): Promise<void> {
   console.log('[boot] running migrations…');
@@ -22,11 +23,13 @@ async function main(): Promise<void> {
 
   startWorker();
   startPoller();
+  startRetention();
 
   const shutdown = (signal: string) => {
     console.log(`[boot] ${signal} received, shutting down`);
     stopWorker();
     stopPoller();
+    stopRetention();
     server.stop();
     process.exit(0);
   };
