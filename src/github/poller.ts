@@ -12,12 +12,18 @@ import {
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let inFlight = false;
+// Observable state for the UI: when the next tick is expected and when the
+// last one happened. Both are wall-clock; the client uses nextPollAt to run
+// a local countdown without polling the server.
+let nextPollAt: Date | null = null;
+let lastTickAt: Date | null = null;
 
 export function startPoller(): void {
   if (timer) return;
   const ms = config.pollIntervalSeconds * 1000;
   console.log(`[poller] starting, interval=${config.pollIntervalSeconds}s`);
   // Fire once on startup so we don't wait `interval` for the first poll.
+  nextPollAt = new Date(Date.now() + 1000);
   setTimeout(() => { void tick(); }, 1000);
   timer = setInterval(() => { void tick(); }, ms);
 }
@@ -27,6 +33,28 @@ export function stopPoller(): void {
     clearInterval(timer);
     timer = null;
   }
+  nextPollAt = null;
+}
+
+/**
+ * Snapshot of the poller's wall-clock state. Used by the UI to render a
+ * "next poll in Xs" countdown so the user isn't guessing when the next
+ * sweep is. All three fields can be null before the poller starts.
+ */
+export type PollerStatus = {
+  intervalSeconds: number;
+  nextPollAt: string | null;
+  lastTickAt: string | null;
+  inFlight: boolean;
+};
+
+export function getPollerStatus(): PollerStatus {
+  return {
+    intervalSeconds: config.pollIntervalSeconds,
+    nextPollAt: nextPollAt ? nextPollAt.toISOString() : null,
+    lastTickAt: lastTickAt ? lastTickAt.toISOString() : null,
+    inFlight,
+  };
 }
 
 /**
@@ -43,6 +71,11 @@ async function tick(): Promise<void> {
   if (inFlight) return;
   inFlight = true;
   const started = Date.now();
+  lastTickAt = new Date(started);
+  // Compute the *next* expected tick as soon as this one starts running, so
+  // the UI's countdown stays in step with setInterval rather than drifting
+  // by however long this tick takes.
+  nextPollAt = new Date(started + config.pollIntervalSeconds * 1000);
   let enqueued = 0;
   try {
     const users = await sql<{ id: number; login: string; token: string }[]>`

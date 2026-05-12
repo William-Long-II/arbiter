@@ -28,6 +28,7 @@ import {
   updateScope,
 } from '../db/scopes.ts';
 import { fetchPullRequest, listOpenPullsForRepo } from '../github/pulls.ts';
+import { getPollerStatus } from '../github/poller.ts';
 import {
   DiffTooLargeError,
   MAX_DIFF_BYTES,
@@ -98,6 +99,13 @@ export function buildApp(): Hono {
     const refresh = c.req.query('refresh') === '1';
     const result = await listAccessibleReposCached(user.id, user.githubToken, { refresh });
     return c.json(result);
+  });
+
+  // Used by the layout's "next poll in Xs" indicator. Cheap (no DB hit) and
+  // refetched only when the client-side countdown reaches zero, so total
+  // traffic is one call per poll interval per loaded tab.
+  app.get('/api/poller/status', requireUser, (c) => {
+    return c.json(getPollerStatus());
   });
 
   app.get('/repos', requireUser, async (c) => {

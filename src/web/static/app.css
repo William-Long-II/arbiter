@@ -70,6 +70,13 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
 .brand-mark { color: var(--primary); font-size: 14px; }
 .brand-name { font-size: 18px; font-weight: 600; letter-spacing: -0.2px; }
 .top-nav-spacer { flex: 1; }
+.next-poll {
+  color: var(--ink-subtle);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  margin-right: 16px;
+  user-select: none;
+}
 .top-nav-user { display: flex; align-items: center; gap: 12px; }
 .avatar { border-radius: 9999px; }
 .user-login { color: var(--ink-muted); font-size: 13px; }
