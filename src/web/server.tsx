@@ -115,9 +115,17 @@ export function buildApp(): Hono {
     return c.html(<ScopesListPage user={user} scopes={scopes} />);
   });
 
-  app.get('/scopes/new', requireUser, (c) => {
+  app.get('/scopes/new', requireUser, async (c) => {
     const user = c.get('user');
-    return c.html(<ScopeFormPage user={user} scope={null} />);
+    const { accessibleRepos, accessibleOrgs } = await loadTargetSuggestions(user);
+    return c.html(
+      <ScopeFormPage
+        user={user}
+        scope={null}
+        accessibleRepos={accessibleRepos}
+        accessibleOrgs={accessibleOrgs}
+      />,
+    );
   });
 
   app.post('/scopes', requireUser, async (c) => {
@@ -125,8 +133,16 @@ export function buildApp(): Hono {
     const form = await readFormStrings(c);
     const parsed = parseScopeForm(form);
     if (!parsed.ok) {
+      const { accessibleRepos, accessibleOrgs } = await loadTargetSuggestions(user);
       return c.html(
-        <ScopeFormPage user={user} scope={null} values={partialFromForm(form)} errors={parsed.errors} />,
+        <ScopeFormPage
+          user={user}
+          scope={null}
+          values={partialFromForm(form)}
+          errors={parsed.errors}
+          accessibleRepos={accessibleRepos}
+          accessibleOrgs={accessibleOrgs}
+        />,
         400,
       );
     }
@@ -140,7 +156,15 @@ export function buildApp(): Hono {
     if (Number.isNaN(id)) return c.notFound();
     const scope = await getScope(user.id, id);
     if (!scope) return c.notFound();
-    return c.html(<ScopeFormPage user={user} scope={scope} />);
+    const { accessibleRepos, accessibleOrgs } = await loadTargetSuggestions(user);
+    return c.html(
+      <ScopeFormPage
+        user={user}
+        scope={scope}
+        accessibleRepos={accessibleRepos}
+        accessibleOrgs={accessibleOrgs}
+      />,
+    );
   });
 
   app.post('/scopes/:id', requireUser, async (c) => {
@@ -153,8 +177,16 @@ export function buildApp(): Hono {
     const form = await readFormStrings(c);
     const parsed = parseScopeForm(form);
     if (!parsed.ok) {
+      const { accessibleRepos, accessibleOrgs } = await loadTargetSuggestions(user);
       return c.html(
-        <ScopeFormPage user={user} scope={existing} values={partialFromForm(form)} errors={parsed.errors} />,
+        <ScopeFormPage
+          user={user}
+          scope={existing}
+          values={partialFromForm(form)}
+          errors={parsed.errors}
+          accessibleRepos={accessibleRepos}
+          accessibleOrgs={accessibleOrgs}
+        />,
         400,
       );
     }
@@ -350,6 +382,31 @@ async function readFormStrings(c: Context): Promise<Record<string, string>> {
     if (typeof v === 'string') out[k] = v;
   }
   return out;
+}
+
+/**
+ * Build autocomplete suggestions for the scope target input. Uses the
+ * existing per-user 60s repo cache, so visiting /scopes/new doesn't pay
+ * a fresh GitHub API roundtrip on every render. Falls back to empty lists
+ * if listing fails — the form still renders, just without suggestions.
+ */
+async function loadTargetSuggestions(
+  user: { id: number; githubToken: string; githubLogin: string },
+): Promise<{ accessibleRepos: string[]; accessibleOrgs: string[] }> {
+  try {
+    const { repos, sources } = await listAccessibleReposCached(
+      user.id,
+      user.githubToken,
+    );
+    const accessibleRepos = repos.map((r) => r.fullName).sort();
+    const accessibleOrgs = sources
+      .filter((s): s is Extract<typeof s, { kind: 'org' }> => s.kind === 'org')
+      .map((s) => s.org)
+      .sort();
+    return { accessibleRepos, accessibleOrgs };
+  } catch {
+    return { accessibleRepos: [], accessibleOrgs: [] };
+  }
 }
 
 /**
