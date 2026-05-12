@@ -6,9 +6,21 @@ import { Layout } from './layout.tsx';
 type Props = {
   user: User;
   reviews: PendingReview[];
+  /** Active filter from the URL. Empty = "all statuses". */
+  statusFilter?: ReviewStatus[];
 };
 
-export const QueuePage: FC<Props> = ({ user, reviews }) => {
+const FILTER_CHIPS: { status: ReviewStatus | null; label: string }[] = [
+  { status: null, label: 'All' },
+  { status: 'queued', label: 'Queued' },
+  { status: 'running', label: 'Running' },
+  { status: 'failed', label: 'Failed' },
+  { status: 'done', label: 'Done' },
+];
+
+export const QueuePage: FC<Props> = ({ user, reviews, statusFilter = [] }) => {
+  const active = new Set(statusFilter);
+  const isAll = active.size === 0;
   return (
     <Layout title="Queue" user={user} active="queue">
       <header class="page-header">
@@ -18,12 +30,41 @@ export const QueuePage: FC<Props> = ({ user, reviews }) => {
         </p>
       </header>
 
+      <nav class="queue-filter-row">
+        {FILTER_CHIPS.map((chip) => {
+          const isActive =
+            chip.status === null ? isAll : active.has(chip.status) && active.size === 1;
+          const href = chip.status === null ? '/queue' : `/queue?status=${chip.status}`;
+          return (
+            <a
+              class={isActive ? 'queue-filter-chip active' : 'queue-filter-chip'}
+              href={href}
+            >
+              {chip.label}
+              {chip.status ? (
+                <span class={`queue-filter-dot status-${chip.status}`} aria-hidden="true" />
+              ) : null}
+            </a>
+          );
+        })}
+      </nav>
+
       {reviews.length === 0 ? (
         <div class="card empty-card">
-          <p class="empty-card-title">No reviews yet.</p>
+          <p class="empty-card-title">
+            {isAll ? 'No reviews yet.' : 'No reviews match this filter.'}
+          </p>
           <p class="empty-card-body">
-            Reviews appear here once a scope matches a PR or you enqueue one
-            manually via <code class="mono">POST /api/debug/enqueue-review</code>.
+            {isAll ? (
+              <>
+                Reviews appear here once a scope matches a PR or you enqueue one
+                manually via <code class="mono">POST /api/debug/enqueue-review</code>.
+              </>
+            ) : (
+              <>
+                <a class="text-link" href="/queue">Clear the filter</a> to see all reviews.
+              </>
+            )}
           </p>
         </div>
       ) : (

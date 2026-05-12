@@ -220,7 +220,27 @@ export async function markFailed(id: number, error: string): Promise<void> {
   if (rows[0]) await notifyReviewChanged(rows[0]);
 }
 
-export async function listReviews(userId: number, limit = 50): Promise<PendingReview[]> {
+export type ListReviewsOptions = {
+  limit?: number;
+  /** Restrict to these statuses. Empty/undefined = all. */
+  statusFilter?: ReviewStatus[];
+};
+
+export async function listReviews(
+  userId: number,
+  opts: ListReviewsOptions = {},
+): Promise<PendingReview[]> {
+  const limit = opts.limit ?? 50;
+  const statuses = opts.statusFilter;
+  if (statuses && statuses.length > 0) {
+    return sql<PendingReview[]>`
+      SELECT ${SELECT_REVIEW_COLUMNS}
+      FROM pending_reviews
+      WHERE user_id = ${userId} AND status = ANY(${statuses})
+      ORDER BY created_at DESC
+      LIMIT ${limit}
+    `;
+  }
   return sql<PendingReview[]>`
     SELECT ${SELECT_REVIEW_COLUMNS}
     FROM pending_reviews
@@ -228,6 +248,14 @@ export async function listReviews(userId: number, limit = 50): Promise<PendingRe
     ORDER BY created_at DESC
     LIMIT ${limit}
   `;
+}
+
+const ALL_STATUSES: readonly ReviewStatus[] = [
+  'queued', 'running', 'done', 'failed', 'skipped',
+];
+
+export function isReviewStatus(v: string): v is ReviewStatus {
+  return (ALL_STATUSES as readonly string[]).includes(v);
 }
 
 export async function getReview(userId: number, id: number): Promise<PendingReview | null> {
