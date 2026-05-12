@@ -84,46 +84,23 @@ export async function fetchPullRequest(
   };
 }
 
-const LIST_PAGE_SIZE = 100;
-
 /**
- * List open PRs in a single repo. Used by the poller for repo-scoped rules.
- * Returns every page concatenated, capped at a few thousand to avoid runaway.
+ * List open PRs in a single repo. Used by the manual `/repos/owner/name/prs`
+ * debugging page. Thin wrapper over listOpenPullsForScopes — same underlying
+ * GraphQL search, single repo target — so all polling now flows through one
+ * code path. Drafts are filtered by listOpenPullsForScopes.
  */
 export async function listOpenPullsForRepo(
   token: string,
   repoFull: string,
 ): Promise<PRDetails[]> {
-  const [owner, repo] = repoFull.split('/');
-  if (!owner || !repo) throw new Error(`Invalid repoFull: ${repoFull}`);
-  const octokit = octokitFor(token);
-  const out: PRDetails[] = [];
-  for (let page = 1; page <= 30; page++) {
-    const res = await octokit.rest.pulls.list({
-      owner,
-      repo,
-      state: 'open',
-      per_page: LIST_PAGE_SIZE,
-      page,
-    });
-    if (res.data.length === 0) break;
-    for (const p of res.data) {
-      if (p.draft) continue;
-      out.push({
-        repoFull,
-        number: p.number,
-        title: p.title,
-        author: p.user?.login ?? 'unknown',
-        baseBranch: p.base.ref,
-        headBranch: p.head.ref,
-        headSha: p.head.sha,
-        draft: p.draft ?? false,
-        autoMerge: p.auto_merge !== null,
-      });
-    }
-    if (res.data.length < LIST_PAGE_SIZE) break;
-  }
-  return out;
+  const [owner, name] = repoFull.split('/');
+  if (!owner || !name) throw new Error(`Invalid repoFull: ${repoFull}`);
+  return listOpenPullsForScopes(
+    token,
+    [{ kind: 'repo', target: repoFull }],
+    [],
+  );
 }
 
 export type ScopeTarget = {
