@@ -255,6 +255,24 @@ export async function markFailed(id: number, error: string): Promise<void> {
   if (rows[0]) await notifyReviewChanged(rows[0]);
 }
 
+/**
+ * Mark a review as skipped — terminal but not "failed". Used for
+ * structurally un-reviewable PRs (diff too large, too many files) where
+ * retrying would just hit the same limit. The queue UI hides the retry
+ * button on skipped rows.
+ */
+export async function markSkipped(id: number, reason: string): Promise<void> {
+  const rows = await sql<PendingReview[]>`
+    UPDATE pending_reviews
+    SET status = 'skipped',
+        finished_at = now(),
+        error = ${reason}
+    WHERE id = ${id}
+    RETURNING ${SELECT_REVIEW_COLUMNS}
+  `;
+  if (rows[0]) await notifyReviewChanged(rows[0]);
+}
+
 export type ListReviewsOptions = {
   limit?: number;
   /** Restrict to these statuses. Empty/undefined = all. */

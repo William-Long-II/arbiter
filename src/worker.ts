@@ -5,15 +5,21 @@ import {
   deferReview,
   markDone,
   markFailed,
+  markSkipped,
   type PendingReview,
   type PostedEvent,
 } from './db/reviews.ts';
 import { markTokenRevoked } from './db/users.ts';
 import { subscribeAll } from './events.ts';
 import { stampReviewBody } from './review/footer.ts';
-import { fetchPullRequest, postPullRequestReview, type ReviewEvent } from './github/pulls.ts';
+import {
+  DiffTooManyFilesError,
+  fetchPullRequest,
+  postPullRequestReview,
+  type ReviewEvent,
+} from './github/pulls.ts';
 import { fetchChecksSummary, formatChecksSummary } from './github/checks.ts';
-import { runReview, type Verdict } from './review/runner.ts';
+import { DiffTooLargeError, runReview, type Verdict } from './review/runner.ts';
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let unsubscribe: (() => void) | null = null;
@@ -155,6 +161,15 @@ async function processJob(job: PendingReview): Promise<void> {
     console.log(`[worker] done #${job.id} (verdict=${result.verdict}, event=${event})`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // Structural limits (PR too big, diff over our size cap) — not failures
+    // worth retrying. Mark skipped so the queue UI doesn't offer a retry
+    // button; the row stays in the timeline as a record of "we saw it,
+    // can't review it."
+    if (err instanceof DiffTooManyFilesError || err instanceof DiffTooLargeError) {
+      await markSkipped(job.id, message);
+      console.log(`[worker] skipped #${job.id}: ${message}`);
+      return;
+    }
     // Detect a revoked OAuth token: Octokit RequestError surfaces a
     // `status` of 401 when GitHub rejects the token. Mark the user so the
     // top-nav banner can prompt re-auth; otherwise the worker will keep
