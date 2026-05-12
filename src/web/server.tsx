@@ -34,7 +34,12 @@ import {
   ReviewTimeoutError,
   runReview,
 } from '../review/runner.ts';
-import { enqueueReview, getReview, listReviews } from '../db/reviews.ts';
+import {
+  enqueueReview,
+  getReview,
+  listReviews,
+  listReviewsForPR,
+} from '../db/reviews.ts';
 import { QueuePage } from './views/queue-list.tsx';
 import { QueueDetailPage } from './views/queue-detail.tsx';
 
@@ -219,7 +224,13 @@ export function buildApp(): Hono {
     if (Number.isNaN(id)) return c.notFound();
     const review = await getReview(user.id, id);
     if (!review) return c.notFound();
-    return c.html(<QueueDetailPage user={user} review={review} />);
+    const siblings = await listReviewsForPR(
+      user.id,
+      review.repoFull,
+      review.prNumber,
+      review.id,
+    );
+    return c.html(<QueueDetailPage user={user} review={review} siblings={siblings} />);
   });
 
   // SSE stream of review state changes for the current user. Powered by

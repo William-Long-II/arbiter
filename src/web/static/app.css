@@ -361,6 +361,24 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
   font-size: 14px; font-weight: 600; color: var(--ink);
   margin: 0 0 8px;
 }
+.queue-siblings-count { color: var(--ink-subtle); font-weight: 400; font-size: 12px; }
+.queue-siblings-hint { margin: 0 0 12px; }
+.queue-siblings { display: flex; flex-direction: column; gap: 4px; }
+.queue-sibling-row {
+  background: var(--surface-1);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+}
+.queue-sibling-row:hover { background: var(--surface-2); }
+.queue-sibling-link {
+  display: grid;
+  grid-template-columns: 80px 80px 100px 1fr;
+  gap: 12px; align-items: center;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+.queue-sibling-sha { color: var(--ink-muted); }
+.queue-sibling-time { font-size: 12px; }
 .queue-output-title-error { color: #c64545; }
 .queue-output-pre {
   background: var(--surface-code);

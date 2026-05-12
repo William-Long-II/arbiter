@@ -207,3 +207,27 @@ export async function getReview(userId: number, id: number): Promise<PendingRevi
   `;
   return rows[0] ?? null;
 }
+
+/**
+ * List other reviews for the same (repo, pr_number) — useful for the
+ * detail page to show "this PR has been reviewed N times before."
+ * Excludes the requesting review (via `excludeId`) so we don't echo
+ * itself in its own sibling panel.
+ */
+export async function listReviewsForPR(
+  userId: number,
+  repoFull: string,
+  prNumber: number,
+  excludeId: number,
+): Promise<PendingReview[]> {
+  return sql<PendingReview[]>`
+    SELECT ${SELECT_REVIEW_COLUMNS}
+    FROM pending_reviews
+    WHERE user_id = ${userId}
+      AND repo_full = ${repoFull}
+      AND pr_number = ${prNumber}
+      AND id <> ${excludeId}
+    ORDER BY created_at DESC
+    LIMIT 20
+  `;
+}

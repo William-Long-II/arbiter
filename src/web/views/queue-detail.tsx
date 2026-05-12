@@ -6,9 +6,11 @@ import { Layout } from './layout.tsx';
 type Props = {
   user: User;
   review: PendingReview;
+  /** Other reviews for the same (repo, pr_number) — see listReviewsForPR. */
+  siblings?: PendingReview[];
 };
 
-export const QueueDetailPage: FC<Props> = ({ user, review }) => {
+export const QueueDetailPage: FC<Props> = ({ user, review, siblings = [] }) => {
   const ghUrl = `https://github.com/${review.repoFull}/pull/${review.prNumber}`;
   return (
     <Layout title={`#${review.prNumber} ${review.prTitle}`} user={user} active="queue">
@@ -99,6 +101,24 @@ export const QueueDetailPage: FC<Props> = ({ user, review }) => {
         </section>
       ) : null}
 
+      {siblings.length > 0 ? (
+        <section class="queue-output-section">
+          <h2 class="queue-output-title">
+            Prior runs on this PR <span class="queue-siblings-count">({siblings.length})</span>
+          </h2>
+          <p class="page-subhead queue-siblings-hint">
+            Other reviews this user has run against{' '}
+            <code class="mono-sm">{review.repoFull}#{review.prNumber}</code>{' '}
+            at different head SHAs.
+          </p>
+          <ul class="row-list queue-siblings">
+            {siblings.map((s) => (
+              <SiblingRow review={s} />
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       {/*
         SSE client: while this review is still active (queued or running),
         listen for state changes on the same SSE stream. When THIS review
@@ -140,5 +160,22 @@ const MetaRow: FC<{ label: string; children: unknown }> = ({ label, children }) 
       <span class="queue-meta-label">{label}</span>
       <span class="queue-meta-value">{children}</span>
     </div>
+  );
+};
+
+const SiblingRow: FC<{ review: PendingReview }> = ({ review }) => {
+  return (
+    <li class="queue-sibling-row">
+      <a href={`/queue/${review.id}`} class="queue-sibling-link">
+        <span class={`badge-pill status-${review.status}`}>{review.status}</span>
+        <span class="mono-sm queue-sibling-sha">{review.headSha.slice(0, 8)}</span>
+        {review.verdict ? (
+          <span class={`badge-pill verdict-${review.verdict}`}>{review.verdict}</span>
+        ) : null}
+        <span class="ink-subtle queue-sibling-time">
+          {new Date(review.createdAt).toLocaleString()}
+        </span>
+      </a>
+    </li>
   );
 };
