@@ -379,10 +379,15 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
 .queue-detail-arrow { color: var(--ink-subtle); }
 
 .queue-output-section { margin-bottom: 24px; }
-.queue-output-title {
-  font-size: 14px; font-weight: 600; color: var(--ink);
+.queue-output-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
   margin: 0 0 8px;
 }
+.queue-output-title {
+  font-size: 14px; font-weight: 600; color: var(--ink);
+  margin: 0;
+}
+.queue-retry-hint { margin: 8px 0 0; }
 .queue-siblings-count { color: var(--ink-subtle); font-weight: 400; font-size: 12px; }
 .queue-siblings-hint { margin: 0 0 12px; }
 .queue-siblings { display: flex; flex-direction: column; gap: 4px; }

@@ -81,8 +81,24 @@ export const QueueDetailPage: FC<Props> = ({ user, review, siblings = [] }) => {
 
       {review.error ? (
         <section class="queue-output-section">
-          <h2 class="queue-output-title queue-output-title-error">Error</h2>
+          <div class="queue-output-header">
+            <h2 class="queue-output-title queue-output-title-error">Error</h2>
+            {review.status === 'failed' ? (
+              <form method="post" action={`/queue/${review.id}/retry`}>
+                <button class="cta-secondary" type="submit">
+                  ↻ Retry this review
+                </button>
+              </form>
+            ) : null}
+          </div>
           <pre class="code-window queue-output-pre">{review.error}</pre>
+          {review.status === 'failed' ? (
+            <p class="form-hint queue-retry-hint">
+              Retrying resets this row to <code class="mono-sm">queued</code> with the same
+              head SHA and clears the error. The worker picks it up within ~10ms via the
+              existing NOTIFY channel.
+            </p>
+          ) : null}
         </section>
       ) : null}
 

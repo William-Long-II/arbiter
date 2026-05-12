@@ -39,6 +39,7 @@ import {
   getReview,
   listReviews,
   listReviewsForPR,
+  retryFailedReview,
 } from '../db/reviews.ts';
 import { QueuePage } from './views/queue-list.tsx';
 import { QueueDetailPage } from './views/queue-detail.tsx';
@@ -324,6 +325,20 @@ export function buildApp(): Hono {
       review.id,
     );
     return c.html(<QueueDetailPage user={user} review={review} siblings={siblings} />);
+  });
+
+  // Reset a failed review back to queued. Same-origin POST (CSRF guard
+  // applies). 404 if the row isn't yours or isn't in failed state — we
+  // don't want to retry running/done rows by accident.
+  app.post('/queue/:id/retry', requireUser, async (c) => {
+    const user = c.get('user');
+    const id = parseInt(c.req.param('id'), 10);
+    if (Number.isNaN(id)) return c.notFound();
+    const row = await retryFailedReview(user.id, id);
+    if (!row) {
+      return c.text('Review not found or not in a failed state', 404);
+    }
+    return c.redirect(`/queue/${id}`);
   });
 
   // SSE stream of review state changes for the current user. Powered by
