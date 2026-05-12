@@ -365,6 +365,24 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
   background: currentColor;
 }
 
+/* Settings page */
+.settings-section { margin-bottom: 24px; }
+.settings-section-title {
+  font-size: 11px; font-weight: 500; color: var(--ink-subtle);
+  text-transform: uppercase; letter-spacing: 0.6px;
+  margin: 0 0 8px;
+}
+.settings-card { padding: 4px 16px; }
+.settings-row {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 16px; align-items: center;
+  padding: 12px 0;
+}
+.settings-row + .settings-row { border-top: 1px solid var(--surface-2); }
+.settings-label { color: var(--ink-muted); font-size: 13px; }
+.settings-value { color: var(--ink); display: flex; align-items: center; gap: 8px; }
+
 /* Status pills */
 .status-queued { color: var(--ink-subtle); }
 .status-running { color: var(--primary); }
