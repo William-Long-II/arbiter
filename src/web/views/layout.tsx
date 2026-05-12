@@ -1,5 +1,6 @@
 import type { FC, PropsWithChildren } from 'hono/jsx';
 import type { User } from '../../db/users.ts';
+import { getPollerStatus } from '../../github/poller.ts';
 
 type Props = {
   title: string;
@@ -13,6 +14,18 @@ export const Layout: FC<PropsWithChildren<Props>> = ({
   active,
   children,
 }) => {
+  // Embed the poller's current state directly into the markup so the
+  // indicator renders the right text on first paint. Without this the
+  // client script would fetch /api/poller/status after the DOM was already
+  // showing a placeholder, causing a brief "poller idle" flash on every
+  // page navigation.
+  const pollerStatus = user ? getPollerStatus() : null;
+  const initialIndicator = pollerStatus?.inFlight
+    ? 'polling…'
+    : pollerStatus?.nextPollAt
+      ? formatRemaining(pollerStatus.nextPollAt)
+      : 'poller idle';
+
   return (
     <html lang="en">
       <head>
@@ -35,8 +48,11 @@ export const Layout: FC<PropsWithChildren<Props>> = ({
                 class="next-poll"
                 title="Time until the next poller sweep across your scoped repos."
                 aria-live="polite"
+                data-next-poll-at={pollerStatus?.nextPollAt ?? ''}
+                data-interval-seconds={String(pollerStatus?.intervalSeconds ?? 0)}
+                data-in-flight={pollerStatus?.inFlight ? '1' : '0'}
               >
-                next poll …
+                {initialIndicator}
               </span>
             ) : null}
             {user ? (
@@ -81,9 +97,11 @@ export const Layout: FC<PropsWithChildren<Props>> = ({
                 (function() {
                   var el = document.getElementById('next-poll-indicator');
                   if (!el) return;
-                  var nextAt = 0;
-                  var inFlight = false;
-                  var intervalSec = 0;
+                  // Seed from server-rendered data attributes so the first
+                  // paint already shows the right value — no fetch flash.
+                  var nextAt = Date.parse(el.dataset.nextPollAt || '') || 0;
+                  var inFlight = el.dataset.inFlight === '1';
+                  var intervalSec = parseInt(el.dataset.intervalSeconds || '0', 10);
 
                   function fmt(seconds) {
                     if (seconds < 60) return seconds + 's';
@@ -100,6 +118,7 @@ export const Layout: FC<PropsWithChildren<Props>> = ({
                         intervalSec = s.intervalSeconds || 0;
                         nextAt = s.nextPollAt ? Date.parse(s.nextPollAt) : 0;
                         inFlight = !!s.inFlight;
+                        tick();
                       })
                       .catch(function() { el.textContent = 'poller ?'; });
                   }
@@ -123,9 +142,7 @@ export const Layout: FC<PropsWithChildren<Props>> = ({
                     }
                   }
 
-                  load();
                   setInterval(tick, 1000);
-                  tick();
                 })();
               `,
             }}
@@ -135,6 +152,16 @@ export const Layout: FC<PropsWithChildren<Props>> = ({
     </html>
   );
 };
+
+function formatRemaining(nextPollAtIso: string): string {
+  const remainMs = Date.parse(nextPollAtIso) - Date.now();
+  if (remainMs <= 0) return 'polling…';
+  const seconds = Math.ceil(remainMs / 1000);
+  if (seconds < 60) return `next poll in ${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `next poll in ${m}m ${s}s`;
+}
 
 const SideNavItem: FC<{ href: string; label: string; active: boolean }> = ({
   href,
