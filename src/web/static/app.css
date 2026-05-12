@@ -407,6 +407,68 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
 .queue-sibling-sha { color: var(--ink-muted); }
 .queue-sibling-time { font-size: 12px; }
 .queue-output-title-error { color: #c64545; }
+/* Rendered markdown output for the posted review on /queue/:id. Scoped
+   tightly to .md-output so the prose styles don't leak into the chrome. */
+.md-output {
+  color: var(--ink);
+  font-size: 14px; line-height: 1.6;
+  max-width: 900px;
+}
+.md-output > *:first-child { margin-top: 0; }
+.md-output > *:last-child { margin-bottom: 0; }
+.md-output h1, .md-output h2, .md-output h3, .md-output h4 {
+  color: var(--ink); font-weight: 600;
+  margin: 24px 0 8px;
+  letter-spacing: -0.2px;
+}
+.md-output h1 { font-size: 20px; }
+.md-output h2 { font-size: 17px; }
+.md-output h3 { font-size: 15px; }
+.md-output h4 { font-size: 14px; }
+.md-output p { margin: 0 0 12px; color: var(--ink-muted); }
+.md-output strong { color: var(--ink); font-weight: 600; }
+.md-output a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.md-output a:hover { color: var(--primary-hover); }
+.md-output ul, .md-output ol { margin: 0 0 12px; padding-left: 24px; color: var(--ink-muted); }
+.md-output li { margin: 4px 0; }
+.md-output li > p { margin: 0; }
+.md-output code {
+  background: var(--surface-2); color: var(--ink);
+  padding: 1px 5px; border-radius: 4px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 12px;
+}
+.md-output pre {
+  background: var(--surface-code);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  margin: 0 0 16px;
+  overflow-x: auto;
+}
+.md-output pre code {
+  background: transparent; padding: 0;
+  color: var(--ink);
+  font-size: 12px; line-height: 1.5;
+}
+.md-output blockquote {
+  margin: 0 0 12px; padding-left: 12px;
+  border-left: 2px solid var(--hairline-strong);
+  color: var(--ink-subtle);
+}
+.md-output hr {
+  border: none; border-top: 1px solid var(--hairline);
+  margin: 20px 0;
+}
+.md-output table {
+  border-collapse: collapse; margin: 0 0 16px;
+  font-size: 13px;
+}
+.md-output th, .md-output td {
+  text-align: left; padding: 6px 12px;
+  border-bottom: 1px solid var(--hairline);
+}
+.md-output th { color: var(--ink-subtle); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+
 .queue-output-pre {
   background: var(--surface-code);
   color: var(--ink);

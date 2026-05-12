@@ -1,7 +1,14 @@
 import type { FC } from 'hono/jsx';
+import { marked } from 'marked';
 import type { User } from '../../db/users.ts';
 import type { PendingReview, ReviewStatus } from '../../db/reviews.ts';
 import { Layout } from './layout.tsx';
+
+// Configure marked once. GFM extensions (tables, strikethrough, etc.) match
+// what GitHub will render. Body comes from Claude API → the row's owner —
+// same trust boundary as the GitHub PR comment we'd post — so we don't
+// run a DOMPurify pass.
+marked.setOptions({ gfm: true, breaks: false });
 
 type Props = {
   user: User;
@@ -105,7 +112,10 @@ export const QueueDetailPage: FC<Props> = ({ user, review, siblings = [] }) => {
       {review.output ? (
         <section class="queue-output-section">
           <h2 class="queue-output-title">Posted review</h2>
-          <pre class="code-window queue-output-pre">{review.output}</pre>
+          <div
+            class="md-output"
+            dangerouslySetInnerHTML={{ __html: marked.parse(review.output) as string }}
+          />
         </section>
       ) : !review.error ? (
         <section class="queue-output-section">
