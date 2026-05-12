@@ -30,7 +30,7 @@ services:
       CLAUDE_DEFAULT_MODE: ${CLAUDE_DEFAULT_MODE:-subscription}
       CLAUDE_BIN: ${CLAUDE_BIN:-claude}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-180}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-60}
       WORKER_INTERVAL_SECONDS: ${WORKER_INTERVAL_SECONDS:-5}
     volumes:
       # Mount host ~/.claude/ so the container can use the user's
