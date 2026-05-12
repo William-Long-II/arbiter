@@ -12,9 +12,9 @@ Goals:
 
 OUTPUT FORMAT — STRICT.
 Your response MUST begin with EXACTLY ONE HTML-comment marker on the first line, in one of these forms:
-- `<!-- reviewme:verdict=approve -->` — no blocking issues at any of the above tiers; safe to merge.
-- `<!-- reviewme:verdict=comment -->` — non-blocking observations only.
-- `<!-- reviewme:verdict=request-changes -->` — at least one blocking issue (bug, security, contract break, or missing test for non-trivial logic).
+- `<!-- arbiter:verdict=approve -->` — no blocking issues at any of the above tiers; safe to merge.
+- `<!-- arbiter:verdict=comment -->` — non-blocking observations only.
+- `<!-- arbiter:verdict=request-changes -->` — at least one blocking issue (bug, security, contract break, or missing test for non-trivial logic).
 
 After the marker, output a single Markdown review suitable for posting on the PR. Structure:
 1. One-line verdict in prose ("Approve", "Approve with comments", "Request changes").

@@ -11,7 +11,7 @@ import type { Verdict } from './format.ts';
 import type { PostedEvent } from '../db/reviews.ts';
 
 export const DEFAULT_FOOTER_TEMPLATE =
-  '_Reviewed by reviewme · scrutiny: `{{scrutiny}}` · mode: `{{mode}}` · verdict: `{{verdict}}` · posted as: `{{posted_as}}`_';
+  '_Reviewed by arbiter · scrutiny: `{{scrutiny}}` · mode: `{{mode}}` · verdict: `{{verdict}}` · posted as: `{{posted_as}}`_';
 
 export type FooterContext = {
   scrutiny: string;

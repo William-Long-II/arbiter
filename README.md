@@ -1,4 +1,4 @@
-# reviewme
+# arbiter
 
 Automated GitHub PR review on your own infrastructure, powered by Claude Code.
 
@@ -6,9 +6,9 @@ Automated GitHub PR review on your own infrastructure, powered by Claude Code.
 
 ## What it does (planned)
 
-- Sign in with GitHub (OAuth) → reviewme polls your accessible repos.
+- Sign in with GitHub (OAuth) → arbiter polls your accessible repos.
 - Define **scope rules**: which repos / orgs / branches to review, at what scrutiny tier (`light` / `standard` / `strict`).
-- For every matching PR (skipping your own and configured bots), reviewme runs `claude -p` against the diff using the scrutiny prompt and posts the review to the PR.
+- For every matching PR (skipping your own and configured bots), arbiter runs `claude -p` against the diff using the scrutiny prompt and posts the review to the PR.
 - A web UI shows the queue, run history, and scope configuration.
 
 ## Stack

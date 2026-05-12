@@ -1,6 +1,6 @@
 ---
 version: alpha
-name: reviewme
+name: arbiter
 description: "A dark, calm dev-tool surface for an automated GitHub PR review queue. Linear's structural skeleton (near-black canvas, surface ladder, hairline borders, Inter sans, 8px radius vocabulary) layered with Claude's warm coral accent and dark code-window pattern. One chromatic accent: coral signals 'needs review.' One type voice: Inter for chrome, JetBrains Mono for code/SHAs/repo names. The system reads as a quiet inspector tool, not a marketing site."
 
 colors:
@@ -289,7 +289,7 @@ components:
 
 ## Overview
 
-reviewme is an automated GitHub PR review tool. The interface is a queue of pull
+arbiter is an automated GitHub PR review tool. The interface is a queue of pull
 requests across one or more repos/orgs that match a user-defined scope. The
 visual system is built for engineers reading lists and code for long stretches
 without strain — calm dark canvas, generous mono for SHAs and code, and a single
@@ -425,7 +425,7 @@ No drop shadows. Depth is carried entirely by surface ladder + hairline borders.
 
 ### Top Navigation (`{component.top-nav}`)
 Sticky 52px bar. `{colors.canvas}` background with 1px `{colors.hairline}` bottom rule. Carries:
-- Left: small coral spike-mark + `reviewme` wordmark in `{typography.headline}`.
+- Left: small coral spike-mark + `arbiter` wordmark in `{typography.headline}`.
 - Center-left: breadcrumb in `{typography.body-sm}` `{colors.ink-muted}`.
 - Right: GitHub avatar (24px circle) with dropdown for sign-out, settings.
 

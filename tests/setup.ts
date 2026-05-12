@@ -5,7 +5,7 @@
 //
 // DATABASE_URL is the exception: it stays nullish-default so a developer can
 // point tests at a real test DB by setting DATABASE_URL in their shell.
-process.env.DATABASE_URL ??= 'postgres://localhost/reviewme_test';
+process.env.DATABASE_URL ??= 'postgres://localhost/arbiter_test';
 const FORCED_TEST_VALUES = {
   SESSION_SECRET: 'test-secret-' + 'a'.repeat(40),
   GITHUB_CLIENT_ID: 'test-client-id',

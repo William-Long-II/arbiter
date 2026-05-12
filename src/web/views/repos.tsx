@@ -193,7 +193,7 @@ const SourcesPanel: FC<{ sources: RepoSource[]; githubClientId: string }> = ({
         ) : null}
       </div>
       <p class="sources-hint">
-        Missing an org you're a member of? It probably hasn't approved the reviewme OAuth app
+        Missing an org you're a member of? It probably hasn't approved the arbiter OAuth app
         yet. {orgAccessUrl ? (
           <>
             Open <a class="text-link" href={orgAccessUrl} target="_blank" rel="noopener noreferrer">your app authorizations</a>{' '}
@@ -214,7 +214,7 @@ const SourcesPanel: FC<{ sources: RepoSource[]; githubClientId: string }> = ({
               <code class="mono-sm">{s.org}</code>
             </>
           ))}{' '}
-          returned no repos. If you expected repos there, the reviewme OAuth app
+          returned no repos. If you expected repos there, the arbiter OAuth app
           likely needs approval at{' '}
           <code class="mono-sm">github.com/orgs/&lt;org&gt;/policies/applications</code>.
         </p>

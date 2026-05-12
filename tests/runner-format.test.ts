@@ -116,7 +116,7 @@ describe('parseClaudeCliOutput', () => {
 
   test('extracts verdict from result body', () => {
     const stdout = JSON.stringify({
-      result: '<!-- reviewme:verdict=approve -->\n\nLooks good.',
+      result: '<!-- arbiter:verdict=approve -->\n\nLooks good.',
     });
     const out = parseClaudeCliOutput(stdout);
     expect(out.verdict).toBe('approve');
@@ -133,13 +133,13 @@ describe('parseClaudeCliOutput', () => {
 
 describe('parseVerdict', () => {
   test('parses each verdict value', () => {
-    expect(parseVerdict('<!-- reviewme:verdict=approve -->\nbody').verdict).toBe('approve');
-    expect(parseVerdict('<!-- reviewme:verdict=comment -->\nbody').verdict).toBe('comment');
-    expect(parseVerdict('<!-- reviewme:verdict=request-changes -->\nbody').verdict).toBe('request-changes');
+    expect(parseVerdict('<!-- arbiter:verdict=approve -->\nbody').verdict).toBe('approve');
+    expect(parseVerdict('<!-- arbiter:verdict=comment -->\nbody').verdict).toBe('comment');
+    expect(parseVerdict('<!-- arbiter:verdict=request-changes -->\nbody').verdict).toBe('request-changes');
   });
 
   test('strips the marker and leading whitespace from the body', () => {
-    const result = parseVerdict('<!-- reviewme:verdict=approve -->\n\nLooks fine.');
+    const result = parseVerdict('<!-- arbiter:verdict=approve -->\n\nLooks fine.');
     expect(result.body).toBe('Looks fine.');
   });
 
@@ -150,14 +150,14 @@ describe('parseVerdict', () => {
   });
 
   test('tolerates whitespace inside the marker', () => {
-    expect(parseVerdict('<!--   reviewme:verdict=approve   -->\nbody').verdict).toBe('approve');
+    expect(parseVerdict('<!--   arbiter:verdict=approve   -->\nbody').verdict).toBe('approve');
   });
 
   test('matches case-insensitively on the comment text', () => {
-    expect(parseVerdict('<!-- REVIEWME:VERDICT=approve -->\nbody').verdict).toBe('approve');
+    expect(parseVerdict('<!-- ARBITER:VERDICT=approve -->\nbody').verdict).toBe('approve');
   });
 
   test('rejects unknown verdicts (falls back to comment)', () => {
-    expect(parseVerdict('<!-- reviewme:verdict=lgtm -->\nbody').verdict).toBe('comment');
+    expect(parseVerdict('<!-- arbiter:verdict=lgtm -->\nbody').verdict).toBe('comment');
   });
 });

@@ -2,13 +2,13 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: reviewme
-      POSTGRES_PASSWORD: reviewme
-      POSTGRES_DB: reviewme
+      POSTGRES_USER: arbiter
+      POSTGRES_PASSWORD: arbiter
+      POSTGRES_DB: arbiter
     volumes:
       - db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U reviewme"]
+      test: ["CMD-SHELL", "pg_isready -U arbiter"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -23,7 +23,7 @@ services:
     environment:
       PORT: 8787
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8787}
-      DATABASE_URL: postgres://reviewme:reviewme@db:5432/reviewme
+      DATABASE_URL: postgres://arbiter:arbiter@db:5432/arbiter
       SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}

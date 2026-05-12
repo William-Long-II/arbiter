@@ -1,4 +1,4 @@
--- Initial schema for reviewme v2
+-- Initial schema for arbiter v2
 -- Run on every boot via src/db.ts; statements must be idempotent.
 
 CREATE TABLE IF NOT EXISTS users (

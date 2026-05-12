@@ -703,7 +703,7 @@ function landingPage(): string {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>reviewme</title>
+  <title>arbiter</title>
   <style>
     :root {
       --canvas: #010102;
@@ -780,12 +780,12 @@ function landingPage(): string {
   <main class="wrap">
     <header>
       <span class="mark" aria-hidden="true">◆</span>
-      <span class="wordmark">reviewme</span>
+      <span class="wordmark">arbiter</span>
     </header>
 
     <h1>Automated PR reviews,<br/>on your terms.</h1>
     <p class="tagline">
-      reviewme watches the pull requests in repos and orgs you choose, runs them
+      arbiter watches the pull requests in repos and orgs you choose, runs them
       through Claude, and posts a structured review back. Self-hosted, your
       GitHub access, your subscription.
     </p>
@@ -817,7 +817,7 @@ function landingPage(): string {
     </ul>
 
     <footer>
-      Health: <code>GET /healthz</code> · Source: self-hosted reviewme
+      Health: <code>GET /healthz</code> · Source: self-hosted arbiter
     </footer>
   </main>
 </body>

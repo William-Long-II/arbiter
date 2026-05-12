@@ -27,12 +27,12 @@ export type ReviewOutput = {
 /**
  * Pull the verdict marker off the leading whitespace of `body` and return
  * the verdict + the body with the marker removed. We instruct the model
- * to emit `<!-- reviewme:verdict=approve|comment|request-changes -->` as
+ * to emit `<!-- arbiter:verdict=approve|comment|request-changes -->` as
  * the first line of its response. If it forgets, default to `comment` —
  * the safe fallback that only posts as a regular review comment.
  */
 const VERDICT_RE =
-  /<!--\s*reviewme:verdict=(approve|comment|request-changes)\s*-->/i;
+  /<!--\s*arbiter:verdict=(approve|comment|request-changes)\s*-->/i;
 
 export function parseVerdict(body: string): { verdict: Verdict; body: string } {
   const match = body.match(VERDICT_RE);

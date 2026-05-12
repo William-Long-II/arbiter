@@ -43,7 +43,7 @@ describe('renderFooter', () => {
 describe('stampReviewBody', () => {
   test('appends rendered footer separated by ---', () => {
     const out = stampReviewBody('the review body', null, ctx);
-    expect(out).toMatch(/the review body\n\n---\n_Reviewed by reviewme/);
+    expect(out).toMatch(/the review body\n\n---\n_Reviewed by arbiter/);
   });
 
   test('no footer when template is empty string', () => {

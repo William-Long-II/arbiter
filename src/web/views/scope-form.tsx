@@ -51,7 +51,7 @@ export const ScopeFormPage: FC<Props> = ({
       <header class="page-header">
         <h1>{title}</h1>
         <p class="page-subhead">
-          A scope tells reviewme which pull requests to capture and how strictly to review them.
+          A scope tells arbiter which pull requests to capture and how strictly to review them.
         </p>
       </header>
 
@@ -294,7 +294,7 @@ export const ScopeFormPage: FC<Props> = ({
               data-footer-mode="standard"
               checked={v.footerTemplate === null}
             />
-            <span>Standard (default text, reviewme adds it)</span>
+            <span>Standard (default text, arbiter adds it)</span>
           </label>
           <label class="radio">
             <input
