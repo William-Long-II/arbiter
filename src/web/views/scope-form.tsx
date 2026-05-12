@@ -24,6 +24,7 @@ export const ScopeFormPage: FC<Props> = ({ user, scope, values, errors }) => {
       scope?.excludeAuthors ??
       ['dependabot[bot]', 'renovate[bot]'],
     claudeMode: values?.claudeMode ?? scope?.claudeMode ?? 'default',
+    autoApprove: values?.autoApprove ?? scope?.autoApprove ?? false,
     enabled: values?.enabled ?? scope?.enabled ?? true,
   };
 
@@ -156,6 +157,18 @@ export const ScopeFormPage: FC<Props> = ({ user, scope, values, errors }) => {
             />
             <span>API key (per-token billing via ANTHROPIC_API_KEY)</span>
           </label>
+        </fieldset>
+
+        <fieldset class="form-row">
+          <label class="checkbox">
+            <input type="checkbox" name="auto_approve" checked={v.autoApprove} />
+            <span>Auto-approve when no blockers</span>
+          </label>
+          <p class="form-hint">
+            Post as a GitHub <code class="mono-sm">APPROVE</code> when the reviewer's verdict
+            is <code class="mono-sm">approve</code>. Otherwise (or when the PR is yours, which
+            GitHub blocks anyway) posts as a regular <code class="mono-sm">COMMENT</code>.
+          </p>
         </fieldset>
 
         <fieldset class="form-row">

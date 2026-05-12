@@ -46,6 +46,19 @@ export const QueueDetailPage: FC<Props> = ({ user, review }) => {
         <MetaRow label="Mode">
           <span class="mono-sm">{review.claudeMode}</span>
         </MetaRow>
+        <MetaRow label="Auto-approve">
+          <span>{review.autoApprove ? 'enabled' : 'disabled'}</span>
+        </MetaRow>
+        {review.verdict ? (
+          <MetaRow label="Verdict">
+            <span class={`badge-pill verdict-${review.verdict}`}>{review.verdict}</span>
+          </MetaRow>
+        ) : null}
+        {review.postedEvent ? (
+          <MetaRow label="Posted as">
+            <span class="mono-sm">{review.postedEvent}</span>
+          </MetaRow>
+        ) : null}
         <MetaRow label="Attempts">
           <span>{review.attempt}</span>
         </MetaRow>

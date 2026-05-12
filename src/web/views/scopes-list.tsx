@@ -55,6 +55,11 @@ const ScopeRow: FC<{ scope: Scope }> = ({ scope }) => {
       <div class="scope-row-target">
         <span class="scope-kind">{scope.targetKind === 'org' ? 'org' : 'repo'}</span>
         <span class="mono scope-row-target-name">{scope.target}</span>
+        {scope.autoApprove ? (
+          <span class="badge-pill" title="Auto-approves when reviewer verdict is approve">
+            auto-approve
+          </span>
+        ) : null}
         {scope.claudeMode !== 'default' ? (
           <span class="badge-pill badge-pill-muted">{scope.claudeMode}</span>
         ) : null}

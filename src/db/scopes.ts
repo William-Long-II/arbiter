@@ -13,6 +13,10 @@ export type Scope = {
   scrutiny: Scrutiny;
   excludeAuthors: string[];
   claudeMode: ClaudeMode;
+  /** Opt-in: when true and the reviewer's verdict is `approve`, post the
+   * review with event=APPROVE instead of COMMENT. Self-authored PRs always
+   * fall back to COMMENT regardless (GitHub blocks self-approval). */
+  autoApprove: boolean;
   enabled: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -41,6 +45,7 @@ const SELECT_COLUMNS = sql`
   scrutiny,
   exclude_authors  AS "excludeAuthors",
   claude_mode      AS "claudeMode",
+  auto_approve     AS "autoApprove",
   enabled,
   created_at       AS "createdAt",
   updated_at       AS "updatedAt"
@@ -72,16 +77,19 @@ export type ScopeInput = {
   scrutiny: Scrutiny;
   excludeAuthors: string[];
   claudeMode: ClaudeMode;
+  autoApprove: boolean;
   enabled: boolean;
 };
 
 export async function createScope(userId: number, input: ScopeInput): Promise<Scope> {
   const [row] = await sql<Scope[]>`
     INSERT INTO scopes
-      (user_id, target_kind, target, base_branch_pattern, scrutiny, exclude_authors, claude_mode, enabled)
+      (user_id, target_kind, target, base_branch_pattern, scrutiny,
+       exclude_authors, claude_mode, auto_approve, enabled)
     VALUES
       (${userId}, ${input.targetKind}, ${input.target}, ${input.baseBranchPattern},
-       ${input.scrutiny}, ${input.excludeAuthors}, ${input.claudeMode}, ${input.enabled})
+       ${input.scrutiny}, ${input.excludeAuthors}, ${input.claudeMode},
+       ${input.autoApprove}, ${input.enabled})
     RETURNING ${SELECT_COLUMNS}
   `;
   if (!row) throw new Error('createScope: no row returned');
@@ -101,6 +109,7 @@ export async function updateScope(
         scrutiny = ${input.scrutiny},
         exclude_authors = ${input.excludeAuthors},
         claude_mode = ${input.claudeMode},
+        auto_approve = ${input.autoApprove},
         enabled = ${input.enabled},
         updated_at = now()
     WHERE id = ${id} AND user_id = ${userId}
@@ -163,6 +172,7 @@ export function parseScopeForm(
     .filter((s) => s.length > 0);
 
   const enabled = form.enabled === 'on' || form.enabled === 'true';
+  const autoApprove = form.auto_approve === 'on' || form.auto_approve === 'true';
 
   if (errors.length > 0) return { ok: false, errors };
   return {
@@ -174,6 +184,7 @@ export function parseScopeForm(
       scrutiny: scrutiny as Scrutiny,
       excludeAuthors,
       claudeMode: claudeMode as ClaudeMode,
+      autoApprove,
       enabled,
     },
   };

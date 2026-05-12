@@ -9,12 +9,35 @@ export type ReviewInput = {
   repoFull: string;
 };
 
+export type Verdict = 'approve' | 'comment' | 'request-changes';
+
 export type ReviewOutput = {
+  /** Body to post to GitHub, with the verdict marker stripped. */
   body: string;
+  /** Parsed from the verdict marker; defaults to `comment` if absent. */
+  verdict: Verdict;
   costUsd?: number;
   /** Raw underlying response for debugging — not persisted. */
   raw?: unknown;
 };
+
+/**
+ * Pull the verdict marker off the leading whitespace of `body` and return
+ * the verdict + the body with the marker removed. We instruct the model
+ * to emit `<!-- reviewme:verdict=approve|comment|request-changes -->` as
+ * the first line of its response. If it forgets, default to `comment` —
+ * the safe fallback that only posts as a regular review comment.
+ */
+const VERDICT_RE =
+  /<!--\s*reviewme:verdict=(approve|comment|request-changes)\s*-->/i;
+
+export function parseVerdict(body: string): { verdict: Verdict; body: string } {
+  const match = body.match(VERDICT_RE);
+  if (!match) return { verdict: 'comment', body };
+  const verdict = match[1]!.toLowerCase() as Verdict;
+  const stripped = body.replace(match[0], '').replace(/^\s+/, '');
+  return { verdict, body: stripped };
+}
 
 /**
  * Build the user message we send to Claude. Includes PR metadata and the
@@ -76,7 +99,8 @@ export function parseClaudeCliOutput(stdout: string): ReviewOutput {
     throw new Error(`claude -p response had no "result" string: ${trimmed.slice(0, 200)}`);
   }
   const cost = typeof obj.total_cost_usd === 'number' ? obj.total_cost_usd : undefined;
-  const out: ReviewOutput = { body: result, raw: parsed };
+  const { verdict, body } = parseVerdict(result);
+  const out: ReviewOutput = { body, verdict, raw: parsed };
   if (cost !== undefined) out.costUsd = cost;
   return out;
 }

@@ -152,4 +152,28 @@ describe('parseScopeForm', () => {
     if (!r.ok) throw new Error('unreachable');
     expect(r.input.claudeMode).toBe('default');
   });
+
+  test('auto_approve: missing ⇒ false', () => {
+    const r = parseScopeForm({
+      target_kind: 'repo',
+      target: 'a/b',
+      scrutiny: 'standard',
+      enabled: 'on',
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('unreachable');
+    expect(r.input.autoApprove).toBe(false);
+  });
+
+  test('auto_approve: checked ⇒ true', () => {
+    const r = parseScopeForm({
+      target_kind: 'repo',
+      target: 'a/b',
+      scrutiny: 'standard',
+      auto_approve: 'on',
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('unreachable');
+    expect(r.input.autoApprove).toBe(true);
+  });
 });
