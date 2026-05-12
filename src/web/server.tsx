@@ -2,6 +2,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { serveStatic } from 'hono/bun';
+import { streamSSE } from 'hono/streaming';
+import { subscribe } from '../events.ts';
 import { mountGithubOAuth } from '../github/oauth.ts';
 import { sql } from '../db.ts';
 import { currentUser, requireUser } from './auth.ts';
@@ -218,6 +220,59 @@ export function buildApp(): Hono {
     const review = await getReview(user.id, id);
     if (!review) return c.notFound();
     return c.html(<QueueDetailPage user={user} review={review} />);
+  });
+
+  // SSE stream of review state changes for the current user. Powered by
+  // Postgres LISTEN/NOTIFY: the worker NOTIFYs after every state change,
+  // db.ts's listener publishes onto the in-process events bus, and this
+  // handler relays events for the authenticated user only.
+  //
+  // No polling. Updates land within ~10ms of the worker committing.
+  app.get('/api/events/queue', requireUser, (c) => {
+    const user = c.get('user');
+    return streamSSE(c, async (stream) => {
+      // Buffer for events that arrive before the consumer writes catch up.
+      // Hono's stream.writeSSE is async; if a flurry of events arrive, we
+      // want to serialize them rather than interleave writes.
+      const queue: string[] = [];
+      let writing = false;
+      const drain = async () => {
+        if (writing) return;
+        writing = true;
+        try {
+          while (queue.length > 0) {
+            const payload = queue.shift()!;
+            await stream.writeSSE({ event: 'review', data: payload });
+          }
+        } finally {
+          writing = false;
+        }
+      };
+
+      const unsubscribe = subscribe(user.id, (event) => {
+        queue.push(JSON.stringify(event));
+        void drain();
+      });
+
+      // Some proxies idle-time out long-lived connections. A 25s heartbeat
+      // (SSE comment line) keeps them open. EventSource on the client
+      // ignores comments — they're just keep-alive.
+      const heartbeat = setInterval(() => {
+        void stream.writeSSE({ data: '', event: 'heartbeat' }).catch(() => {});
+      }, 25_000);
+
+      // Send one connect event so the client knows the channel is live.
+      await stream.writeSSE({ event: 'open', data: '{}' });
+
+      // Park until the client disconnects.
+      await new Promise<void>((resolve) => {
+        stream.onAbort(() => {
+          clearInterval(heartbeat);
+          unsubscribe();
+          resolve();
+        });
+      });
+    });
   });
 
   // Enqueue a review against a real PR. The worker picks it up on its

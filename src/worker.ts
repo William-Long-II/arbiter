@@ -7,11 +7,16 @@ import {
   type PendingReview,
   type PostedEvent,
 } from './db/reviews.ts';
+import { subscribeAll } from './events.ts';
 import { fetchPullRequest, postPullRequestReview, type ReviewEvent } from './github/pulls.ts';
 import { runReview, type Verdict } from './review/runner.ts';
 
 let timer: ReturnType<typeof setInterval> | null = null;
+let unsubscribe: (() => void) | null = null;
 let inFlight = false;
+// Set when an event fires while a job is in flight, so we don't miss work
+// queued during a long-running review. Drained when the in-flight job ends.
+let pendingWake = false;
 
 export function startWorker(): void {
   if (timer) return;
@@ -20,6 +25,19 @@ export function startWorker(): void {
   timer = setInterval(() => {
     void tick();
   }, ms);
+
+  // Wake immediately when a review is newly enqueued. NOTIFY-driven; no
+  // extra polling. While a tick is in-flight, the inFlight guard turns
+  // this into a no-op, but the timer + pendingWake flag together ensure
+  // the newly-queued review is picked up as soon as the worker is free.
+  unsubscribe = subscribeAll((event) => {
+    if (event.status !== 'queued') return;
+    if (inFlight) {
+      pendingWake = true;
+      return;
+    }
+    void tick();
+  });
 }
 
 export function stopWorker(): void {
@@ -27,10 +45,17 @@ export function stopWorker(): void {
     clearInterval(timer);
     timer = null;
   }
+  if (unsubscribe) {
+    unsubscribe();
+    unsubscribe = null;
+  }
 }
 
 async function tick(): Promise<void> {
-  if (inFlight) return;
+  if (inFlight) {
+    pendingWake = true;
+    return;
+  }
   inFlight = true;
   try {
     const job = await claimNext();
@@ -43,6 +68,16 @@ async function tick(): Promise<void> {
     console.error('[worker] tick error:', err);
   } finally {
     inFlight = false;
+    // If events arrived while we were busy, drain immediately rather than
+    // waiting for the next 5s timer tick.
+    if (pendingWake) {
+      pendingWake = false;
+      // setImmediate-equivalent: yield to the event loop before recursing so
+      // we don't blow the stack on a backlog.
+      queueMicrotask(() => {
+        void tick();
+      });
+    }
   }
 }
 

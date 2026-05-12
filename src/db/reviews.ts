@@ -1,6 +1,7 @@
 import { sql } from '../db.ts';
 import type { ClaudeMode, Scrutiny } from './scopes.ts';
 import type { Verdict } from '../review/format.ts';
+import type { ReviewEvent } from '../events.ts';
 
 export type ReviewStatus = 'queued' | 'running' | 'done' | 'failed' | 'skipped';
 export type PostedEvent = 'APPROVE' | 'COMMENT' | 'REQUEST_CHANGES';
@@ -76,6 +77,26 @@ const SELECT_REVIEW_COLUMNS = sql`
  * commits to the PR creates a new row; re-running on the same SHA does not.
  * Returns the row, or null if a row for this SHA already existed.
  */
+/**
+ * Fire a Postgres NOTIFY on `reviews_changed` so the in-process events
+ * bus (started by startEventListener in db.ts) can fan it out to any
+ * subscribed SSE clients. Cheap and asynchronous; no transactional
+ * coupling to the row update — if the NOTIFY is missed, the next
+ * load of /queue still shows the current state.
+ */
+async function notifyReviewChanged(review: PendingReview): Promise<void> {
+  const event: ReviewEvent = {
+    userId: review.userId,
+    reviewId: review.id,
+    status: review.status,
+    verdict: review.verdict,
+    postedEvent: review.postedEvent,
+    startedAt: review.startedAt ? review.startedAt.toISOString() : null,
+    finishedAt: review.finishedAt ? review.finishedAt.toISOString() : null,
+  };
+  await sql`SELECT pg_notify('reviews_changed', ${JSON.stringify(event)})`;
+}
+
 export async function enqueueReview(input: EnqueueInput): Promise<PendingReview | null> {
   const rows = await sql<PendingReview[]>`
     INSERT INTO pending_reviews (
@@ -100,7 +121,9 @@ export async function enqueueReview(input: EnqueueInput): Promise<PendingReview 
     ON CONFLICT (repo_full, pr_number, head_sha) DO NOTHING
     RETURNING ${SELECT_REVIEW_COLUMNS}
   `;
-  return rows[0] ?? null;
+  const row = rows[0] ?? null;
+  if (row) await notifyReviewChanged(row);
+  return row;
 }
 
 /**
@@ -123,7 +146,9 @@ export async function claimNext(): Promise<PendingReview | null> {
     )
     RETURNING ${SELECT_REVIEW_COLUMNS}
   `;
-  return rows[0] ?? null;
+  const row = rows[0] ?? null;
+  if (row) await notifyReviewChanged(row);
+  return row;
 }
 
 export async function markDone(
@@ -132,7 +157,7 @@ export async function markDone(
   verdict: Verdict,
   postedEvent: PostedEvent,
 ): Promise<void> {
-  await sql`
+  const rows = await sql<PendingReview[]>`
     UPDATE pending_reviews
     SET status = 'done',
         finished_at = now(),
@@ -141,17 +166,21 @@ export async function markDone(
         verdict = ${verdict},
         posted_event = ${postedEvent}
     WHERE id = ${id}
+    RETURNING ${SELECT_REVIEW_COLUMNS}
   `;
+  if (rows[0]) await notifyReviewChanged(rows[0]);
 }
 
 export async function markFailed(id: number, error: string): Promise<void> {
-  await sql`
+  const rows = await sql<PendingReview[]>`
     UPDATE pending_reviews
     SET status = 'failed',
         finished_at = now(),
         error = ${error}
     WHERE id = ${id}
+    RETURNING ${SELECT_REVIEW_COLUMNS}
   `;
+  if (rows[0]) await notifyReviewChanged(rows[0]);
 }
 
 export async function listReviews(userId: number, limit = 50): Promise<PendingReview[]> {

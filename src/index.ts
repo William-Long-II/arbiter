@@ -1,5 +1,5 @@
 import { config } from './config.ts';
-import { runMigrations } from './db.ts';
+import { runMigrations, startEventListener } from './db.ts';
 import { buildApp } from './web/server.tsx';
 import { startWorker, stopWorker } from './worker.ts';
 import { startPoller, stopPoller } from './github/poller.ts';
@@ -7,6 +7,11 @@ import { startPoller, stopPoller } from './github/poller.ts';
 async function main(): Promise<void> {
   console.log('[boot] running migrations…');
   await runMigrations();
+
+  // Start the Postgres LISTEN for review state changes BEFORE accepting
+  // HTTP requests, so the SSE route can subscribe to a live bus from
+  // the first request.
+  await startEventListener();
 
   const app = buildApp();
   const server = Bun.serve({
