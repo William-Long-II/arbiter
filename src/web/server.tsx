@@ -37,9 +37,11 @@ import {
 import {
   enqueueReview,
   getReview,
+  isReviewStatus,
   listReviews,
   listReviewsForPR,
   retryFailedReview,
+  type ReviewStatus,
 } from '../db/reviews.ts';
 import { QueuePage } from './views/queue-list.tsx';
 import { QueueDetailPage } from './views/queue-detail.tsx';
@@ -308,8 +310,17 @@ export function buildApp(): Hono {
 
   app.get('/queue', requireUser, async (c) => {
     const user = c.get('user');
-    const reviews = await listReviews(user.id, 100);
-    return c.html(<QueuePage user={user} reviews={reviews} />);
+    const statusParam = c.req.query('status');
+    const statusFilter: ReviewStatus[] = statusParam
+      ? statusParam.split(',').map((s) => s.trim()).filter(isReviewStatus)
+      : [];
+    const reviews = await listReviews(user.id, {
+      limit: 100,
+      statusFilter: statusFilter.length > 0 ? statusFilter : undefined,
+    });
+    return c.html(
+      <QueuePage user={user} reviews={reviews} statusFilter={statusFilter} />,
+    );
   });
 
   app.get('/queue/:id', requireUser, async (c) => {
