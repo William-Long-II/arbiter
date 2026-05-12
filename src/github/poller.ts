@@ -112,6 +112,10 @@ async function pollUser(user: {
     }
 
     for (const pr of prs) {
+      // Skip PRs configured for auto-merge — the author has already
+      // committed to "merge when ready"; a generated review is wasted
+      // effort and may post comments to a PR that's about to disappear.
+      if (pr.autoMerge) continue;
       const matched = matchScope(pr, rules, user.login);
       if (!matched) continue;
       const claudeMode =

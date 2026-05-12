@@ -32,6 +32,7 @@ function pr(over: Partial<PRDetails> = {}): PRDetails {
     headBranch: 'feature/x',
     headSha: 'abc123',
     draft: false,
+    autoMerge: false,
     ...over,
   };
 }

@@ -36,6 +36,10 @@ export type PRDetails = {
   headBranch: string;
   headSha: string;
   draft: boolean;
+  /** True if the PR is configured to auto-merge once checks pass. Poller
+   * skips these — if the author has already opted into "merge when ready,"
+   * a generated review is wasted effort. */
+  autoMerge: boolean;
 };
 
 /**
@@ -74,6 +78,7 @@ export async function fetchPullRequest(
       headBranch: m.head.ref,
       headSha: m.head.sha,
       draft: m.draft ?? false,
+      autoMerge: m.auto_merge !== null,
     },
     diff: diffResp.data as unknown as string,
   };
@@ -113,6 +118,7 @@ export async function listOpenPullsForRepo(
         headBranch: p.head.ref,
         headSha: p.head.sha,
         draft: p.draft ?? false,
+        autoMerge: p.auto_merge !== null,
       });
     }
     if (res.data.length < LIST_PAGE_SIZE) break;
@@ -174,6 +180,7 @@ export async function listOpenPullsForOrg(
           headBranch: p.head.ref,
           headSha: p.head.sha,
           draft: p.draft ?? false,
+          autoMerge: p.auto_merge !== null,
         };
       } catch {
         return null; // Skip individual fetch failures (deleted, perms changed, etc.)
