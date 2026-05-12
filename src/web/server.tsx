@@ -424,12 +424,14 @@ export function buildApp(): Hono {
         void drain();
       });
 
-      // Some proxies idle-time out long-lived connections. A 25s heartbeat
-      // (SSE comment line) keeps them open. EventSource on the client
-      // ignores comments — they're just keep-alive.
+      // Some proxies idle-time out long-lived connections. A 15s heartbeat
+      // (SSE comment line) keeps them open. The Bun server's own
+      // idleTimeout is disabled in src/index.ts; this keeps us safe behind
+      // anything else (nginx, cloudflare) that imposes a shorter limit.
+      // EventSource on the client treats events with empty data as keep-alive.
       const heartbeat = setInterval(() => {
         void stream.writeSSE({ data: '', event: 'heartbeat' }).catch(() => {});
-      }, 25_000);
+      }, 15_000);
 
       // Send one connect event so the client knows the channel is live.
       await stream.writeSSE({ event: 'open', data: '{}' });
