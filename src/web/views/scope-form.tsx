@@ -10,9 +10,20 @@ type Props = {
   /** Form values (for repopulating after a validation error). */
   values?: Partial<ScopeInput>;
   errors?: string[];
+  /** Autocomplete suggestions: every accessible repo as "owner/name". */
+  accessibleRepos?: string[];
+  /** Autocomplete suggestions: unique org owners the user has access to. */
+  accessibleOrgs?: string[];
 };
 
-export const ScopeFormPage: FC<Props> = ({ user, scope, values, errors }) => {
+export const ScopeFormPage: FC<Props> = ({
+  user,
+  scope,
+  values,
+  errors,
+  accessibleRepos = [],
+  accessibleOrgs = [],
+}) => {
   const editing = scope !== null;
   const v = {
     targetKind: values?.targetKind ?? scope?.targetKind ?? 'repo',
@@ -72,13 +83,55 @@ export const ScopeFormPage: FC<Props> = ({ user, scope, values, errors }) => {
             />
             <span>Whole org</span>
           </label>
+          {/*
+            Native <datalist> autocomplete. Two lists — repos (owner/name)
+            and orgs (just owner) — and a tiny inline script swaps which
+            list the target input uses based on the radio selection. No
+            client framework, no fetch, just rendered server-side from
+            the cached repo list.
+          */}
           <input
+            id="scope-target"
             class="text-input form-input-wide"
             name="target"
-            placeholder="owner/name (or just owner for an org)"
+            placeholder={v.targetKind === 'org' ? 'owner' : 'owner/name'}
             value={v.target}
+            list={v.targetKind === 'org' ? 'scope-orgs' : 'scope-repos'}
             autoComplete="off"
             required
+          />
+          <datalist id="scope-repos">
+            {accessibleRepos.map((r) => (
+              <option value={r} />
+            ))}
+          </datalist>
+          <datalist id="scope-orgs">
+            {accessibleOrgs.map((o) => (
+              <option value={o} />
+            ))}
+          </datalist>
+          {accessibleRepos.length > 0 ? (
+            <p class="form-hint">
+              Start typing — {accessibleRepos.length} repo
+              {accessibleRepos.length === 1 ? '' : 's'} and {accessibleOrgs.length} org
+              {accessibleOrgs.length === 1 ? '' : 's'} available from your account.
+            </p>
+          ) : null}
+          <script
+            dangerouslySetInnerHTML={{
+              __html: `
+                (function() {
+                  var target = document.getElementById('scope-target');
+                  if (!target) return;
+                  document.querySelectorAll('input[name="target_kind"]').forEach(function(r) {
+                    r.addEventListener('change', function() {
+                      target.setAttribute('list', r.value === 'org' ? 'scope-orgs' : 'scope-repos');
+                      target.setAttribute('placeholder', r.value === 'org' ? 'owner' : 'owner/name');
+                    });
+                  });
+                })();
+              `,
+            }}
           />
         </fieldset>
 
