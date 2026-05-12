@@ -44,6 +44,16 @@ export const Layout: FC<PropsWithChildren<Props>> = ({
             )}
           </nav>
 
+          {user?.tokenRevokedAt ? (
+            <div class="auth-banner">
+              <span class="auth-banner-icon" aria-hidden="true">⚠</span>
+              <span class="auth-banner-text">
+                Your GitHub access has been revoked. Reviews can't run until you{' '}
+                <a class="auth-banner-link" href="/auth/github">re-authenticate</a>.
+              </span>
+            </div>
+          ) : null}
+
           <div class="app-body">
             <aside class="side-nav">
               <SideNavItem href="/queue" label="Queue" active={active === 'queue'} />

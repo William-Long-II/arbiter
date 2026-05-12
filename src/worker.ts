@@ -7,6 +7,7 @@ import {
   type PendingReview,
   type PostedEvent,
 } from './db/reviews.ts';
+import { markTokenRevoked } from './db/users.ts';
 import { subscribeAll } from './events.ts';
 import { stampReviewBody } from './review/footer.ts';
 import { fetchPullRequest, postPullRequestReview, type ReviewEvent } from './github/pulls.ts';
@@ -119,9 +120,23 @@ async function processJob(job: PendingReview): Promise<void> {
     console.log(`[worker] done #${job.id} (verdict=${result.verdict}, event=${event})`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // Detect a revoked OAuth token: Octokit RequestError surfaces a
+    // `status` of 401 when GitHub rejects the token. Mark the user so the
+    // top-nav banner can prompt re-auth; otherwise the worker will keep
+    // 401ing on every queued job for this user.
+    if (isUnauthorized(err)) {
+      await markTokenRevoked(job.userId);
+      console.error(`[worker] user ${job.userId} GitHub token revoked — banner will prompt re-auth`);
+    }
     await markFailed(job.id, message);
     console.error(`[worker] failed #${job.id}: ${message}`);
   }
+}
+
+function isUnauthorized(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const status = (err as { status?: unknown }).status;
+  return status === 401;
 }
 
 /**

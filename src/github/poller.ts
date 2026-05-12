@@ -2,6 +2,7 @@ import { config } from '../config.ts';
 import { sql } from '../db.ts';
 import { listScopes, type Scope } from '../db/scopes.ts';
 import { enqueueReview } from '../db/reviews.ts';
+import { markTokenRevoked } from '../db/users.ts';
 import { matchScope } from '../scope.ts';
 import {
   listOpenPullsForOrg,
@@ -98,6 +99,14 @@ async function pollUser(user: {
         : await listOpenPullsForOrg(user.token, first.target);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      // Same 401 detection the worker uses. A revoked token will hit this
+      // on every poll until the user re-auths; mark them so the banner
+      // shows up. We don't `return` — other users still get polled.
+      if (isUnauthorized(err)) {
+        await markTokenRevoked(user.id);
+        console.error(`[poller] user ${user.login} GitHub token revoked — banner will prompt re-auth`);
+        return enqueued;
+      }
       console.error(`[poller] list ${key}: ${message}`);
       continue;
     }
@@ -133,4 +142,10 @@ async function pollUser(user: {
     }
   }
   return enqueued;
+}
+
+function isUnauthorized(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const status = (err as { status?: unknown }).status;
+  return status === 401;
 }
