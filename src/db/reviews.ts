@@ -26,6 +26,12 @@ export type PendingReview = {
   personalityPrompt: string | null;
   status: ReviewStatus;
   attempt: number;
+  /** When set + in the future, the worker's claim query skips this row.
+   *  Used to wait out pending CI before reviewing. See deferReview. */
+  deferUntil: Date | null;
+  /** Bumped each time the row is deferred. Bounded; the worker proceeds
+   *  once defer_count crosses MAX_DEFERS regardless of CI state. */
+  deferCount: number;
   error: string | null;
   output: string | null;
   verdict: Verdict | null;
@@ -70,6 +76,8 @@ const SELECT_REVIEW_COLUMNS = sql`
   personality_prompt AS "personalityPrompt",
   status,
   attempt,
+  defer_until  AS "deferUntil",
+  defer_count  AS "deferCount",
   error,
   output,
   verdict,
@@ -150,10 +158,32 @@ export async function claimNext(): Promise<PendingReview | null> {
     WHERE id = (
       SELECT id FROM pending_reviews
       WHERE status = 'queued'
+        AND (defer_until IS NULL OR defer_until <= now())
       ORDER BY created_at
       FOR UPDATE SKIP LOCKED
       LIMIT 1
     )
+    RETURNING ${SELECT_REVIEW_COLUMNS}
+  `;
+  const row = rows[0] ?? null;
+  if (row) await notifyReviewChanged(row);
+  return row;
+}
+
+/**
+ * Send a claimed review back to the queue with a future defer_until
+ * timestamp. The next worker tick after defer_until will pick it up
+ * again. Bumps defer_count so the worker can bound the number of
+ * deferrals before proceeding with whatever CI signal exists.
+ */
+export async function deferReview(id: number, deferSeconds: number): Promise<PendingReview | null> {
+  const rows = await sql<PendingReview[]>`
+    UPDATE pending_reviews
+    SET status = 'queued',
+        defer_until = now() + (${deferSeconds} || ' seconds')::interval,
+        defer_count = defer_count + 1,
+        started_at = NULL
+    WHERE id = ${id}
     RETURNING ${SELECT_REVIEW_COLUMNS}
   `;
   const row = rows[0] ?? null;

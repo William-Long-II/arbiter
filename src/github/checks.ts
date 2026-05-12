@@ -16,6 +16,8 @@ export type ChecksSummary = {
   anyFailing: boolean;
   /** True iff every signal that has a terminal state is success. */
   allPassing: boolean;
+  /** True iff at least one signal is still 'pending'. */
+  hasPending: boolean;
   /** True iff at least one check-run / status was returned. */
   hasAny: boolean;
   signals: CheckSignal[];
@@ -72,6 +74,7 @@ export async function fetchChecksSummary(
   const empty: ChecksSummary = {
     anyFailing: false,
     allPassing: true,
+    hasPending: false,
     hasAny: false,
     signals: [],
   };
@@ -121,11 +124,12 @@ export async function fetchChecksSummary(
   if (signals.length === 0) return empty;
 
   const anyFailing = signals.some((s) => s.state === 'failure');
+  const hasPending = signals.some((s) => s.state === 'pending');
   const allPassing =
     signals.filter((s) => TERMINAL.has(s.state)).every((s) => s.state === 'success') &&
     signals.some((s) => s.state === 'success');
 
-  return { anyFailing, allPassing, hasAny: true, signals };
+  return { anyFailing, allPassing, hasPending, hasAny: true, signals };
 }
 
 /**

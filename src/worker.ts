@@ -2,6 +2,7 @@ import { config } from './config.ts';
 import { sql } from './db.ts';
 import {
   claimNext,
+  deferReview,
   markDone,
   markFailed,
   type PendingReview,
@@ -20,6 +21,13 @@ let inFlight = false;
 // Set when an event fires while a job is in flight, so we don't miss work
 // queued during a long-running review. Drained when the in-flight job ends.
 let pendingWake = false;
+
+// Bounded deferral when CI hasn't finished yet. Two-minute interval × ten
+// attempts = ~20 minutes total before we proceed regardless. CI that takes
+// longer than 20 minutes shouldn't starve the review forever; the prompt
+// will note any still-pending checks under non-blocking.
+const DEFER_INTERVAL_SECONDS = 120;
+const MAX_DEFERS = 10;
 
 export function startWorker(): void {
   if (timer) return;
@@ -98,6 +106,24 @@ async function processJob(job: PendingReview): Promise<void> {
     // simple; fetchChecksSummary swallows its own errors so we'll never
     // fail the review just because the checks API hiccupped.
     const checks = await fetchChecksSummary(userRow.token, job.repoFull, pr.headSha);
+
+    // If at least one check is still pending and none have failed yet,
+    // hold the review for a couple of minutes — we'd rather wait for the
+    // full picture than land "CI was still running, FYI" reviews. After
+    // MAX_DEFERS attempts (~20 min total) we proceed anyway so a stuck or
+    // hours-long pipeline doesn't starve the review forever.
+    if (
+      checks.hasPending &&
+      !checks.anyFailing &&
+      job.deferCount < MAX_DEFERS
+    ) {
+      await deferReview(job.id, DEFER_INTERVAL_SECONDS);
+      console.log(
+        `[worker] deferring #${job.id} (${job.repoFull}#${job.prNumber}) — CI pending, defer ${job.deferCount + 1}/${MAX_DEFERS}`,
+      );
+      return;
+    }
+
     const ciSummary = formatChecksSummary(checks);
     const result = await runReview(
       {
