@@ -20,6 +20,8 @@ export type PendingReview = {
   scrutiny: Scrutiny;
   claudeMode: Exclude<ClaudeMode, 'default'>;
   autoApprove: boolean;
+  /** Snapshotted from the matching scope at enqueue time. See db/scopes.ts. */
+  footerTemplate: string | null;
   status: ReviewStatus;
   attempt: number;
   error: string | null;
@@ -44,6 +46,7 @@ export type EnqueueInput = {
   scrutiny: Scrutiny;
   claudeMode: Exclude<ClaudeMode, 'default'>;
   autoApprove: boolean;
+  footerTemplate: string | null;
 };
 
 const SELECT_REVIEW_COLUMNS = sql`
@@ -60,6 +63,7 @@ const SELECT_REVIEW_COLUMNS = sql`
   scrutiny,
   claude_mode  AS "claudeMode",
   auto_approve AS "autoApprove",
+  footer_template AS "footerTemplate",
   status,
   attempt,
   error,
@@ -102,7 +106,7 @@ export async function enqueueReview(input: EnqueueInput): Promise<PendingReview 
     INSERT INTO pending_reviews (
       user_id, scope_id, repo_full, pr_number, pr_title, pr_author,
       base_branch, head_branch, head_sha, scrutiny, claude_mode,
-      auto_approve, status
+      auto_approve, footer_template, status
     ) VALUES (
       ${input.userId},
       ${input.scopeId ?? null},
@@ -116,6 +120,7 @@ export async function enqueueReview(input: EnqueueInput): Promise<PendingReview 
       ${input.scrutiny},
       ${input.claudeMode},
       ${input.autoApprove},
+      ${input.footerTemplate},
       'queued'
     )
     ON CONFLICT (repo_full, pr_number, head_sha) DO NOTHING

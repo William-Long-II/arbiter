@@ -1,6 +1,7 @@
 import type { FC } from 'hono/jsx';
 import type { User } from '../../db/users.ts';
 import type { Scope, ScopeInput } from '../../db/scopes.ts';
+import { DEFAULT_FOOTER_TEMPLATE } from '../../review/footer.ts';
 import { Layout } from './layout.tsx';
 
 type Props = {
@@ -36,6 +37,7 @@ export const ScopeFormPage: FC<Props> = ({
       ['dependabot[bot]', 'renovate[bot]'],
     claudeMode: values?.claudeMode ?? scope?.claudeMode ?? 'default',
     autoApprove: values?.autoApprove ?? scope?.autoApprove ?? false,
+    footerTemplate: values?.footerTemplate ?? scope?.footerTemplate ?? null,
     enabled: values?.enabled ?? scope?.enabled ?? true,
   };
 
@@ -222,6 +224,77 @@ export const ScopeFormPage: FC<Props> = ({
             is <code class="mono-sm">approve</code>. Otherwise (or when the PR is yours, which
             GitHub blocks anyway) posts as a regular <code class="mono-sm">COMMENT</code>.
           </p>
+        </fieldset>
+
+        <fieldset class="form-row">
+          <legend>Review footer</legend>
+          {/*
+            Tri-state: standard (null) / none ('') / custom (text). The
+            radio drives db/scopes.ts's parseScopeForm. The textarea only
+            matters when "custom" is selected; we pre-fill it with the
+            user's prior custom value or the default template so they have
+            a starting point to edit. The inline script swaps the
+            textarea's disabled state for visual affordance.
+          */}
+          <label class="radio">
+            <input
+              type="radio"
+              name="footer_mode"
+              value="standard"
+              data-footer-mode="standard"
+              checked={v.footerTemplate === null}
+            />
+            <span>Standard (default text, reviewme adds it)</span>
+          </label>
+          <label class="radio">
+            <input
+              type="radio"
+              name="footer_mode"
+              value="none"
+              data-footer-mode="none"
+              checked={v.footerTemplate === ''}
+            />
+            <span>No footer (post the review body as-is)</span>
+          </label>
+          <label class="radio">
+            <input
+              type="radio"
+              name="footer_mode"
+              value="custom"
+              data-footer-mode="custom"
+              checked={typeof v.footerTemplate === 'string' && v.footerTemplate !== ''}
+            />
+            <span>Custom template</span>
+          </label>
+          <textarea
+            class="text-input form-textarea"
+            name="footer_template"
+            rows={3}
+            id="footer-template"
+            disabled={!(typeof v.footerTemplate === 'string' && v.footerTemplate !== '')}
+          >{v.footerTemplate && v.footerTemplate !== '' ? v.footerTemplate : DEFAULT_FOOTER_TEMPLATE}</textarea>
+          <p class="form-hint">
+            Available placeholders: <code class="mono-sm">{'{{scrutiny}}'}</code>,{' '}
+            <code class="mono-sm">{'{{mode}}'}</code>,{' '}
+            <code class="mono-sm">{'{{verdict}}'}</code>,{' '}
+            <code class="mono-sm">{'{{posted_as}}'}</code>.
+          </p>
+          <script
+            dangerouslySetInnerHTML={{
+              __html: `
+                (function() {
+                  var ta = document.getElementById('footer-template');
+                  if (!ta) return;
+                  document.querySelectorAll('input[name="footer_mode"]').forEach(function(r) {
+                    r.addEventListener('change', function() {
+                      ta.disabled = r.value !== 'custom';
+                      if (r.value === 'custom') ta.focus();
+                    });
+                  });
+                })();
+              `,
+            }}
+          />
         </fieldset>
 
         <fieldset class="form-row">

@@ -17,6 +17,14 @@ export type Scope = {
    * review with event=APPROVE instead of COMMENT. Self-authored PRs always
    * fall back to COMMENT regardless (GitHub blocks self-approval). */
   autoApprove: boolean;
+  /**
+   * Tri-state footer config:
+   * - null → use built-in default template
+   * - ''   → no footer
+   * - any other string → custom template (supports {{scrutiny}}, {{mode}},
+   *   {{verdict}}, {{posted_as}} placeholders)
+   */
+  footerTemplate: string | null;
   enabled: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -46,6 +54,7 @@ const SELECT_COLUMNS = sql`
   exclude_authors  AS "excludeAuthors",
   claude_mode      AS "claudeMode",
   auto_approve     AS "autoApprove",
+  footer_template  AS "footerTemplate",
   enabled,
   created_at       AS "createdAt",
   updated_at       AS "updatedAt"
@@ -78,6 +87,7 @@ export type ScopeInput = {
   excludeAuthors: string[];
   claudeMode: ClaudeMode;
   autoApprove: boolean;
+  footerTemplate: string | null;
   enabled: boolean;
 };
 
@@ -85,11 +95,11 @@ export async function createScope(userId: number, input: ScopeInput): Promise<Sc
   const [row] = await sql<Scope[]>`
     INSERT INTO scopes
       (user_id, target_kind, target, base_branch_pattern, scrutiny,
-       exclude_authors, claude_mode, auto_approve, enabled)
+       exclude_authors, claude_mode, auto_approve, footer_template, enabled)
     VALUES
       (${userId}, ${input.targetKind}, ${input.target}, ${input.baseBranchPattern},
        ${input.scrutiny}, ${input.excludeAuthors}, ${input.claudeMode},
-       ${input.autoApprove}, ${input.enabled})
+       ${input.autoApprove}, ${input.footerTemplate}, ${input.enabled})
     RETURNING ${SELECT_COLUMNS}
   `;
   if (!row) throw new Error('createScope: no row returned');
@@ -110,6 +120,7 @@ export async function updateScope(
         exclude_authors = ${input.excludeAuthors},
         claude_mode = ${input.claudeMode},
         auto_approve = ${input.autoApprove},
+        footer_template = ${input.footerTemplate},
         enabled = ${input.enabled},
         updated_at = now()
     WHERE id = ${id} AND user_id = ${userId}
@@ -174,6 +185,26 @@ export function parseScopeForm(
   const enabled = form.enabled === 'on' || form.enabled === 'true';
   const autoApprove = form.auto_approve === 'on' || form.auto_approve === 'true';
 
+  // Footer is a 3-way choice driven by a radio (footer_mode):
+  //   'standard' → footerTemplate = null (worker uses built-in default)
+  //   'none'     → footerTemplate = ''   (no footer at all)
+  //   'custom'   → footerTemplate = whatever's in the footer_template textarea
+  let footerTemplate: string | null;
+  switch (form.footer_mode) {
+    case 'none':
+      footerTemplate = '';
+      break;
+    case 'custom':
+      // Trim trailing whitespace. Empty custom is treated like 'none' —
+      // the user chose custom but left the template blank.
+      footerTemplate = (form.footer_template ?? '').replace(/\s+$/, '') || '';
+      break;
+    case 'standard':
+    default:
+      footerTemplate = null;
+      break;
+  }
+
   if (errors.length > 0) return { ok: false, errors };
   return {
     ok: true,
@@ -185,6 +216,7 @@ export function parseScopeForm(
       excludeAuthors,
       claudeMode: claudeMode as ClaudeMode,
       autoApprove,
+      footerTemplate,
       enabled,
     },
   };
