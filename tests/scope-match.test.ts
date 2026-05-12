@@ -15,6 +15,7 @@ function scope(over: Partial<Scope> = {}): Scope {
     claudeMode: 'default',
     autoApprove: false,
     footerTemplate: null,
+    personalityPrompt: null,
     enabled: true,
     createdAt: new Date(),
     updatedAt: new Date(),

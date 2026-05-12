@@ -25,6 +25,12 @@ export type Scope = {
    *   {{verdict}}, {{posted_as}} placeholders)
    */
   footerTemplate: string | null;
+  /**
+   * Free-text guidance appended to the scrutiny system prompt. Empty/null =
+   * default behavior. Use to adjust focus ("be strict on auth code"), tone
+   * ("snarky but constructive"), or context ("this is a Rust project").
+   */
+  personalityPrompt: string | null;
   enabled: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -52,9 +58,10 @@ const SELECT_COLUMNS = sql`
   base_branch_pattern AS "baseBranchPattern",
   scrutiny,
   exclude_authors  AS "excludeAuthors",
-  claude_mode      AS "claudeMode",
-  auto_approve     AS "autoApprove",
-  footer_template  AS "footerTemplate",
+  claude_mode        AS "claudeMode",
+  auto_approve       AS "autoApprove",
+  footer_template    AS "footerTemplate",
+  personality_prompt AS "personalityPrompt",
   enabled,
   created_at       AS "createdAt",
   updated_at       AS "updatedAt"
@@ -88,6 +95,7 @@ export type ScopeInput = {
   claudeMode: ClaudeMode;
   autoApprove: boolean;
   footerTemplate: string | null;
+  personalityPrompt: string | null;
   enabled: boolean;
 };
 
@@ -95,11 +103,13 @@ export async function createScope(userId: number, input: ScopeInput): Promise<Sc
   const [row] = await sql<Scope[]>`
     INSERT INTO scopes
       (user_id, target_kind, target, base_branch_pattern, scrutiny,
-       exclude_authors, claude_mode, auto_approve, footer_template, enabled)
+       exclude_authors, claude_mode, auto_approve, footer_template,
+       personality_prompt, enabled)
     VALUES
       (${userId}, ${input.targetKind}, ${input.target}, ${input.baseBranchPattern},
        ${input.scrutiny}, ${input.excludeAuthors}, ${input.claudeMode},
-       ${input.autoApprove}, ${input.footerTemplate}, ${input.enabled})
+       ${input.autoApprove}, ${input.footerTemplate},
+       ${input.personalityPrompt}, ${input.enabled})
     RETURNING ${SELECT_COLUMNS}
   `;
   if (!row) throw new Error('createScope: no row returned');
@@ -121,6 +131,7 @@ export async function updateScope(
         claude_mode = ${input.claudeMode},
         auto_approve = ${input.autoApprove},
         footer_template = ${input.footerTemplate},
+        personality_prompt = ${input.personalityPrompt},
         enabled = ${input.enabled},
         updated_at = now()
     WHERE id = ${id} AND user_id = ${userId}
@@ -184,6 +195,9 @@ export function parseScopeForm(
 
   const enabled = form.enabled === 'on' || form.enabled === 'true';
   const autoApprove = form.auto_approve === 'on' || form.auto_approve === 'true';
+  // Personality is plain text. Trim trailing whitespace, treat empty as null.
+  const personalityRaw = (form.personality_prompt ?? '').replace(/\s+$/, '');
+  const personalityPrompt = personalityRaw.length > 0 ? personalityRaw : null;
 
   // Footer is a 3-way choice driven by a radio (footer_mode):
   //   'standard' → footerTemplate = null (worker uses built-in default)
@@ -217,6 +231,7 @@ export function parseScopeForm(
       claudeMode: claudeMode as ClaudeMode,
       autoApprove,
       footerTemplate,
+      personalityPrompt,
       enabled,
     },
   };

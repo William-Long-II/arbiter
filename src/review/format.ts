@@ -7,6 +7,9 @@ export type ReviewInput = {
   prTitle: string;
   prAuthor: string;
   repoFull: string;
+  /** Optional free-text guidance appended to the scrutiny system prompt.
+   * Carried through from scope.personalityPrompt at enqueue time. */
+  personalityPrompt?: string | null;
 };
 
 export type Verdict = 'approve' | 'comment' | 'request-changes';

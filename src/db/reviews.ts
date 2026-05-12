@@ -22,6 +22,8 @@ export type PendingReview = {
   autoApprove: boolean;
   /** Snapshotted from the matching scope at enqueue time. See db/scopes.ts. */
   footerTemplate: string | null;
+  /** Snapshotted from the matching scope at enqueue time. See db/scopes.ts. */
+  personalityPrompt: string | null;
   status: ReviewStatus;
   attempt: number;
   error: string | null;
@@ -47,6 +49,7 @@ export type EnqueueInput = {
   claudeMode: Exclude<ClaudeMode, 'default'>;
   autoApprove: boolean;
   footerTemplate: string | null;
+  personalityPrompt: string | null;
 };
 
 const SELECT_REVIEW_COLUMNS = sql`
@@ -64,6 +67,7 @@ const SELECT_REVIEW_COLUMNS = sql`
   claude_mode  AS "claudeMode",
   auto_approve AS "autoApprove",
   footer_template AS "footerTemplate",
+  personality_prompt AS "personalityPrompt",
   status,
   attempt,
   error,
@@ -106,7 +110,7 @@ export async function enqueueReview(input: EnqueueInput): Promise<PendingReview 
     INSERT INTO pending_reviews (
       user_id, scope_id, repo_full, pr_number, pr_title, pr_author,
       base_branch, head_branch, head_sha, scrutiny, claude_mode,
-      auto_approve, footer_template, status
+      auto_approve, footer_template, personality_prompt, status
     ) VALUES (
       ${input.userId},
       ${input.scopeId ?? null},
@@ -121,6 +125,7 @@ export async function enqueueReview(input: EnqueueInput): Promise<PendingReview 
       ${input.claudeMode},
       ${input.autoApprove},
       ${input.footerTemplate},
+      ${input.personalityPrompt},
       'queued'
     )
     ON CONFLICT (repo_full, pr_number, head_sha) DO NOTHING
