@@ -309,6 +309,11 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
 .status-failed { color: #c64545; }
 .status-skipped { color: var(--ink-subtle); }
 
+/* Verdict pills (parsed from the marker the reviewer emits) */
+.verdict-approve { color: #27a644; }
+.verdict-comment { color: var(--ink-muted); }
+.verdict-request-changes { color: #c64545; }
+
 /* Queue list */
 .queue-list-header {
   grid-template-columns: minmax(0, 1fr) 80px 90px 56px;

@@ -213,6 +213,7 @@ export function buildApp(): Hono {
     const scrutiny = isScrutiny(b.scrutiny) ? b.scrutiny : 'standard';
     const requestedMode =
       b.mode === 'subscription' || b.mode === 'api' ? b.mode : config.claude.defaultMode;
+    const autoApprove = b.autoApprove === true;
 
     try {
       const { pr } = await fetchPullRequest(user.githubToken, repoFull, prNumber);
@@ -227,6 +228,7 @@ export function buildApp(): Hono {
         headSha: pr.headSha,
         scrutiny,
         claudeMode: requestedMode,
+        autoApprove,
       });
       if (!row) {
         return c.json(

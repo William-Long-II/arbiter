@@ -6,11 +6,12 @@ import { config } from '../config.ts';
 import {
   formatUserMessage,
   parseClaudeCliOutput,
+  parseVerdict,
   type ReviewInput,
   type ReviewOutput,
 } from './format.ts';
 
-export type { ReviewInput, ReviewOutput } from './format.ts';
+export type { ReviewInput, ReviewOutput, Verdict } from './format.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const promptsDir = join(here, 'prompts');
@@ -147,14 +148,15 @@ async function runViaAnthropicApi(input: ReviewInput): Promise<ReviewOutput> {
     throw err;
   }
 
-  const body = response.content
+  const text = response.content
     .filter((block): block is Anthropic.TextBlock => block.type === 'text')
     .map((block) => block.text)
     .join('\n\n');
 
-  if (!body) {
+  if (!text) {
     throw new Error('Anthropic API returned no text content');
   }
 
-  return { body, raw: response };
+  const { verdict, body } = parseVerdict(text);
+  return { body, verdict, raw: response };
 }

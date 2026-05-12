@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { formatUserMessage, parseClaudeCliOutput } from '../src/review/format.ts';
+import {
+  formatUserMessage,
+  parseClaudeCliOutput,
+  parseVerdict,
+} from '../src/review/format.ts';
 
 describe('formatUserMessage', () => {
   test('includes PR metadata and fenced diff', () => {
@@ -108,5 +112,52 @@ describe('parseClaudeCliOutput', () => {
   test('trims wrapping whitespace before parsing', () => {
     const stdout = '\n\n' + JSON.stringify({ result: 'OK' }) + '\n';
     expect(parseClaudeCliOutput(stdout).body).toBe('OK');
+  });
+
+  test('extracts verdict from result body', () => {
+    const stdout = JSON.stringify({
+      result: '<!-- reviewme:verdict=approve -->\n\nLooks good.',
+    });
+    const out = parseClaudeCliOutput(stdout);
+    expect(out.verdict).toBe('approve');
+    expect(out.body).toBe('Looks good.');
+  });
+
+  test('verdict defaults to "comment" when marker is missing', () => {
+    const stdout = JSON.stringify({ result: 'No marker here.' });
+    const out = parseClaudeCliOutput(stdout);
+    expect(out.verdict).toBe('comment');
+    expect(out.body).toBe('No marker here.');
+  });
+});
+
+describe('parseVerdict', () => {
+  test('parses each verdict value', () => {
+    expect(parseVerdict('<!-- reviewme:verdict=approve -->\nbody').verdict).toBe('approve');
+    expect(parseVerdict('<!-- reviewme:verdict=comment -->\nbody').verdict).toBe('comment');
+    expect(parseVerdict('<!-- reviewme:verdict=request-changes -->\nbody').verdict).toBe('request-changes');
+  });
+
+  test('strips the marker and leading whitespace from the body', () => {
+    const result = parseVerdict('<!-- reviewme:verdict=approve -->\n\nLooks fine.');
+    expect(result.body).toBe('Looks fine.');
+  });
+
+  test('defaults to comment when marker is absent', () => {
+    const result = parseVerdict('No marker here.');
+    expect(result.verdict).toBe('comment');
+    expect(result.body).toBe('No marker here.');
+  });
+
+  test('tolerates whitespace inside the marker', () => {
+    expect(parseVerdict('<!--   reviewme:verdict=approve   -->\nbody').verdict).toBe('approve');
+  });
+
+  test('matches case-insensitively on the comment text', () => {
+    expect(parseVerdict('<!-- REVIEWME:VERDICT=approve -->\nbody').verdict).toBe('approve');
+  });
+
+  test('rejects unknown verdicts (falls back to comment)', () => {
+    expect(parseVerdict('<!-- reviewme:verdict=lgtm -->\nbody').verdict).toBe('comment');
   });
 });
