@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  globalSubscriberCount,
   publish,
   subscribe,
+  subscribeAll,
   subscriberCount,
   type ReviewEvent,
 } from '../src/events.ts';
@@ -22,8 +24,8 @@ function ev(over: Partial<ReviewEvent> = {}): ReviewEvent {
 describe('events bus', () => {
   test('subscribe + publish fan-out to all subscribers for a user', () => {
     const received: number[] = [];
-    const u1 = subscribe(1, () => received.push(1));
-    const u2 = subscribe(1, () => received.push(2));
+    const u1 = subscribe(1, () => { received.push(1); });
+    const u2 = subscribe(1, () => { received.push(2); });
     publish(ev({ userId: 1 }));
     expect(received).toEqual([1, 2]);
     u1();
@@ -93,6 +95,50 @@ describe('events bus', () => {
     const u2 = subscribe(5, () => { received.push(2); });
     publish(ev({ userId: 5 }));
     expect(received).toEqual([2]);
+    u1();
+    u2();
+  });
+});
+
+describe('subscribeAll (global listeners)', () => {
+  test('receives events for every user', () => {
+    const all: ReviewEvent[] = [];
+    const unsub = subscribeAll((e) => { all.push(e); });
+    publish(ev({ userId: 100, reviewId: 1 }));
+    publish(ev({ userId: 200, reviewId: 2 }));
+    publish(ev({ userId: 300, reviewId: 3 }));
+    expect(all.map((e) => e.reviewId)).toEqual([1, 2, 3]);
+    unsub();
+  });
+
+  test('global and user-specific listeners both fire for the same event', () => {
+    const global: number[] = [];
+    const userSpecific: number[] = [];
+    const ug = subscribeAll((e) => { global.push(e.reviewId); });
+    const us = subscribe(42, (e) => { userSpecific.push(e.reviewId); });
+    publish(ev({ userId: 42, reviewId: 999 }));
+    expect(global).toEqual([999]);
+    expect(userSpecific).toEqual([999]);
+    ug();
+    us();
+  });
+
+  test('global subscriber count tracks adds and removes', () => {
+    expect(globalSubscriberCount()).toBe(0);
+    const u1 = subscribeAll(() => {});
+    const u2 = subscribeAll(() => {});
+    expect(globalSubscriberCount()).toBe(2);
+    u1();
+    u2();
+    expect(globalSubscriberCount()).toBe(0);
+  });
+
+  test('throwing global subscriber does not block siblings', () => {
+    const seen: number[] = [];
+    const u1 = subscribeAll(() => { throw new Error('boom2'); });
+    const u2 = subscribeAll((e) => { seen.push(e.reviewId); });
+    publish(ev({ reviewId: 7 }));
+    expect(seen).toEqual([7]);
     u1();
     u2();
   });
