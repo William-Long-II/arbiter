@@ -23,6 +23,7 @@ import {
   isClaudeMode,
   isScrutiny,
   isTargetKind,
+  isTriggerMode,
   listScopes,
   parseScopeForm,
   updateScope,
@@ -676,6 +677,7 @@ function partialFromForm(form: Record<string, string>): Parameters<typeof ScopeF
       const v = (form.personality_prompt ?? '').replace(/\s+$/, '');
       return v.length > 0 ? v : null;
     })(),
+    triggerMode: isTriggerMode(form.trigger_mode) ? form.trigger_mode : 'open',
     enabled: form.enabled === 'on' || form.enabled === 'true',
   };
 }

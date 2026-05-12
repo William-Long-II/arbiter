@@ -126,66 +126,178 @@ export async function listOpenPullsForRepo(
   return out;
 }
 
+export type ScopeTarget = {
+  kind: 'org' | 'repo';
+  /** "owner" for org targets, "owner/name" for repo targets. */
+  target: string;
+};
+
 /**
- * List open PRs across an entire org. Uses the search API (`is:pr is:open
- * org:foo`) rather than walking every repo — a 334-repo org would burn the
- * full hourly quota every poll if we listed pulls per repo.
- *
- * Search results don't include head/base SHAs, so each match is fetched
- * individually via pulls.get. Capped at 200 open PRs per poll (search
- * returns 100 per page; we walk at most two pages). Larger orgs may
- * temporarily miss PRs beyond that — fine for MVP; revisit if it becomes
- * a real constraint.
+ * One open PR returned by the GraphQL search. Mirrors PRDetails plus a
+ * `reviewRequestedForViewer` flag — derived from whether the PR was found
+ * via the `review-requested:@me` half of the query (server-side, so it
+ * accounts for team memberships).
  */
-export async function listOpenPullsForOrg(
-  token: string,
-  org: string,
-): Promise<PRDetails[]> {
-  const octokit = octokitFor(token);
-  const items: Array<{ repoFull: string; number: number }> = [];
-  for (let page = 1; page <= 2; page++) {
-    const res = await octokit.rest.search.issuesAndPullRequests({
-      q: `is:pr is:open org:${org}`,
-      per_page: LIST_PAGE_SIZE,
-      page,
-    });
-    for (const item of res.data.items) {
-      // repository_url looks like https://api.github.com/repos/owner/name
-      const m = /\/repos\/([^/]+\/[^/]+)$/.exec(item.repository_url);
-      if (!m) continue;
-      items.push({ repoFull: m[1]!, number: item.number });
+export type ScopedPR = PRDetails & {
+  reviewRequestedForViewer: boolean;
+};
+
+type GraphQLSearchPR = {
+  number: number;
+  title: string;
+  isDraft: boolean;
+  baseRefName: string;
+  headRefName: string;
+  headRefOid: string;
+  author: { login: string } | null;
+  autoMergeRequest: { __typename: string } | null;
+  repository: { nameWithOwner: string };
+};
+
+type GraphQLSearchResponse = {
+  search: {
+    pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    nodes: Array<GraphQLSearchPR | null>;
+  };
+};
+
+const SEARCH_QUERY = /* GraphQL */ `
+  query($q: String!, $after: String) {
+    search(query: $q, type: ISSUE, first: 100, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        ... on PullRequest {
+          number
+          title
+          isDraft
+          baseRefName
+          headRefName
+          headRefOid
+          author { login }
+          autoMergeRequest { __typename }
+          repository { nameWithOwner }
+        }
+      }
     }
-    if (res.data.items.length < LIST_PAGE_SIZE) break;
+  }
+`;
+
+const MAX_SEARCH_PAGES = 10; // up to 1000 PRs per query — search caps at 1000
+
+/**
+ * Build the `q` string for GitHub's search syntax from a set of targets.
+ * Always includes `is:pr is:open`. Extra terms appended as-is.
+ */
+function buildSearchQuery(targets: ScopeTarget[], extra: string[] = []): string {
+  const terms = targets.map((t) =>
+    t.kind === 'org' ? `org:${t.target}` : `repo:${t.target}`,
+  );
+  return ['is:pr', 'is:open', ...terms, ...extra].join(' ');
+}
+
+/**
+ * Run a single GraphQL search query, paginated up to MAX_SEARCH_PAGES.
+ * Returns the raw PullRequest nodes (drafts included; caller filters).
+ */
+async function runSearch(
+  token: string,
+  q: string,
+): Promise<GraphQLSearchPR[]> {
+  const octokit = octokitFor(token);
+  const out: GraphQLSearchPR[] = [];
+  let after: string | null = null;
+  for (let page = 0; page < MAX_SEARCH_PAGES; page++) {
+    const resp: GraphQLSearchResponse = await octokit.graphql(SEARCH_QUERY, {
+      q,
+      after,
+    });
+    for (const node of resp.search.nodes) {
+      if (node && node.repository) out.push(node);
+    }
+    if (!resp.search.pageInfo.hasNextPage || !resp.search.pageInfo.endCursor) break;
+    after = resp.search.pageInfo.endCursor;
+  }
+  return out;
+}
+
+function toPRDetails(r: GraphQLSearchPR): PRDetails {
+  return {
+    repoFull: r.repository.nameWithOwner,
+    number: r.number,
+    title: r.title,
+    author: r.author?.login ?? 'unknown',
+    baseBranch: r.baseRefName,
+    headBranch: r.headRefName,
+    headSha: r.headRefOid,
+    draft: r.isDraft,
+    autoMerge: r.autoMergeRequest !== null,
+  };
+}
+
+/**
+ * List open PRs for the user's scopes in a single (or two) GraphQL queries.
+ *
+ * Two query batches:
+ *  1. `is:pr is:open <targets>` — every open PR in any target.
+ *  2. `is:pr is:open review-requested:@me <targets>` — only PRs where the
+ *     viewer (or one of their teams) is in the requested-reviewers list.
+ *     Run server-side so team memberships are resolved correctly.
+ *
+ * We always run (1) if any target has a scope in `open` trigger mode, and (2)
+ * if any has `review_requested`. PRs returned by (2) are flagged with
+ * `reviewRequestedForViewer = true`; the poller uses that flag to gate
+ * scopes that opted into the tighter signal.
+ *
+ * One pass per batch instead of one REST call per target — a user with 50
+ * scope targets goes from ~50 list calls to 1-2 GraphQL queries per tick.
+ */
+export async function listOpenPullsForScopes(
+  token: string,
+  openTargets: ScopeTarget[],
+  reviewRequestedTargets: ScopeTarget[],
+): Promise<ScopedPR[]> {
+  if (openTargets.length === 0 && reviewRequestedTargets.length === 0) {
+    return [];
   }
 
-  // Parallel fetch each PR for the fields search doesn't return.
-  const results = await Promise.all(
-    items.map(async ({ repoFull, number }): Promise<PRDetails | null> => {
-      try {
-        const [owner, repo] = repoFull.split('/');
-        if (!owner || !repo) return null;
-        const res = await octokit.rest.pulls.get({
-          owner,
-          repo,
-          pull_number: number,
+  const empty = Promise.resolve<GraphQLSearchPR[]>([]);
+  const [openResults, reviewRequestedResults] = await Promise.all([
+    openTargets.length > 0
+      ? runSearch(token, buildSearchQuery(openTargets))
+      : empty,
+    reviewRequestedTargets.length > 0
+      ? runSearch(
+          token,
+          buildSearchQuery(reviewRequestedTargets, ['review-requested:@me']),
+        )
+      : empty,
+  ]);
+
+  const merged = new Map<string, ScopedPR>();
+  const ingest = (nodes: GraphQLSearchPR[], fromReviewRequested: boolean) => {
+    for (const node of nodes) {
+      if (node.isDraft) continue;
+      const details = toPRDetails(node);
+      const key = `${details.repoFull}#${details.number}`;
+      const existing = merged.get(key);
+      if (existing) {
+        // Keep the requested flag sticky — once true, stays true.
+        existing.reviewRequestedForViewer ||= fromReviewRequested;
+      } else {
+        merged.set(key, {
+          ...details,
+          reviewRequestedForViewer: fromReviewRequested,
         });
-        const p = res.data;
-        if (p.draft) return null;
-        return {
-          repoFull,
-          number: p.number,
-          title: p.title,
-          author: p.user?.login ?? 'unknown',
-          baseBranch: p.base.ref,
-          headBranch: p.head.ref,
-          headSha: p.head.sha,
-          draft: p.draft ?? false,
-          autoMerge: p.auto_merge !== null,
-        };
-      } catch {
-        return null; // Skip individual fetch failures (deleted, perms changed, etc.)
       }
-    }),
-  );
-  return results.filter((r): r is PRDetails => r !== null);
+    }
+  };
+  // Order matters only for clarity: ingest open first so the requested
+  // batch flips the flag for any overlap.
+  ingest(openResults, false);
+  ingest(reviewRequestedResults, true);
+  return [...merged.values()];
 }
+
+// Exported for the test file so it can assert query construction without
+// hitting the network.
+export const __internals = { buildSearchQuery };

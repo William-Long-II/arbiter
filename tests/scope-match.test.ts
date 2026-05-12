@@ -16,6 +16,7 @@ function scope(over: Partial<Scope> = {}): Scope {
     autoApprove: false,
     footerTemplate: null,
     personalityPrompt: null,
+    triggerMode: 'open',
     enabled: true,
     createdAt: new Date(),
     updatedAt: new Date(),

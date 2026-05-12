@@ -3,6 +3,15 @@ import { sql } from '../db.ts';
 export type Scrutiny = 'light' | 'standard' | 'strict';
 export type TargetKind = 'repo' | 'org';
 export type ClaudeMode = 'default' | 'subscription' | 'api';
+/**
+ * Which open PRs the poller picks up for this scope.
+ *  - 'open'             — every open non-draft PR (legacy default)
+ *  - 'review_requested' — only PRs where the OAuth'd user (or one of their
+ *    teams) is in the requested-reviewers list. Tighter signal — a human
+ *    explicitly asked for review — and dramatically shrinks the result set
+ *    on busy orgs.
+ */
+export type TriggerMode = 'open' | 'review_requested';
 
 export type Scope = {
   id: number;
@@ -31,6 +40,7 @@ export type Scope = {
    * ("snarky but constructive"), or context ("this is a Rust project").
    */
   personalityPrompt: string | null;
+  triggerMode: TriggerMode;
   enabled: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -39,6 +49,7 @@ export type Scope = {
 const SCRUTINIES: readonly Scrutiny[] = ['light', 'standard', 'strict'];
 const KINDS: readonly TargetKind[] = ['repo', 'org'];
 const MODES: readonly ClaudeMode[] = ['default', 'subscription', 'api'];
+const TRIGGER_MODES: readonly TriggerMode[] = ['open', 'review_requested'];
 
 export function isScrutiny(v: unknown): v is Scrutiny {
   return typeof v === 'string' && (SCRUTINIES as readonly string[]).includes(v);
@@ -49,6 +60,9 @@ export function isTargetKind(v: unknown): v is TargetKind {
 export function isClaudeMode(v: unknown): v is ClaudeMode {
   return typeof v === 'string' && (MODES as readonly string[]).includes(v);
 }
+export function isTriggerMode(v: unknown): v is TriggerMode {
+  return typeof v === 'string' && (TRIGGER_MODES as readonly string[]).includes(v);
+}
 
 const SELECT_COLUMNS = sql`
   id,
@@ -57,11 +71,12 @@ const SELECT_COLUMNS = sql`
   target,
   base_branch_pattern AS "baseBranchPattern",
   scrutiny,
-  exclude_authors  AS "excludeAuthors",
+  exclude_authors    AS "excludeAuthors",
   claude_mode        AS "claudeMode",
   auto_approve       AS "autoApprove",
   footer_template    AS "footerTemplate",
   personality_prompt AS "personalityPrompt",
+  trigger_mode       AS "triggerMode",
   enabled,
   created_at       AS "createdAt",
   updated_at       AS "updatedAt"
@@ -96,6 +111,7 @@ export type ScopeInput = {
   autoApprove: boolean;
   footerTemplate: string | null;
   personalityPrompt: string | null;
+  triggerMode: TriggerMode;
   enabled: boolean;
 };
 
@@ -104,12 +120,12 @@ export async function createScope(userId: number, input: ScopeInput): Promise<Sc
     INSERT INTO scopes
       (user_id, target_kind, target, base_branch_pattern, scrutiny,
        exclude_authors, claude_mode, auto_approve, footer_template,
-       personality_prompt, enabled)
+       personality_prompt, trigger_mode, enabled)
     VALUES
       (${userId}, ${input.targetKind}, ${input.target}, ${input.baseBranchPattern},
        ${input.scrutiny}, ${input.excludeAuthors}, ${input.claudeMode},
        ${input.autoApprove}, ${input.footerTemplate},
-       ${input.personalityPrompt}, ${input.enabled})
+       ${input.personalityPrompt}, ${input.triggerMode}, ${input.enabled})
     RETURNING ${SELECT_COLUMNS}
   `;
   if (!row) throw new Error('createScope: no row returned');
@@ -132,6 +148,7 @@ export async function updateScope(
         auto_approve = ${input.autoApprove},
         footer_template = ${input.footerTemplate},
         personality_prompt = ${input.personalityPrompt},
+        trigger_mode = ${input.triggerMode},
         enabled = ${input.enabled},
         updated_at = now()
     WHERE id = ${id} AND user_id = ${userId}
@@ -188,6 +205,11 @@ export function parseScopeForm(
   const claudeMode = form.claude_mode ?? 'default';
   if (!isClaudeMode(claudeMode)) errors.push('Claude mode must be default, subscription, or api.');
 
+  const triggerMode = form.trigger_mode ?? 'open';
+  if (!isTriggerMode(triggerMode)) {
+    errors.push('Trigger mode must be "open" or "review_requested".');
+  }
+
   const excludeAuthors = (form.exclude_authors ?? '')
     .split(/\r?\n/)
     .map((s) => s.trim())
@@ -232,6 +254,7 @@ export function parseScopeForm(
       autoApprove,
       footerTemplate,
       personalityPrompt,
+      triggerMode: triggerMode as TriggerMode,
       enabled,
     },
   };
