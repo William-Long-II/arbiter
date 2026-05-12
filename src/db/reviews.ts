@@ -176,6 +176,38 @@ export async function markDone(
   if (rows[0]) await notifyReviewChanged(rows[0]);
 }
 
+/**
+ * Reset a failed review back to queued so the worker picks it up again.
+ * Scoped to the requesting user (no cross-user retries) and gated on
+ * status='failed' so it's a no-op for already-running, queued, or done
+ * rows. The NOTIFY then wakes the worker immediately via the same
+ * channel /api/events/queue uses, so the retry kicks in within ~10ms
+ * rather than waiting for the 5s tick.
+ *
+ * Returns the updated row, or null if nothing matched.
+ */
+export async function retryFailedReview(
+  userId: number,
+  id: number,
+): Promise<PendingReview | null> {
+  const rows = await sql<PendingReview[]>`
+    UPDATE pending_reviews
+    SET status = 'queued',
+        error = null,
+        started_at = null,
+        finished_at = null,
+        verdict = null,
+        posted_event = null
+    WHERE id = ${id}
+      AND user_id = ${userId}
+      AND status = 'failed'
+    RETURNING ${SELECT_REVIEW_COLUMNS}
+  `;
+  const row = rows[0] ?? null;
+  if (row) await notifyReviewChanged(row);
+  return row;
+}
+
 export async function markFailed(id: number, error: string): Promise<void> {
   const rows = await sql<PendingReview[]>`
     UPDATE pending_reviews
