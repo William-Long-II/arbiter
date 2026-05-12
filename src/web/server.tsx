@@ -46,6 +46,7 @@ import {
 import { QueuePage } from './views/queue-list.tsx';
 import { QueueDetailPage } from './views/queue-detail.tsx';
 import { RepoPrsPage } from './views/repo-prs.tsx';
+import { SettingsPage, type ServerConfigSnapshot } from './views/settings.tsx';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const staticRoot = join(here, 'static');
@@ -306,6 +307,35 @@ export function buildApp(): Hono {
       const message = err instanceof Error ? err.message : String(err);
       return c.redirect(`${backTo}&error=${encodeURIComponent(message)}`);
     }
+  });
+
+  app.get('/settings', requireUser, async (c) => {
+    const user = c.get('user');
+    let dbConnected = false;
+    try {
+      await sql`SELECT 1`;
+      dbConnected = true;
+    } catch {
+      dbConnected = false;
+    }
+    const snapshot: ServerConfigSnapshot = {
+      port: config.port,
+      publicUrl: config.publicUrl,
+      githubClientId: config.github.clientId,
+      githubClientSecretSet: !!config.github.clientSecret,
+      claudeDefaultMode: config.claude.defaultMode,
+      claudeBin: config.claude.bin,
+      claudeApiKeySet: !!config.claude.apiKey,
+      pollIntervalSeconds: config.pollIntervalSeconds,
+      workerIntervalSeconds: config.workerIntervalSeconds,
+      // Optional: only present when the retention PR is also merged.
+      // Cast through unknown because the current Config type doesn't
+      // declare reviewRetentionDays yet.
+      ...((config as unknown as Record<string, unknown>).reviewRetentionDays !== undefined
+        ? { reviewRetentionDays: Number((config as unknown as Record<string, unknown>).reviewRetentionDays) }
+        : {}),
+    };
+    return c.html(<SettingsPage user={user} config={snapshot} dbConnected={dbConnected} />);
   });
 
   app.get('/queue', requireUser, async (c) => {
