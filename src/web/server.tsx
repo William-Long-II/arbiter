@@ -27,7 +27,7 @@ import {
   parseScopeForm,
   updateScope,
 } from '../db/scopes.ts';
-import { fetchPullRequest } from '../github/pulls.ts';
+import { fetchPullRequest, listOpenPullsForRepo } from '../github/pulls.ts';
 import {
   DiffTooLargeError,
   MAX_DIFF_BYTES,
@@ -37,6 +37,7 @@ import {
 import { enqueueReview, getReview, listReviews } from '../db/reviews.ts';
 import { QueuePage } from './views/queue-list.tsx';
 import { QueueDetailPage } from './views/queue-detail.tsx';
+import { RepoPrsPage } from './views/repo-prs.tsx';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const staticRoot = join(here, 'static');
@@ -205,6 +206,98 @@ export function buildApp(): Hono {
     if (Number.isNaN(id)) return c.notFound();
     await deleteScope(user.id, id);
     return c.redirect('/scopes');
+  });
+
+  app.get('/repos/:owner/:name/prs', requireUser, async (c) => {
+    const user = c.get('user');
+    const repoFull = `${c.req.param('owner')}/${c.req.param('name')}`;
+    const scrutiny = isScrutiny(c.req.query('scrutiny'))
+      ? (c.req.query('scrutiny') as 'light' | 'standard' | 'strict')
+      : 'standard';
+    const claudeMode = isClaudeMode(c.req.query('claude_mode'))
+      ? (c.req.query('claude_mode') as 'default' | 'subscription' | 'api')
+      : 'default';
+    const autoApprove = c.req.query('auto_approve') === '1';
+    const error = c.req.query('error') ?? undefined;
+    let prs: Awaited<ReturnType<typeof listOpenPullsForRepo>> = [];
+    try {
+      prs = await listOpenPullsForRepo(user.githubToken, repoFull);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.html(
+        <RepoPrsPage
+          user={user}
+          repoFull={repoFull}
+          prs={[]}
+          scrutiny={scrutiny}
+          claudeMode={claudeMode}
+          autoApprove={autoApprove}
+          error={`Couldn't list PRs: ${message}`}
+        />,
+        502,
+      );
+    }
+    return c.html(
+      <RepoPrsPage
+        user={user}
+        repoFull={repoFull}
+        prs={prs}
+        scrutiny={scrutiny}
+        claudeMode={claudeMode}
+        autoApprove={autoApprove}
+        error={error}
+      />,
+    );
+  });
+
+  // POST handler for the per-PR Review button. Wraps the same enqueue
+  // path the debug endpoint uses, but redirects to /queue/:id on success
+  // (or back to the listing with ?error=... on failure).
+  app.post('/repos/:owner/:name/prs', requireUser, async (c) => {
+    const user = c.get('user');
+    const repoFull = `${c.req.param('owner')}/${c.req.param('name')}`;
+    const form = await readFormStrings(c);
+    const prNumber = parseInt(form.pr_number ?? '', 10);
+    if (Number.isNaN(prNumber) || prNumber <= 0) {
+      return c.text('pr_number must be a positive integer', 400);
+    }
+    const scrutiny = isScrutiny(form.scrutiny) ? form.scrutiny : 'standard';
+    const claudeModeRaw = form.claude_mode ?? 'default';
+    const claudeMode =
+      claudeModeRaw === 'default' ? config.claude.defaultMode :
+      claudeModeRaw === 'subscription' || claudeModeRaw === 'api' ? claudeModeRaw :
+      config.claude.defaultMode;
+    const autoApprove = form.auto_approve === '1' || form.auto_approve === 'on';
+
+    const backTo = `/repos/${encodeURIComponent(c.req.param('owner'))}/${encodeURIComponent(c.req.param('name'))}/prs?scrutiny=${scrutiny}&claude_mode=${claudeModeRaw}${autoApprove ? '&auto_approve=1' : ''}`;
+    try {
+      const { pr } = await fetchPullRequest(user.githubToken, repoFull, prNumber);
+      const row = await enqueueReview({
+        userId: user.id,
+        repoFull: pr.repoFull,
+        prNumber: pr.number,
+        prTitle: pr.title,
+        prAuthor: pr.author,
+        baseBranch: pr.baseBranch,
+        headBranch: pr.headBranch,
+        headSha: pr.headSha,
+        scrutiny,
+        claudeMode,
+        autoApprove,
+        // Ad-hoc enqueue: no scope row to honor a custom footer template.
+        // Built-in default is the safe choice.
+        footerTemplate: null,
+      });
+      if (!row) {
+        // Idempotency hit — same head SHA already queued. Find the existing
+        // row and route there instead of confusing the user with a no-op.
+        return c.redirect(`${backTo}&error=${encodeURIComponent('A review for this PR + head SHA was already enqueued. Check /queue.')}`);
+      }
+      return c.redirect(`/queue/${row.id}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.redirect(`${backTo}&error=${encodeURIComponent(message)}`);
+    }
   });
 
   app.get('/queue', requireUser, async (c) => {

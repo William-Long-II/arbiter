@@ -257,9 +257,31 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
   color: #d09a55;
 }
 .repo-row-time { color: var(--ink-subtle); font-size: 12px; white-space: nowrap; }
+.repo-row-action { padding-left: 16px; white-space: nowrap; }
+.repo-row-prs-link { padding: 4px 8px; height: auto; font-size: 12px; }
 /* Filler column absorbs unused row width so the data cells pack left
    while hover and dividers still span the full card width. */
 .repo-row-filler { width: 100%; padding: 0 16px 0 0; }
+
+/* /repos/:owner/:name/prs page */
+.repo-prs-toolbar { gap: 16px; align-items: end; flex-wrap: wrap; }
+.toolbar-field { display: flex; flex-direction: column; gap: 4px; }
+.toolbar-field-label {
+  color: var(--ink-subtle); font-size: 11px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.6px;
+}
+.repo-prs-header { grid-template-columns: minmax(0, 1fr) 140px 240px 100px; }
+.repo-prs-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 140px 240px 100px;
+  gap: 16px; align-items: center;
+  padding: 12px 16px;
+}
+.repo-prs-row + .repo-prs-row { border-top: 1px solid var(--surface-2); }
+.repo-prs-row:hover { background: var(--surface-2); }
+.repo-prs-pr { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.repo-prs-branches { display: flex; align-items: center; gap: 8px; color: var(--ink-muted); }
+.repo-prs-action { justify-self: end; }
 
 /* Pills */
 .badge-pill {
