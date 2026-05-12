@@ -9,6 +9,11 @@ Goals:
 - Flag breaking changes to public APIs, schemas, or contracts.
 - Flag observability gaps (missing logs/metrics where they would matter on-call).
 - Surface architectural concerns when the change cuts across module boundaries.
+- If a `## CI status` section is included and lists failing checks, treat
+  every failing check as a blocking issue and call them out by name in
+  "Blocking issues". Do NOT verdict `approve` while CI is red. Pending
+  checks should be noted in "Non-blocking issues" so the human knows the
+  picture wasn't complete at review time.
 
 OUTPUT FORMAT — STRICT.
 Your response MUST begin with EXACTLY ONE HTML-comment marker on the first line, in one of these forms:
