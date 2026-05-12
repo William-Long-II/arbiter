@@ -30,6 +30,16 @@ export const Layout: FC<PropsWithChildren<Props>> = ({
             </a>
             <div class="top-nav-spacer" />
             {user ? (
+              <span
+                id="next-poll-indicator"
+                class="next-poll"
+                title="Time until the next poller sweep across your scoped repos."
+                aria-live="polite"
+              >
+                next poll …
+              </span>
+            ) : null}
+            {user ? (
               <div class="top-nav-user">
                 {user.avatarUrl ? (
                   <img class="avatar" src={user.avatarUrl} alt="" width={24} height={24} />
@@ -64,6 +74,63 @@ export const Layout: FC<PropsWithChildren<Props>> = ({
             <main class="page">{children}</main>
           </div>
         </div>
+        {user ? (
+          <script
+            dangerouslySetInnerHTML={{
+              __html: `
+                (function() {
+                  var el = document.getElementById('next-poll-indicator');
+                  if (!el) return;
+                  var nextAt = 0;
+                  var inFlight = false;
+                  var intervalSec = 0;
+
+                  function fmt(seconds) {
+                    if (seconds < 60) return seconds + 's';
+                    var m = Math.floor(seconds / 60);
+                    var s = seconds % 60;
+                    return m + 'm ' + s + 's';
+                  }
+
+                  function load() {
+                    fetch('/api/poller/status', { credentials: 'same-origin' })
+                      .then(function(r) { return r.ok ? r.json() : null; })
+                      .then(function(s) {
+                        if (!s) { el.textContent = 'poller off'; return; }
+                        intervalSec = s.intervalSeconds || 0;
+                        nextAt = s.nextPollAt ? Date.parse(s.nextPollAt) : 0;
+                        inFlight = !!s.inFlight;
+                      })
+                      .catch(function() { el.textContent = 'poller ?'; });
+                  }
+
+                  function tick() {
+                    if (inFlight) {
+                      el.textContent = 'polling…';
+                    } else if (!nextAt) {
+                      el.textContent = 'poller idle';
+                    } else {
+                      var remainMs = nextAt - Date.now();
+                      if (remainMs <= 0) {
+                        // The setInterval on the server has fired (or is about
+                        // to). Refetch so the indicator picks up the new tick
+                        // start + the (now updated) nextPollAt.
+                        el.textContent = 'polling…';
+                        load();
+                      } else {
+                        el.textContent = 'next poll in ' + fmt(Math.ceil(remainMs / 1000));
+                      }
+                    }
+                  }
+
+                  load();
+                  setInterval(tick, 1000);
+                  tick();
+                })();
+              `,
+            }}
+          />
+        ) : null}
       </body>
     </html>
   );
