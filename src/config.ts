@@ -42,6 +42,9 @@ export const config = {
   },
   pollIntervalSeconds: intEnv('POLL_INTERVAL_SECONDS', 180),
   workerIntervalSeconds: intEnv('WORKER_INTERVAL_SECONDS', 5),
+  // Terminal reviews (done/failed/skipped) older than this are pruned every
+  // hour by the retention task. 0 disables pruning entirely.
+  reviewRetentionDays: intEnv('REVIEW_RETENTION_DAYS', 30),
 } as const;
 
 export type Config = typeof config;
