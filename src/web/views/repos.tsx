@@ -129,6 +129,7 @@ const RepoGroup: FC<{
           <col style={`width:${maxNameChars + 1}ch`} />
           <col style="width:140px" />
           <col style="width:80px" />
+          <col style="width:140px" />
           <col />
         </colgroup>
         <tbody>
@@ -143,6 +144,8 @@ const RepoGroup: FC<{
 
 const RepoRow: FC<{ repo: Repo }> = ({ repo }) => {
   const name = repoDisplayName(repo);
+  const [owner, repoName] = repo.fullName.split('/');
+  const prsHref = `/repos/${encodeURIComponent(owner ?? '')}/${encodeURIComponent(repoName ?? '')}/prs`;
   return (
     <tr class="repo-row">
       <td class="mono repo-row-name">{name}</td>
@@ -152,6 +155,13 @@ const RepoRow: FC<{ repo: Repo }> = ({ repo }) => {
       </td>
       <td class="repo-row-time">
         {repo.pushedAt ? formatRelative(repo.pushedAt) : ''}
+      </td>
+      <td class="repo-row-action">
+        {repo.archived ? null : (
+          <a class="cta-tertiary repo-row-prs-link" href={prsHref}>
+            Review PRs ↗
+          </a>
+        )}
       </td>
       <td class="repo-row-filler" />
     </tr>
