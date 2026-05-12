@@ -10,6 +10,10 @@ export type ReviewInput = {
   /** Optional free-text guidance appended to the scrutiny system prompt.
    * Carried through from scope.personalityPrompt at enqueue time. */
   personalityPrompt?: string | null;
+  /** Pre-formatted CI summary (Markdown block) sourced from the GitHub
+   * checks + statuses APIs. Null/undefined when the repo has no signals
+   * — in that case the prompt omits the section entirely. */
+  ciSummary?: string | null;
 };
 
 export type Verdict = 'approve' | 'comment' | 'request-changes';
@@ -54,19 +58,19 @@ export function parseVerdict(body: string): { verdict: Verdict; body: string } {
  */
 export function formatUserMessage(input: ReviewInput): string {
   const fence = pickFence(input.diff);
-  return [
+  const lines: string[] = [
     `Please review the following pull request.`,
     ``,
     `Repository: ${input.repoFull}`,
     `PR title: ${input.prTitle}`,
     `Author: ${input.prAuthor}`,
     `Scrutiny tier: ${input.scrutiny}`,
-    ``,
-    `Unified diff:`,
-    `${fence}diff`,
-    input.diff,
-    fence,
-  ].join('\n');
+  ];
+  if (input.ciSummary && input.ciSummary.trim().length > 0) {
+    lines.push(``, input.ciSummary);
+  }
+  lines.push(``, `Unified diff:`, `${fence}diff`, input.diff, fence);
+  return lines.join('\n');
 }
 
 function pickFence(content: string): string {

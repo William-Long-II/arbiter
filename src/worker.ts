@@ -11,6 +11,7 @@ import { markTokenRevoked } from './db/users.ts';
 import { subscribeAll } from './events.ts';
 import { stampReviewBody } from './review/footer.ts';
 import { fetchPullRequest, postPullRequestReview, type ReviewEvent } from './github/pulls.ts';
+import { fetchChecksSummary, formatChecksSummary } from './github/checks.ts';
 import { runReview, type Verdict } from './review/runner.ts';
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -92,6 +93,12 @@ async function processJob(job: PendingReview): Promise<void> {
 
   try {
     const { pr, diff } = await fetchPullRequest(userRow.token, job.repoFull, job.prNumber);
+    // Fetch CI signals in parallel with prep work would be ideal, but the
+    // diff fetch already dominates wall time. Sequential keeps the code
+    // simple; fetchChecksSummary swallows its own errors so we'll never
+    // fail the review just because the checks API hiccupped.
+    const checks = await fetchChecksSummary(userRow.token, job.repoFull, pr.headSha);
+    const ciSummary = formatChecksSummary(checks);
     const result = await runReview(
       {
         scrutiny: job.scrutiny,
@@ -99,6 +106,8 @@ async function processJob(job: PendingReview): Promise<void> {
         prTitle: pr.title,
         prAuthor: pr.author,
         repoFull: pr.repoFull,
+        personalityPrompt: job.personalityPrompt,
+        ciSummary,
       },
       job.claudeMode,
     );
