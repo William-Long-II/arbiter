@@ -27,6 +27,33 @@ export async function postPullRequestReview(
   return { id: res.data.id, htmlUrl: res.data.html_url };
 }
 
+/**
+ * GitHub's unified-diff endpoint refuses PRs with more than 300 files.
+ * The error surfaces as 422 with `code: "too_large"`. Thrown by
+ * fetchPullRequest so the worker can mark the row `skipped` (not failed)
+ * — there's no point retrying a structural limit.
+ */
+export class DiffTooManyFilesError extends Error {
+  constructor(public readonly repoFull: string, public readonly pullNumber: number) {
+    super(
+      `${repoFull}#${pullNumber} has too many changed files for GitHub's unified-diff endpoint (>300). ` +
+        `Skipping automated review; this PR needs a human eye.`,
+    );
+    this.name = 'DiffTooManyFilesError';
+  }
+}
+
+function isTooLargeDiffError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const e = err as { status?: unknown; response?: { data?: { errors?: unknown } } };
+  if (e.status !== 422) return false;
+  const errors = e.response?.data?.errors;
+  if (!Array.isArray(errors)) return false;
+  return errors.some(
+    (x) => typeof x === 'object' && x !== null && (x as { code?: unknown }).code === 'too_large',
+  );
+}
+
 export type PRDetails = {
   repoFull: string;
   number: number;
@@ -57,15 +84,23 @@ export async function fetchPullRequest(
 
   const octokit = octokitFor(token);
 
-  const [meta, diffResp] = await Promise.all([
-    octokit.rest.pulls.get({ owner, repo, pull_number: pullNumber }),
-    octokit.rest.pulls.get({
+  const meta = await octokit.rest.pulls.get({ owner, repo, pull_number: pullNumber });
+  let diffResp;
+  try {
+    diffResp = await octokit.rest.pulls.get({
       owner,
       repo,
       pull_number: pullNumber,
       mediaType: { format: 'diff' },
-    }),
-  ]);
+    });
+  } catch (err) {
+    // 422 with code 'too_large' = PR has >300 files. Surface as a typed
+    // error so the worker can skip cleanly instead of marking failed.
+    if (isTooLargeDiffError(err)) {
+      throw new DiffTooManyFilesError(repoFull, pullNumber);
+    }
+    throw err;
+  }
 
   const m = meta.data;
   return {
