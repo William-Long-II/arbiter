@@ -93,11 +93,43 @@ export const QueueDetailPage: FC<Props> = ({ user, review }) => {
         <section class="queue-output-section">
           <p class="page-subhead">
             {review.status === 'queued'
-              ? 'Waiting in queue. The worker checks every few seconds.'
+              ? 'Waiting in queue. The worker will pick it up shortly.'
               : 'Running…'}
           </p>
         </section>
       ) : null}
+
+      {/*
+        SSE client: while this review is still active (queued or running),
+        listen for state changes on the same SSE stream. When THIS review
+        flips to a terminal state, full-reload so the rendered output /
+        error / posted-event meta all show.
+
+        No polling — we only reload when the worker actually commits.
+      */}
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `
+            (function() {
+              var status = ${JSON.stringify(review.status)};
+              var id = ${JSON.stringify(review.id)};
+              var TERMINAL = { done: 1, failed: 1, skipped: 1 };
+              if (TERMINAL[status] || typeof EventSource === 'undefined') return;
+              var es = new EventSource('/api/events/queue');
+              es.addEventListener('review', function(ev) {
+                try {
+                  var e = JSON.parse(ev.data);
+                  if (e.reviewId !== id) return;
+                  if (TERMINAL[e.status]) {
+                    es.close();
+                    location.reload();
+                  }
+                } catch (err) { console.error('[sse]', err); }
+              });
+            })();
+          `,
+        }}
+      />
     </Layout>
   );
 };
