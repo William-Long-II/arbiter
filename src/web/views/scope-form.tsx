@@ -39,6 +39,7 @@ export const ScopeFormPage: FC<Props> = ({
     autoApprove: values?.autoApprove ?? scope?.autoApprove ?? false,
     footerTemplate: values?.footerTemplate ?? scope?.footerTemplate ?? null,
     personalityPrompt: values?.personalityPrompt ?? scope?.personalityPrompt ?? null,
+    triggerMode: values?.triggerMode ?? scope?.triggerMode ?? 'open',
     enabled: values?.enabled ?? scope?.enabled ?? true,
   };
 
@@ -179,6 +180,33 @@ export const ScopeFormPage: FC<Props> = ({
           >{v.excludeAuthors.join('\n')}</textarea>
           <p class="form-hint">
             PRs by these GitHub logins will be skipped. Your own login is always skipped.
+          </p>
+        </fieldset>
+
+        <fieldset class="form-row">
+          <legend>Trigger</legend>
+          <label class="radio">
+            <input
+              type="radio"
+              name="trigger_mode"
+              value="open"
+              checked={v.triggerMode === 'open'}
+            />
+            <span>Every open PR matching this scope</span>
+          </label>
+          <label class="radio">
+            <input
+              type="radio"
+              name="trigger_mode"
+              value="review_requested"
+              checked={v.triggerMode === 'review_requested'}
+            />
+            <span>Only when a review is requested from me</span>
+          </label>
+          <p class="form-hint">
+            Review-requested uses GitHub's <code class="mono-sm">review-requested:@me</code>{' '}
+            search — accounts for team memberships and dramatically shrinks the set of PRs
+            the bot picks up. Drafts and PRs you haven't been tagged on are skipped.
           </p>
         </fieldset>
 

@@ -211,4 +211,37 @@ describe('parseScopeForm', () => {
     if (!r.ok) throw new Error('unreachable');
     expect(r.input.personalityPrompt).toBeNull();
   });
+
+  test('trigger_mode defaults to "open" when omitted', () => {
+    const r = parseScopeForm({
+      target_kind: 'repo',
+      target: 'a/b',
+      scrutiny: 'standard',
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('unreachable');
+    expect(r.input.triggerMode).toBe('open');
+  });
+
+  test('trigger_mode accepts review_requested', () => {
+    const r = parseScopeForm({
+      target_kind: 'repo',
+      target: 'a/b',
+      scrutiny: 'standard',
+      trigger_mode: 'review_requested',
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('unreachable');
+    expect(r.input.triggerMode).toBe('review_requested');
+  });
+
+  test('rejects unknown trigger_mode', () => {
+    const r = parseScopeForm({
+      target_kind: 'repo',
+      target: 'a/b',
+      scrutiny: 'standard',
+      trigger_mode: 'mentioned',
+    });
+    expect(r.ok).toBe(false);
+  });
 });

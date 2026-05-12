@@ -74,6 +74,11 @@ const ScopeRow: FC<{ scope: Scope }> = ({ scope }) => {
             custom personality
           </span>
         ) : null}
+        {scope.triggerMode === 'review_requested' ? (
+          <span class="badge-pill badge-pill-muted" title="Only fires when GitHub requests a review from you (or a team you're on)">
+            review-requested
+          </span>
+        ) : null}
         {scope.claudeMode !== 'default' ? (
           <span class="badge-pill badge-pill-muted">{scope.claudeMode}</span>
         ) : null}

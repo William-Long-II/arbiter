@@ -1,13 +1,13 @@
 import { config } from '../config.ts';
 import { sql } from '../db.ts';
-import { listScopes, type Scope } from '../db/scopes.ts';
+import { listScopes } from '../db/scopes.ts';
 import { enqueueReview } from '../db/reviews.ts';
 import { markTokenRevoked } from '../db/users.ts';
 import { matchScope } from '../scope.ts';
 import {
-  listOpenPullsForOrg,
-  listOpenPullsForRepo,
-  type PRDetails,
+  listOpenPullsForScopes,
+  type ScopeTarget,
+  type ScopedPR,
 } from './pulls.ts';
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -60,10 +60,13 @@ export function getPollerStatus(): PollerStatus {
 /**
  * One poll tick:
  *  1. Find every user that has at least one enabled scope.
- *  2. For each user, fetch their enabled scopes and list open PRs from
- *     each unique target (one search call per org; one list call per repo).
+ *  2. For each user, list open PRs in one GraphQL query (or two if some
+ *     scopes opted into `review_requested` trigger mode) covering every
+ *     target the user watches. Per-target REST fan-out is gone.
  *  3. Match each PR against the user's scope rules — first matching rule
- *     wins (matchScope).
+ *     wins (matchScope). If the matched scope is `review_requested` mode,
+ *     drop the PR unless GitHub's `review-requested:@me` half of the
+ *     search returned it.
  *  4. Enqueue. enqueueReview is idempotent on (repo, pr#, head_sha) so
  *     polling repeatedly is safe — the queue only grows on new shas.
  */
@@ -110,73 +113,82 @@ async function pollUser(user: {
   const scopes = (await listScopes(user.id)).filter((s) => s.enabled);
   if (scopes.length === 0) return 0;
 
-  // Dedupe by target — multiple scopes can target the same repo or org
-  // (e.g., one rule for main with strict, one for release/* with standard).
-  // We list PRs once per target and then run matchScope against the full
-  // bundle of rules for that target.
-  const byTarget = new Map<string, Scope[]>();
+  // Split targets by which trigger-mode batch they belong to. A target can
+  // show up in both lists if the user has e.g. two scopes on the same org
+  // with different trigger modes — that's fine; listOpenPullsForScopes
+  // dedupes the returned PRs by (repo, number) and keeps the
+  // reviewRequestedForViewer flag sticky.
+  const openTargets = new Map<string, ScopeTarget>();
+  const reviewRequestedTargets = new Map<string, ScopeTarget>();
   for (const s of scopes) {
     const key = `${s.targetKind}:${s.target}`;
-    const arr = byTarget.get(key) ?? [];
-    arr.push(s);
-    byTarget.set(key, arr);
+    const entry: ScopeTarget = { kind: s.targetKind, target: s.target };
+    if (s.triggerMode === 'review_requested') {
+      reviewRequestedTargets.set(key, entry);
+    } else {
+      openTargets.set(key, entry);
+    }
+  }
+
+  let prs: ScopedPR[];
+  try {
+    prs = await listOpenPullsForScopes(
+      user.token,
+      [...openTargets.values()],
+      [...reviewRequestedTargets.values()],
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // Same 401 detection the worker uses. A revoked token will hit this
+    // on every poll until the user re-auths; mark them so the banner
+    // shows up. We don't `return` — other users still get polled.
+    if (isUnauthorized(err)) {
+      await markTokenRevoked(user.id);
+      console.error(`[poller] user ${user.login} GitHub token revoked — banner will prompt re-auth`);
+      return 0;
+    }
+    console.error(`[poller] list for ${user.login}: ${message}`);
+    return 0;
   }
 
   let enqueued = 0;
-  for (const [key, rules] of byTarget.entries()) {
-    const first = rules[0]!;
-    let prs: PRDetails[];
-    try {
-      prs = first.targetKind === 'repo'
-        ? await listOpenPullsForRepo(user.token, first.target)
-        : await listOpenPullsForOrg(user.token, first.target);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      // Same 401 detection the worker uses. A revoked token will hit this
-      // on every poll until the user re-auths; mark them so the banner
-      // shows up. We don't `return` — other users still get polled.
-      if (isUnauthorized(err)) {
-        await markTokenRevoked(user.id);
-        console.error(`[poller] user ${user.login} GitHub token revoked — banner will prompt re-auth`);
-        return enqueued;
-      }
-      console.error(`[poller] list ${key}: ${message}`);
+  for (const pr of prs) {
+    // Skip PRs configured for auto-merge — the author has already
+    // committed to "merge when ready"; a generated review is wasted
+    // effort and may post comments to a PR that's about to disappear.
+    if (pr.autoMerge) continue;
+    const matched = matchScope(pr, scopes, user.login);
+    if (!matched) continue;
+    // Gate by trigger mode: review_requested scopes only fire on PRs
+    // GitHub returned from the review-requested:@me half of the search.
+    if (matched.triggerMode === 'review_requested' && !pr.reviewRequestedForViewer) {
       continue;
     }
-
-    for (const pr of prs) {
-      // Skip PRs configured for auto-merge — the author has already
-      // committed to "merge when ready"; a generated review is wasted
-      // effort and may post comments to a PR that's about to disappear.
-      if (pr.autoMerge) continue;
-      const matched = matchScope(pr, rules, user.login);
-      if (!matched) continue;
-      const claudeMode =
-        matched.claudeMode === 'default'
-          ? config.claude.defaultMode
-          : matched.claudeMode;
-      const row = await enqueueReview({
-        userId: user.id,
-        scopeId: matched.id,
-        repoFull: pr.repoFull,
-        prNumber: pr.number,
-        prTitle: pr.title,
-        prAuthor: pr.author,
-        baseBranch: pr.baseBranch,
-        headBranch: pr.headBranch,
-        headSha: pr.headSha,
-        scrutiny: matched.scrutiny,
-        claudeMode,
-        autoApprove: matched.autoApprove,
-        footerTemplate: matched.footerTemplate,
-        personalityPrompt: matched.personalityPrompt,
-      });
-      if (row) {
-        enqueued++;
-        console.log(
-          `[poller] enqueued #${row.id} ${pr.repoFull}#${pr.number} (scope ${matched.id}, scrutiny=${matched.scrutiny})`,
-        );
-      }
+    const claudeMode =
+      matched.claudeMode === 'default'
+        ? config.claude.defaultMode
+        : matched.claudeMode;
+    const row = await enqueueReview({
+      userId: user.id,
+      scopeId: matched.id,
+      repoFull: pr.repoFull,
+      prNumber: pr.number,
+      prTitle: pr.title,
+      prAuthor: pr.author,
+      baseBranch: pr.baseBranch,
+      headBranch: pr.headBranch,
+      headSha: pr.headSha,
+      scrutiny: matched.scrutiny,
+      claudeMode,
+      autoApprove: matched.autoApprove,
+      footerTemplate: matched.footerTemplate,
+      personalityPrompt: matched.personalityPrompt,
+    });
+    if (row) {
+      enqueued++;
+      console.log(
+        `[poller] enqueued #${row.id} ${pr.repoFull}#${pr.number} (scope ${matched.id}, scrutiny=${matched.scrutiny}, trigger=${matched.triggerMode})`,
+      );
     }
   }
   return enqueued;
