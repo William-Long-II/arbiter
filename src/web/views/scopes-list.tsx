@@ -15,7 +15,7 @@ export const ScopesListPage: FC<Props> = ({ user, scopes }) => {
         <div>
           <h1>Scopes</h1>
           <p class="page-subhead">
-            Rules that control which pull requests reviewme captures and at what scrutiny.
+            Rules that control which pull requests arbiter captures and at what scrutiny.
           </p>
         </div>
         <a class="cta-primary" href="/scopes/new">New scope</a>

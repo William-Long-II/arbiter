@@ -31,7 +31,7 @@ export const Layout: FC<PropsWithChildren<Props>> = ({
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>{title} · reviewme</title>
+        <title>{title} · arbiter</title>
         <link rel="stylesheet" href="/static/app.css" />
       </head>
       <body>
@@ -39,7 +39,7 @@ export const Layout: FC<PropsWithChildren<Props>> = ({
           <nav class="top-nav">
             <a class="brand" href="/">
               <span class="brand-mark" aria-hidden="true">◆</span>
-              <span class="brand-name">reviewme</span>
+              <span class="brand-name">arbiter</span>
             </a>
             <div class="top-nav-spacer" />
             {user ? (
