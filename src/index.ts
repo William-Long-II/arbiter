@@ -18,6 +18,13 @@ async function main(): Promise<void> {
   const server = Bun.serve({
     port: config.port,
     fetch: app.fetch,
+    // Bun's default idleTimeout is 10s. The SSE stream at /api/events/queue
+    // legitimately stays idle between worker state changes, so the default
+    // closes long-lived connections every 10s — which surfaces in the
+    // browser console as ERR_INCOMPLETE_CHUNKED_ENCODING and triggers an
+    // EventSource reconnect storm. Disable the per-connection timeout
+    // entirely; SSE handlers manage their own lifecycle via stream.onAbort.
+    idleTimeout: 0,
   });
   console.log(`[boot] http listening on http://localhost:${server.port}`);
 
