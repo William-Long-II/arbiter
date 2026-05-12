@@ -40,7 +40,7 @@ export const config = {
     bin: optional('CLAUDE_BIN', 'claude'),
     apiKey: optional('ANTHROPIC_API_KEY', ''),
   },
-  pollIntervalSeconds: intEnv('POLL_INTERVAL_SECONDS', 180),
+  pollIntervalSeconds: intEnv('POLL_INTERVAL_SECONDS', 60),
   workerIntervalSeconds: intEnv('WORKER_INTERVAL_SECONDS', 5),
   // Terminal reviews (done/failed/skipped) older than this are pruned every
   // hour by the retention task. 0 disables pruning entirely.
