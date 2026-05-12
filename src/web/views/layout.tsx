@@ -90,6 +90,79 @@ export const Layout: FC<PropsWithChildren<Props>> = ({
             <main class="page">{children}</main>
           </div>
         </div>
+        {/* Easter-egg toast: hidden by default; the egg script flips .show. */}
+        {user ? <div id="egg-toast" class="egg-toast" role="status" aria-live="polite" /> : null}
+        {user ? (
+          <script
+            dangerouslySetInnerHTML={{
+              __html: `
+                (function() {
+                  // Console banner — anyone who opens DevTools sees this.
+                  console.log(
+                    '%c◆ ARBITER\\n%c\\u201CArbiter unit reporting.\\u201D\\n\\nhttps://github.com/William-Long-II/arbiter',
+                    'color:#cc785c;font-size:18px;font-weight:bold;font-family:monospace',
+                    'color:#8a8f98;font-size:12px;font-family:monospace'
+                  );
+
+                  var toast = document.getElementById('egg-toast');
+                  function flash(msg) {
+                    if (!toast) return;
+                    toast.textContent = msg;
+                    toast.classList.add('show');
+                    clearTimeout(flash._t);
+                    flash._t = setTimeout(function() {
+                      toast.classList.remove('show');
+                    }, 2400);
+                  }
+
+                  // Brand-mark click counter: 5 clicks within 3s on the diamond
+                  // (not the wordmark) shows a quote. Click handler swallows
+                  // the event so the diamond doesn't navigate — wordmark still does.
+                  var mark = document.querySelector('.brand-mark');
+                  if (mark) {
+                    var clicks = [];
+                    mark.style.cursor = 'pointer';
+                    mark.addEventListener('click', function(e) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      var now = Date.now();
+                      clicks = clicks.filter(function(t) { return now - t < 3000; });
+                      clicks.push(now);
+                      if (clicks.length >= 5) {
+                        clicks = [];
+                        flash('Arbiter unit reporting.');
+                      }
+                    });
+                  }
+
+                  // Konami code: ↑↑↓↓←→←→ B A
+                  var KONAMI = ['ArrowUp','ArrowUp','ArrowDown','ArrowDown',
+                                'ArrowLeft','ArrowRight','ArrowLeft','ArrowRight','b','a'];
+                  var idx = 0;
+                  document.addEventListener('keydown', function(e) {
+                    var key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+                    if (key === KONAMI[idx]) {
+                      idx++;
+                      if (idx === KONAMI.length) {
+                        idx = 0;
+                        flash('Time wields the sharpest blade.');
+                        if (mark) {
+                          mark.style.transition = 'transform 600ms ease';
+                          mark.style.transform = 'rotate(720deg)';
+                          setTimeout(function() {
+                            mark.style.transform = '';
+                          }, 700);
+                        }
+                      }
+                    } else {
+                      idx = key === KONAMI[0] ? 1 : 0;
+                    }
+                  });
+                })();
+              `,
+            }}
+          />
+        ) : null}
         {user ? (
           <script
             dangerouslySetInnerHTML={{
