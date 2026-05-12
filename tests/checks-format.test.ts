@@ -5,6 +5,7 @@ function summary(over: Partial<ChecksSummary> = {}): ChecksSummary {
   return {
     anyFailing: false,
     allPassing: false,
+    hasPending: false,
     hasAny: true,
     signals: [],
     ...over,

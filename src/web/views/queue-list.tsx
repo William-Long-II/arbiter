@@ -139,6 +139,14 @@ const QueueRow: FC<{ review: PendingReview }> = ({ review }) => {
         <span class="queue-row-title">{review.prTitle}</span>
       </div>
       <StatusPill status={review.status} />
+      {review.status === 'queued' && review.deferUntil && review.deferUntil > new Date() ? (
+        <span
+          class="badge-pill badge-pill-muted queue-row-defer"
+          title={`Waiting on CI · attempt ${review.deferCount} of 10 · next check ${formatFuture(review.deferUntil)}`}
+        >
+          waiting on CI
+        </span>
+      ) : null}
       <span class="queue-row-time" data-started>
         {review.startedAt ? formatRelative(review.startedAt) : '—'}
       </span>
@@ -151,6 +159,14 @@ const StatusPill: FC<{ status: ReviewStatus }> = ({ status }) => {
   const cls = `badge-pill status-${status}`;
   return <span class={cls} data-status-pill data-status={status}>{status}</span>;
 };
+
+function formatFuture(d: Date | string): string {
+  const then = new Date(d).getTime();
+  const seconds = Math.max(0, Math.floor((then - Date.now()) / 1000));
+  if (seconds < 60) return `in ${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `in ${minutes}m`;
+}
 
 function formatRelative(d: Date | string): string {
   const then = new Date(d).getTime();
