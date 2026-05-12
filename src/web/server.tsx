@@ -293,9 +293,10 @@ export function buildApp(): Hono {
         scrutiny,
         claudeMode,
         autoApprove,
-        // Ad-hoc enqueue: no scope row to honor a custom footer template.
-        // Built-in default is the safe choice.
+        // Ad-hoc enqueue: no scope row to honor a custom footer template
+        // or personality. Built-in defaults are the safe choice.
         footerTemplate: null,
+        personalityPrompt: null,
       });
       if (!row) {
         // Idempotency hit — same head SHA already queued. Find the existing
@@ -479,9 +480,10 @@ export function buildApp(): Hono {
         scrutiny,
         claudeMode: requestedMode,
         autoApprove,
-        // Debug endpoint: use the built-in default footer. Real scope-driven
-        // enqueues honor scope.footerTemplate via the poller.
+        // Debug endpoint: use built-in defaults for footer + personality.
+        // Real scope-driven enqueues honor those fields via the poller.
         footerTemplate: null,
+        personalityPrompt: null,
       });
       if (!row) {
         return c.json(
@@ -662,6 +664,10 @@ function partialFromForm(form: Record<string, string>): Parameters<typeof ScopeF
     claudeMode: isClaudeMode(form.claude_mode) ? form.claude_mode : 'default',
     autoApprove: form.auto_approve === 'on' || form.auto_approve === 'true',
     footerTemplate,
+    personalityPrompt: ((): string | null => {
+      const v = (form.personality_prompt ?? '').replace(/\s+$/, '');
+      return v.length > 0 ? v : null;
+    })(),
     enabled: form.enabled === 'on' || form.enabled === 'true',
   };
 }

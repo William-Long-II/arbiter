@@ -136,6 +136,7 @@ async function pollUser(user: {
         claudeMode,
         autoApprove: matched.autoApprove,
         footerTemplate: matched.footerTemplate,
+        personalityPrompt: matched.personalityPrompt,
       });
       if (row) {
         enqueued++;

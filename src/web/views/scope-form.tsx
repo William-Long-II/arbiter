@@ -38,6 +38,7 @@ export const ScopeFormPage: FC<Props> = ({
     claudeMode: values?.claudeMode ?? scope?.claudeMode ?? 'default',
     autoApprove: values?.autoApprove ?? scope?.autoApprove ?? false,
     footerTemplate: values?.footerTemplate ?? scope?.footerTemplate ?? null,
+    personalityPrompt: values?.personalityPrompt ?? scope?.personalityPrompt ?? null,
     enabled: values?.enabled ?? scope?.enabled ?? true,
   };
 
@@ -223,6 +224,27 @@ export const ScopeFormPage: FC<Props> = ({
             Post as a GitHub <code class="mono-sm">APPROVE</code> when the reviewer's verdict
             is <code class="mono-sm">approve</code>. Otherwise (or when the PR is yours, which
             GitHub blocks anyway) posts as a regular <code class="mono-sm">COMMENT</code>.
+          </p>
+        </fieldset>
+
+        <fieldset class="form-row">
+          <legend>Reviewer personality (optional)</legend>
+          {/*
+            Free-text guidance appended to the scrutiny system prompt. The
+            scrutiny tier still controls verdict thresholds and output
+            shape; this just adds focus, tone, or domain context.
+          */}
+          <textarea
+            class="text-input form-textarea"
+            name="personality_prompt"
+            rows={4}
+            placeholder="e.g. 'This is a Rust project — prefer idiomatic Rust patterns and flag any unwrap() in non-test code.' or 'Be especially strict on auth-related code.' or 'Keep responses to 5 bullet points or fewer.'"
+          >{v.personalityPrompt ?? ''}</textarea>
+          <p class="form-hint">
+            Appended to the scrutiny tier's system prompt. Doesn't replace it —
+            verdict thresholds and output format still come from{' '}
+            <code class="mono-sm">{v.scrutiny}</code>. Leave blank for default
+            behavior.
           </p>
         </fieldset>
 

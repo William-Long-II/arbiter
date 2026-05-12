@@ -69,6 +69,11 @@ const ScopeRow: FC<{ scope: Scope }> = ({ scope }) => {
             custom footer
           </span>
         ) : null}
+        {scope.personalityPrompt ? (
+          <span class="badge-pill badge-pill-muted" title="Reviewer personality customized">
+            custom personality
+          </span>
+        ) : null}
         {scope.claudeMode !== 'default' ? (
           <span class="badge-pill badge-pill-muted">{scope.claudeMode}</span>
         ) : null}

@@ -56,6 +56,18 @@ async function loadScrutinyPrompt(scrutiny: ReviewInput['scrutiny']): Promise<st
   return readFile(join(promptsDir, `${scrutiny}.md`), 'utf8');
 }
 
+/**
+ * Concatenate the scrutiny base prompt with the scope's optional personality.
+ * Personality is additive (doesn't replace) so the scrutiny tier's output
+ * format rules (verdict marker, blocking-issues structure) still apply.
+ */
+async function buildSystemPrompt(input: ReviewInput): Promise<string> {
+  const base = await loadScrutinyPrompt(input.scrutiny);
+  const personality = input.personalityPrompt?.trim();
+  if (!personality) return base;
+  return `${base}\n\n## Additional reviewer guidance for this scope\n\n${personality}`;
+}
+
 export async function runReview(
   input: ReviewInput,
   mode: 'subscription' | 'api',
@@ -66,7 +78,7 @@ export async function runReview(
 }
 
 async function runViaClaudeCli(input: ReviewInput): Promise<ReviewOutput> {
-  const systemPrompt = await loadScrutinyPrompt(input.scrutiny);
+  const systemPrompt = await buildSystemPrompt(input);
   const userMessage = formatUserMessage(input);
 
   const proc = Bun.spawn({
@@ -122,7 +134,7 @@ async function runViaAnthropicApi(input: ReviewInput): Promise<ReviewOutput> {
   if (!config.claude.apiKey) {
     throw new Error('ANTHROPIC_API_KEY not configured (required for api mode)');
   }
-  const systemPrompt = await loadScrutinyPrompt(input.scrutiny);
+  const systemPrompt = await buildSystemPrompt(input);
   const userMessage = formatUserMessage(input);
 
   const client = new Anthropic({ apiKey: config.claude.apiKey });

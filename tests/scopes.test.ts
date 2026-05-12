@@ -176,4 +176,39 @@ describe('parseScopeForm', () => {
     if (!r.ok) throw new Error('unreachable');
     expect(r.input.autoApprove).toBe(true);
   });
+
+  test('personality_prompt: missing ⇒ null', () => {
+    const r = parseScopeForm({
+      target_kind: 'repo',
+      target: 'a/b',
+      scrutiny: 'standard',
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('unreachable');
+    expect(r.input.personalityPrompt).toBeNull();
+  });
+
+  test('personality_prompt: trims trailing whitespace', () => {
+    const r = parseScopeForm({
+      target_kind: 'repo',
+      target: 'a/b',
+      scrutiny: 'standard',
+      personality_prompt: 'be terse  \n\n  ',
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('unreachable');
+    expect(r.input.personalityPrompt).toBe('be terse');
+  });
+
+  test('personality_prompt: blank string ⇒ null', () => {
+    const r = parseScopeForm({
+      target_kind: 'repo',
+      target: 'a/b',
+      scrutiny: 'standard',
+      personality_prompt: '   \n\n  ',
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('unreachable');
+    expect(r.input.personalityPrompt).toBeNull();
+  });
 });
