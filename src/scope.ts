@@ -1,23 +1,19 @@
-// Scope matching — stub. Given a PR and a user's scope rules, return the
-// matching rule (and therefore scrutiny tier + claude mode), or null.
-import type { PRMeta } from './github/api.ts';
+// Scope matching: given a PR and a user's scope rules, return the matching
+// rule (and therefore scrutiny tier + claude mode + auto-approve setting),
+// or null. Used by both the poller (to decide which PRs to enqueue) and
+// any future per-PR ad-hoc match path.
 
-export type Scope = {
-  id: number;
-  userId: number;
-  targetKind: 'repo' | 'org';
-  target: string;
-  baseBranchPattern: string;
-  scrutiny: 'light' | 'standard' | 'strict';
-  excludeAuthors: string[];
-  claudeMode: 'default' | 'subscription' | 'api';
-  enabled: boolean;
-};
+import type { PRDetails } from './github/pulls.ts';
+import type { Scope } from './db/scopes.ts';
 
-export function matchScope(pr: PRMeta, scopes: Scope[], selfLogin: string): Scope | null {
+export function matchScope(
+  pr: PRDetails,
+  scopes: Scope[],
+  selfLogin: string,
+): Scope | null {
   for (const s of scopes) {
     if (!s.enabled) continue;
-    if (pr.author === selfLogin) continue;
+    if (pr.author.toLowerCase() === selfLogin.toLowerCase()) continue;
     if (s.excludeAuthors.includes(pr.author)) continue;
 
     if (s.targetKind === 'repo' && s.target !== pr.repoFull) continue;
