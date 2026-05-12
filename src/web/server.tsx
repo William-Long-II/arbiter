@@ -319,6 +319,9 @@ export function buildApp(): Hono {
         scrutiny,
         claudeMode: requestedMode,
         autoApprove,
+        // Debug endpoint: use the built-in default footer. Real scope-driven
+        // enqueues honor scope.footerTemplate via the poller.
+        footerTemplate: null,
       });
       if (!row) {
         return c.json(
@@ -474,6 +477,19 @@ async function loadTargetSuggestions(
  * values through with a type assertion.
  */
 function partialFromForm(form: Record<string, string>): Parameters<typeof ScopeFormPage>[0]['values'] {
+  let footerTemplate: string | null;
+  switch (form.footer_mode) {
+    case 'none':
+      footerTemplate = '';
+      break;
+    case 'custom':
+      footerTemplate = (form.footer_template ?? '').replace(/\s+$/, '') || '';
+      break;
+    case 'standard':
+    default:
+      footerTemplate = null;
+      break;
+  }
   return {
     targetKind: isTargetKind(form.target_kind) ? form.target_kind : 'repo',
     target: form.target ?? '',
@@ -484,6 +500,8 @@ function partialFromForm(form: Record<string, string>): Parameters<typeof ScopeF
       .map((s) => s.trim())
       .filter(Boolean),
     claudeMode: isClaudeMode(form.claude_mode) ? form.claude_mode : 'default',
+    autoApprove: form.auto_approve === 'on' || form.auto_approve === 'true',
+    footerTemplate,
     enabled: form.enabled === 'on' || form.enabled === 'true',
   };
 }

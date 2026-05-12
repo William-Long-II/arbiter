@@ -60,6 +60,15 @@ const ScopeRow: FC<{ scope: Scope }> = ({ scope }) => {
             auto-approve
           </span>
         ) : null}
+        {scope.footerTemplate === '' ? (
+          <span class="badge-pill badge-pill-muted" title="Posts review with no footer">
+            no footer
+          </span>
+        ) : scope.footerTemplate ? (
+          <span class="badge-pill badge-pill-muted" title="Custom footer template">
+            custom footer
+          </span>
+        ) : null}
         {scope.claudeMode !== 'default' ? (
           <span class="badge-pill badge-pill-muted">{scope.claudeMode}</span>
         ) : null}

@@ -122,6 +122,7 @@ async function pollUser(user: {
         scrutiny: matched.scrutiny,
         claudeMode,
         autoApprove: matched.autoApprove,
+        footerTemplate: matched.footerTemplate,
       });
       if (row) {
         enqueued++;

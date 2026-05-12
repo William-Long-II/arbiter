@@ -8,6 +8,7 @@ import {
   type PostedEvent,
 } from './db/reviews.ts';
 import { subscribeAll } from './events.ts';
+import { stampReviewBody } from './review/footer.ts';
 import { fetchPullRequest, postPullRequestReview, type ReviewEvent } from './github/pulls.ts';
 import { runReview, type Verdict } from './review/runner.ts';
 
@@ -107,7 +108,12 @@ async function processJob(job: PendingReview): Promise<void> {
       prAuthor: pr.author,
       reviewerLogin: userRow.login,
     });
-    const stamped = stampReviewBody(result.body, job, result.verdict, event);
+    const stamped = stampReviewBody(result.body, job.footerTemplate, {
+      scrutiny: job.scrutiny,
+      mode: job.claudeMode,
+      verdict: result.verdict,
+      postedEvent: event,
+    });
     await postPullRequestReview(userRow.token, job.repoFull, job.prNumber, stamped, event);
     await markDone(job.id, stamped, result.verdict, event);
     console.log(`[worker] done #${job.id} (verdict=${result.verdict}, event=${event})`);
@@ -152,17 +158,3 @@ async function loadUser(userId: number): Promise<{ token: string; login: string 
   return rows[0] ?? null;
 }
 
-function stampReviewBody(
-  body: string,
-  job: PendingReview,
-  verdict: Verdict,
-  event: PostedEvent,
-): string {
-  const parts = [
-    `scrutiny: \`${job.scrutiny}\``,
-    `mode: \`${job.claudeMode}\``,
-    `verdict: \`${verdict}\``,
-    `posted as: \`${event}\``,
-  ];
-  return `${body}\n\n---\n_Reviewed by reviewme · ${parts.join(' · ')}_`;
-}
