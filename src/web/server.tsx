@@ -747,7 +747,7 @@ function landingPage(): string {
       text-decoration: none;
       transition: background 120ms ease;
     }
-    .cta:hover { background: var(--primary-hover); }
+    .cta:hover { background: var(--primary-hover); color: var(--on-primary); }
     .bullets {
       display: grid; grid-template-columns: 1fr; gap: 16px;
       margin: 64px 0 0; padding: 0; list-style: none;
