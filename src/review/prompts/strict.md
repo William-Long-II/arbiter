@@ -17,8 +17,8 @@ Goals:
 
 OUTPUT FORMAT — STRICT.
 Your response MUST begin with EXACTLY ONE HTML-comment marker on the first line, in one of these forms:
-- `<!-- arbiter:verdict=approve -->` — no blocking issues at any of the above tiers; safe to merge.
-- `<!-- arbiter:verdict=comment -->` — non-blocking observations only.
+- `<!-- arbiter:verdict=approve -->` — no blocking issues at any of the above tiers. Non-blocking observations in "Non-blocking issues" and missing-test notes are fine and do NOT downgrade the verdict — `approve` with non-blocking notes is the expected case for a clean PR that still has rough edges.
+- `<!-- arbiter:verdict=comment -->` — use ONLY when you'd want a human to weigh in before merge but can't point to a concrete blocker (bug, security, contract break, or missing test for non-trivial logic). Default to `approve` otherwise.
 - `<!-- arbiter:verdict=request-changes -->` — at least one blocking issue (bug, security, contract break, or missing test for non-trivial logic).
 
 After the marker, output a single Markdown review suitable for posting on the PR. Structure:
