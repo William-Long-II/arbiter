@@ -39,12 +39,15 @@ import {
 import {
   enqueueReview,
   getReview,
+  getReviewOverride,
   isReviewStatus,
   listReviews,
   listReviewsForPR,
+  recordApprovalOverride,
   retryFailedReview,
   type ReviewStatus,
 } from '../db/reviews.ts';
+import { postPullRequestReview } from '../github/pulls.ts';
 import { QueuePage } from './views/queue-list.tsx';
 import { QueueDetailPage } from './views/queue-detail.tsx';
 import { RepoPrsPage } from './views/repo-prs.tsx';
@@ -374,13 +377,78 @@ export function buildApp(): Hono {
     if (Number.isNaN(id)) return c.notFound();
     const review = await getReview(user.id, id);
     if (!review) return c.notFound();
-    const siblings = await listReviewsForPR(
-      user.id,
-      review.repoFull,
-      review.prNumber,
-      review.id,
+    const [siblings, override] = await Promise.all([
+      listReviewsForPR(user.id, review.repoFull, review.prNumber, review.id),
+      getReviewOverride(review.id),
+    ]);
+    return c.html(
+      <QueueDetailPage
+        user={user}
+        review={review}
+        siblings={siblings}
+        override={override}
+      />,
     );
-    return c.html(<QueueDetailPage user={user} review={review} siblings={siblings} />);
+  });
+
+  // Manual approval override. The worker only posts APPROVE when the scope
+  // opted in, the model returned `approve`, and the PR isn't authored by
+  // the user — anything else lands as a COMMENT review. This endpoint lets
+  // the user override that for a specific PR: post a fresh APPROVE review
+  // on GitHub and persist the override (with optional reason) so the
+  // queue detail page reflects it and we have the data to revisit later.
+  app.post('/queue/:id/approve-anyway', requireUser, async (c) => {
+    const user = c.get('user');
+    const id = parseInt(c.req.param('id'), 10);
+    if (Number.isNaN(id)) return c.notFound();
+    const review = await getReview(user.id, id);
+    if (!review) return c.notFound();
+
+    // Only allow overriding a completed review that wasn't already approved.
+    // Running/queued rows aren't terminal yet, and APPROVE-on-APPROVE is
+    // pointless. We deliberately allow it on `comment` and `request-changes`
+    // verdicts — that's the whole point.
+    if (review.status !== 'done' || review.postedEvent === 'APPROVE') {
+      return c.text(
+        'Approve-anyway is only available for completed reviews that were not posted as APPROVE.',
+        409,
+      );
+    }
+    if (review.prAuthor.toLowerCase() === user.githubLogin.toLowerCase()) {
+      return c.text('GitHub does not allow approving your own pull request.', 409);
+    }
+
+    const form = await readFormStrings(c);
+    const reasonRaw = (form.reason ?? '').trim();
+    const reason = reasonRaw.length > 0 ? reasonRaw.slice(0, 2000) : null;
+
+    // Compose a short body so the new review on GitHub is self-explanatory
+    // — it'll show up next to the existing arbiter COMMENT review. Reason,
+    // when given, is quoted as the user's justification.
+    const bodyLines = [
+      'Approving despite the prior automated review. The flagged item was judged to be a suggestion, not a blocker.',
+    ];
+    if (reason) {
+      bodyLines.push('', '> ' + reason.replace(/\r?\n/g, '\n> '));
+    }
+    bodyLines.push('', '<!-- arbiter:override=approve -->');
+    const body = bodyLines.join('\n');
+
+    try {
+      await postPullRequestReview(
+        user.githubToken,
+        review.repoFull,
+        review.prNumber,
+        body,
+        'APPROVE',
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.text(`Failed to post approval to GitHub: ${message}`, 502);
+    }
+
+    await recordApprovalOverride(review.id, user.id, reason);
+    return c.redirect(`/queue/${id}`);
   });
 
   // Reset a failed review back to queued. Same-origin POST (CSRF guard

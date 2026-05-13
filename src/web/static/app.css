@@ -473,6 +473,36 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
 .queue-sibling-sha { color: var(--ink-muted); }
 .queue-sibling-time { font-size: 12px; }
 .queue-output-title-error { color: #c64545; }
+
+/* Approve-anyway override block on /queue/:id */
+.queue-override-section {
+  background: var(--surface-1);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  padding: 16px 20px;
+}
+.queue-override-hint { margin: 0 0 12px; }
+.queue-override-tag { margin-left: 4px; }
+.queue-override-form { display: flex; flex-direction: column; gap: 8px; max-width: 640px; }
+.queue-override-label {
+  color: var(--ink-muted);
+  font-size: 12px; font-weight: 500;
+}
+.queue-override-textarea {
+  background: var(--canvas); color: var(--ink);
+  border: 1px solid var(--hairline); border-radius: 8px;
+  padding: 8px 10px; font: inherit; resize: vertical;
+}
+.queue-override-textarea:focus { outline: none; border-color: var(--primary); }
+.queue-override-form button { align-self: flex-start; }
+.queue-override-reason {
+  margin: 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--primary);
+  background: var(--surface-2);
+  color: var(--ink-muted);
+  white-space: pre-wrap;
+}
 /* Rendered markdown output for the posted review on /queue/:id. Scoped
    tightly to .md-output so the prose styles don't leak into the chrome. */
 .md-output {

@@ -322,6 +322,64 @@ export async function getReview(userId: number, id: number): Promise<PendingRevi
 }
 
 /**
+ * A user-initiated override of the worker's auto-approval decision. Today
+ * the only override type is `APPROVE` — the user posted an APPROVE on top
+ * of a review that the worker had to send as COMMENT (verdict wasn't
+ * `approve`, or scope auto-approve was off, or self-author guard). The
+ * reason field, when set, is the user's explanation of why the flagged
+ * issue should have been a suggestion — useful raw material for tuning
+ * the scrutiny prompts later.
+ */
+export type ReviewOverride = {
+  id: number;
+  reviewId: number;
+  userId: number;
+  overrideEvent: 'APPROVE';
+  reason: string | null;
+  postedAt: Date;
+};
+
+const SELECT_OVERRIDE_COLUMNS = sql`
+  id,
+  review_id      AS "reviewId",
+  user_id        AS "userId",
+  override_event AS "overrideEvent",
+  reason,
+  posted_at      AS "postedAt"
+`;
+
+/**
+ * Insert an approval-override row for a review. The unique index on
+ * review_id makes this idempotent — a second click on "Approve anyway"
+ * returns null instead of recording a duplicate.
+ */
+export async function recordApprovalOverride(
+  reviewId: number,
+  userId: number,
+  reason: string | null,
+): Promise<ReviewOverride | null> {
+  const rows = await sql<ReviewOverride[]>`
+    INSERT INTO review_overrides (review_id, user_id, override_event, reason)
+    VALUES (${reviewId}, ${userId}, 'APPROVE', ${reason})
+    ON CONFLICT (review_id) DO NOTHING
+    RETURNING ${SELECT_OVERRIDE_COLUMNS}
+  `;
+  return rows[0] ?? null;
+}
+
+export async function getReviewOverride(
+  reviewId: number,
+): Promise<ReviewOverride | null> {
+  const rows = await sql<ReviewOverride[]>`
+    SELECT ${SELECT_OVERRIDE_COLUMNS}
+    FROM review_overrides
+    WHERE review_id = ${reviewId}
+    LIMIT 1
+  `;
+  return rows[0] ?? null;
+}
+
+/**
  * List other reviews for the same (repo, pr_number) — useful for the
  * detail page to show "this PR has been reviewed N times before."
  * Excludes the requesting review (via `excludeId`) so we don't echo

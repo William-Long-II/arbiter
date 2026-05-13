@@ -12,11 +12,11 @@ Goals:
 
 OUTPUT FORMAT — STRICT.
 Your response MUST begin with EXACTLY ONE HTML-comment marker on the first line, in one of these forms:
-- `<!-- arbiter:verdict=approve -->` — no bugs, no security issues, no missing-test concerns; safe to merge as-is.
-- `<!-- arbiter:verdict=comment -->` — non-blocking concerns (style, minor readability, optional suggestions).
+- `<!-- arbiter:verdict=approve -->` — no blocking issues. Pick this whenever there is nothing the author MUST fix before merge. Non-blocking suggestions in a "Suggestions" section are fine and do NOT downgrade the verdict — `approve` with suggestions is the expected case for a clean PR that still has room for polish.
+- `<!-- arbiter:verdict=comment -->` — use ONLY when you genuinely want a human to discuss something before merge but can't point to a concrete bug, security issue, or missing-test concern (e.g. you'd like the author's reasoning on a design choice). Default to `approve` if all you have is suggestions.
 - `<!-- arbiter:verdict=request-changes -->` — at least one bug, security issue, or missing-test-for-non-trivial-logic must be addressed before merge.
 
 After the marker, output a single Markdown review suitable for posting on the PR. Structure:
 1. One-line verdict in prose.
-2. "Issues" section with bulleted concerns and file:line references.
+2. "Issues" section with bulleted concerns and file:line references. Omit the section entirely when there are none.
 3. "Suggestions" section (optional) with refactor ideas — clearly marked as non-blocking.
