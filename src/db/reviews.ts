@@ -297,6 +297,36 @@ export async function markFailed(id: number, error: string): Promise<void> {
 }
 
 /**
+ * Send a running review back to the queue after a transient failure, with
+ * a future `defer_until` so `claimNext` waits out the backoff window. The
+ * last error is kept on the row so the detail page explains why it's
+ * pending. `attempt` is intentionally untouched — claimNext bumps it on
+ * the next claim, and that count is what bounds auto-retries. `defer_count`
+ * is left alone too, so it stays a pure CI-deferral counter (the queue UI
+ * uses `defer_count > 0` to tell a CI wait from a retry wait). Guarded on
+ * status='running' so only the worker that holds the row can requeue it.
+ */
+export async function requeueForRetry(
+  id: number,
+  delaySeconds: number,
+  lastError: string,
+): Promise<PendingReview | null> {
+  const rows = await sql<PendingReview[]>`
+    UPDATE pending_reviews
+    SET status = 'queued',
+        phase = NULL,
+        started_at = NULL,
+        defer_until = now() + make_interval(secs => ${delaySeconds}),
+        error = ${lastError}
+    WHERE id = ${id} AND status = 'running'
+    RETURNING ${SELECT_REVIEW_COLUMNS}
+  `;
+  const row = rows[0] ?? null;
+  if (row) await notifyReviewChanged(row);
+  return row;
+}
+
+/**
  * Fail every review wedged in `running` past `olderThanMinutes`. A worker
  * that dies mid-review (crash, OOM, container restart) leaves its claimed
  * row `running` forever — `claimNext` only picks `queued`, so nothing ever

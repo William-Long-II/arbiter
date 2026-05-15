@@ -181,12 +181,23 @@ const QueueRow: FC<{ review: PendingReview }> = ({ review }) => {
       </div>
       <StatusPill status={review.status} />
       {review.status === 'queued' && review.deferUntil && review.deferUntil > new Date() ? (
-        <span
-          class="badge-pill badge-pill-muted queue-row-defer"
-          title={`Waiting on CI · attempt ${review.deferCount} of 10 · next check ${formatFuture(review.deferUntil)}`}
-        >
-          waiting on CI
-        </span>
+        // defer_count > 0 ⇒ deferReview (CI wait); requeueForRetry never
+        // touches defer_count, so 0 ⇒ a transient-failure auto-retry.
+        review.deferCount > 0 ? (
+          <span
+            class="badge-pill badge-pill-muted queue-row-defer"
+            title={`Waiting on CI · defer ${review.deferCount} of 10 · next check ${formatFuture(review.deferUntil)}`}
+          >
+            waiting on CI
+          </span>
+        ) : (
+          <span
+            class="badge-pill badge-pill-muted queue-row-defer"
+            title={`Transient failure · auto-retry ${formatFuture(review.deferUntil)} · attempt ${review.attempt}`}
+          >
+            retrying
+          </span>
+        )
       ) : null}
       <span
         class="queue-row-time"
