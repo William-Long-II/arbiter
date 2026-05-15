@@ -60,6 +60,33 @@ describe('formatUserMessage', () => {
     });
     expect(msg).toContain('```diff');
   });
+
+  test('renders the large-PR caveat before the diff when diffNotice is set', () => {
+    const msg = formatUserMessage({
+      scrutiny: 'standard',
+      diff: '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new',
+      prTitle: 't',
+      prAuthor: 'a',
+      repoFull: 'r/r',
+      diffNotice: 'Reviewed in FULL: 12 file(s). Listed by name only: 480.',
+    });
+    expect(msg).toContain('Large pull request — partial diff');
+    expect(msg).toContain('Reviewed in FULL: 12 file(s)');
+    // Caveat must appear before the fenced diff so the model reads it first.
+    expect(msg.indexOf('Reviewed in FULL')).toBeLessThan(msg.indexOf('```diff'));
+  });
+
+  test('omits the caveat block entirely for a normal full diff', () => {
+    const msg = formatUserMessage({
+      scrutiny: 'standard',
+      diff: '+ ok',
+      prTitle: 't',
+      prAuthor: 'a',
+      repoFull: 'r/r',
+      diffNotice: null,
+    });
+    expect(msg).not.toContain('partial diff');
+  });
 });
 
 describe('parseClaudeCliOutput', () => {

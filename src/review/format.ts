@@ -14,6 +14,11 @@ export type ReviewInput = {
    * checks + statuses APIs. Null/undefined when the repo has no signals
    * — in that case the prompt omits the section entirely. */
   ciSummary?: string | null;
+  /** Coverage caveat for reconstructed large-PR diffs (set by
+   * fetchPullRequest's listFiles fallback). When present, the diff is
+   * partial and the model is told to open with a visible caveat. Null for
+   * normal full diffs. */
+  diffNotice?: string | null;
 };
 
 export type Verdict = 'approve' | 'comment' | 'request-changes';
@@ -68,6 +73,13 @@ export function formatUserMessage(input: ReviewInput): string {
   ];
   if (input.ciSummary && input.ciSummary.trim().length > 0) {
     lines.push(``, input.ciSummary);
+  }
+  if (input.diffNotice && input.diffNotice.trim().length > 0) {
+    lines.push(
+      ``,
+      `> [!IMPORTANT] Large pull request — partial diff`,
+      `> ${input.diffNotice.trim()}`,
+    );
   }
   lines.push(``, `Unified diff:`, `${fence}diff`, input.diff, fence);
   return lines.join('\n');

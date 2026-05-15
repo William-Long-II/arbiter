@@ -28,30 +28,186 @@ export async function postPullRequestReview(
 }
 
 /**
- * GitHub's unified-diff endpoint refuses PRs with more than 300 files.
- * The error surfaces as 422 with `code: "too_large"`. Thrown by
- * fetchPullRequest so the worker can mark the row `skipped` (not failed)
- * — there's no point retrying a structural limit.
+ * GitHub's unified-diff endpoint refuses PRs over its structural limits
+ * (>300 changed files, or >20000 diff lines). It signals this with
+ * `code: "too_large"` in the error payload — NOT with HTTP 422 (an earlier
+ * version assumed 422 and so never matched; the diff media type returns
+ * 406). Thrown by fetchPullRequest so the worker can mark the row
+ * `skipped` (not failed) — there's no point retrying a structural limit.
  */
 export class DiffTooManyFilesError extends Error {
   constructor(public readonly repoFull: string, public readonly pullNumber: number) {
     super(
-      `${repoFull}#${pullNumber} has too many changed files for GitHub's unified-diff endpoint (>300). ` +
+      `${repoFull}#${pullNumber} is over GitHub's diff size limit (>300 files or >20000 lines). ` +
         `Skipping automated review; this PR needs a human eye.`,
     );
     this.name = 'DiffTooManyFilesError';
   }
 }
 
-function isTooLargeDiffError(err: unknown): boolean {
+/**
+ * Detect GitHub's "diff too large" rejection. We key off the
+ * `code: "too_large"` marker, which GitHub uses *only* for diff/content
+ * size limits, so it's safe regardless of HTTP status (it's 406 for the
+ * `.diff` media type, not 422 as previously assumed — that wrong
+ * assumption meant every real occurrence fell through to `failed`).
+ *
+ * Defensive on shape: `response.data` may be a parsed object *or* a raw
+ * string depending on the response content-type, and `errors` may be an
+ * array or a single object — so we check the structured payload and fall
+ * back to the human-readable message text.
+ */
+export function isTooLargeDiffError(err: unknown): boolean {
   if (typeof err !== 'object' || err === null) return false;
-  const e = err as { status?: unknown; response?: { data?: { errors?: unknown } } };
-  if (e.status !== 422) return false;
-  const errors = e.response?.data?.errors;
-  if (!Array.isArray(errors)) return false;
-  return errors.some(
-    (x) => typeof x === 'object' && x !== null && (x as { code?: unknown }).code === 'too_large',
-  );
+  const e = err as { message?: unknown; response?: { data?: unknown } };
+
+  const data = e.response?.data;
+  if (data && typeof data === 'object') {
+    const raw = (data as { errors?: unknown }).errors;
+    const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
+    if (
+      list.some(
+        (x) =>
+          typeof x === 'object' &&
+          x !== null &&
+          (x as { code?: unknown }).code === 'too_large',
+      )
+    ) {
+      return true;
+    }
+  }
+
+  const haystack = `${typeof e.message === 'string' ? e.message : ''} ${
+    typeof data === 'string' ? data : ''
+  }`;
+  return /exceeded the maximum number of (files|lines)/i.test(haystack);
+}
+
+/**
+ * GitHub's `pulls.listFiles` is paginated and capped at 3000 files. A PR
+ * that returns the cap almost certainly has more — there's no patch-level
+ * data past it, so it's genuinely unreviewable via the API.
+ */
+export const LISTFILES_HARD_CAP = 3000;
+
+/**
+ * Byte budget for the full-patch portion of a reconstructed diff. Sized
+ * well under the runner's MAX_DIFF_BYTES (1 MB) so that even a worst-case
+ * name-only manifest (~3000 files) plus the fence, PR metadata, CI summary
+ * and the model's echoed caveat still clears that cap — otherwise
+ * assertDiffSize would skip the very PR we just rebuilt to review.
+ */
+export const RECONSTRUCT_BUDGET_BYTES = 600_000;
+
+/**
+ * Lockfiles, vendored trees and generated/minified artifacts. These get
+ * manifest-only treatment (name + counts, no patch) so their churn never
+ * crowds real code out of the review window. They still appear in the
+ * count so the reviewer knows they changed.
+ */
+const NOISE_RE =
+  /(^|\/)(bun\.lock|package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|composer\.lock|Gemfile\.lock|poetry\.lock|go\.sum)$|(^|\/)(node_modules|vendor|dist|build|out|coverage|\.next|__generated__|__snapshots__)\/|\.(min\.js|min\.css|map|snap)$/i;
+
+/** Subset of GitHub's pull-request file object we rely on. */
+export type ChangedFile = {
+  filename: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  changes: number;
+  patch?: string;
+  previous_filename?: string;
+};
+
+export type AssembledDiff = {
+  /** Synthetic unified diff: full per-file patches + a name-only manifest. */
+  diff: string;
+  /** Human-readable coverage line; surfaced to the model and the review. */
+  notice: string;
+};
+
+function renderFileBlock(f: ChangedFile): string {
+  // GitHub's `patch` starts at the first `@@` hunk. Prepend a git-style
+  // header so the model reads file boundaries (and add/remove/rename)
+  // unambiguously across the concatenation.
+  const from =
+    f.status === 'added' ? '/dev/null' : `a/${f.previous_filename ?? f.filename}`;
+  const to = f.status === 'removed' ? '/dev/null' : `b/${f.filename}`;
+  return `diff --git a/${f.filename} b/${f.filename}\n--- ${from}\n+++ ${to}\n${f.patch}`;
+}
+
+/**
+ * Build a reviewable synthetic diff from a PR's file list when GitHub
+ * refuses the single-blob diff. Pure (no network) so it's unit-testable.
+ *
+ * Strategy (chosen with the user): drop noise (lockfiles/generated) to
+ * manifest-only, then include real code patches smallest-change-first so
+ * the most files fit the byte budget. Everything not included in full is
+ * listed by name with its add/delete counts. The `notice` instructs the
+ * model to open with a visible "partial review of a large PR" caveat.
+ *
+ * Throws DiffTooManyFilesError only for the genuine residual: at/over the
+ * listFiles cap, an empty list, or nothing reviewable fit (all
+ * noise/binary) — a manifest-only "review" would be misleading noise.
+ */
+export function assembleLargeDiff(
+  files: ChangedFile[],
+  repoFull: string,
+  pullNumber: number,
+  budgetBytes: number = RECONSTRUCT_BUDGET_BYTES,
+): AssembledDiff {
+  if (files.length === 0 || files.length >= LISTFILES_HARD_CAP) {
+    throw new DiffTooManyFilesError(repoFull, pullNumber);
+  }
+
+  const candidates: ChangedFile[] = [];
+  const manifestOnly: ChangedFile[] = [];
+  for (const f of files) {
+    // No `patch` = binary or an individually-oversized file diff GitHub
+    // itself elided. Noise = lockfile/generated. Both go manifest-only.
+    if (!f.patch || NOISE_RE.test(f.filename)) manifestOnly.push(f);
+    else candidates.push(f);
+  }
+  candidates.sort((a, b) => (a.changes ?? 0) - (b.changes ?? 0));
+
+  const blocks: string[] = [];
+  let bytes = 0;
+  let included = 0;
+  for (const f of candidates) {
+    const block = renderFileBlock(f);
+    const b = Buffer.byteLength(block, 'utf8') + 1; // +1 for the join newline
+    if (bytes + b > budgetBytes) {
+      manifestOnly.push(f);
+      continue;
+    }
+    blocks.push(block);
+    bytes += b;
+    included++;
+  }
+  if (included === 0) {
+    throw new DiffTooManyFilesError(repoFull, pullNumber);
+  }
+
+  const overCap = files.length >= LISTFILES_HARD_CAP;
+  const manifest = manifestOnly
+    .map(
+      (f) => `  ${f.filename}  (+${f.additions}/-${f.deletions}, ${f.status})`,
+    )
+    .join('\n');
+  const notice =
+    `This pull request exceeds GitHub's single-diff limit ` +
+    `(${files.length}${overCap ? '+' : ''} changed files). ` +
+    `Reviewed in FULL: ${included} file(s). ` +
+    `Listed by name only (patch elided to fit the review window): ` +
+    `${manifestOnly.length} file(s). Begin your review with a clearly ` +
+    `visible note that this is a PARTIAL review of a large PR so it is ` +
+    `not mistaken for an exhaustive pass.`;
+  const diff =
+    blocks.join('\n') +
+    (manifestOnly.length
+      ? `\n\n# Files changed but not shown above (name only):\n${manifest}\n`
+      : '');
+  return { diff, notice };
 }
 
 export type PRDetails = {
@@ -78,28 +234,41 @@ export async function fetchPullRequest(
   token: string,
   repoFull: string,
   pullNumber: number,
-): Promise<{ pr: PRDetails; diff: string }> {
+): Promise<{ pr: PRDetails; diff: string; diffNotice: string | null }> {
   const [owner, repo] = repoFull.split('/');
   if (!owner || !repo) throw new Error(`Invalid repoFull: ${repoFull}`);
 
   const octokit = octokitFor(token);
 
   const meta = await octokit.rest.pulls.get({ owner, repo, pull_number: pullNumber });
-  let diffResp;
+
+  let diff: string;
+  let diffNotice: string | null = null;
   try {
-    diffResp = await octokit.rest.pulls.get({
+    const diffResp = await octokit.rest.pulls.get({
       owner,
       repo,
       pull_number: pullNumber,
       mediaType: { format: 'diff' },
     });
+    diff = diffResp.data as unknown as string;
   } catch (err) {
-    // 422 with code 'too_large' = PR has >300 files. Surface as a typed
-    // error so the worker can skip cleanly instead of marking failed.
-    if (isTooLargeDiffError(err)) {
-      throw new DiffTooManyFilesError(repoFull, pullNumber);
-    }
-    throw err;
+    // GitHub refuses the single-blob diff over its size limits (>300
+    // files / >20000 lines, `code: too_large`). Don't give up — rebuild
+    // a reviewable diff from the paginated file list (its own suggested
+    // fallback). assembleLargeDiff throws DiffTooManyFilesError only for
+    // the genuine residual (>=3000 files / nothing reviewable), which the
+    // worker still marks `skipped`.
+    if (!isTooLargeDiffError(err)) throw err;
+    const files = (await octokit.paginate(octokit.rest.pulls.listFiles, {
+      owner,
+      repo,
+      pull_number: pullNumber,
+      per_page: 100,
+    })) as ChangedFile[];
+    const assembled = assembleLargeDiff(files, repoFull, pullNumber);
+    diff = assembled.diff;
+    diffNotice = assembled.notice;
   }
 
   const m = meta.data;
@@ -115,7 +284,8 @@ export async function fetchPullRequest(
       draft: m.draft ?? false,
       autoMerge: m.auto_merge !== null,
     },
-    diff: diffResp.data as unknown as string,
+    diff,
+    diffNotice,
   };
 }
 

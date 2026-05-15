@@ -107,7 +107,11 @@ async function processJob(job: PendingReview): Promise<void> {
   }
 
   try {
-    const { pr, diff } = await fetchPullRequest(userRow.token, job.repoFull, job.prNumber);
+    const { pr, diff, diffNotice } = await fetchPullRequest(
+      userRow.token,
+      job.repoFull,
+      job.prNumber,
+    );
     // Fetch CI signals in parallel with prep work would be ideal, but the
     // diff fetch already dominates wall time. Sequential keeps the code
     // simple; fetchChecksSummary swallows its own errors so we'll never
@@ -144,6 +148,7 @@ async function processJob(job: PendingReview): Promise<void> {
         repoFull: pr.repoFull,
         personalityPrompt: job.personalityPrompt,
         ciSummary,
+        diffNotice,
       },
       job.claudeMode,
     );
