@@ -177,6 +177,27 @@ describe('parseScopeForm', () => {
     expect(r.input.autoApprove).toBe(true);
   });
 
+  test('gate_on_blocking: missing ⇒ false, checked ⇒ true', () => {
+    const off = parseScopeForm({
+      target_kind: 'repo',
+      target: 'a/b',
+      scrutiny: 'standard',
+    });
+    expect(off.ok).toBe(true);
+    if (!off.ok) throw new Error('unreachable');
+    expect(off.input.gateOnBlocking).toBe(false);
+
+    const on = parseScopeForm({
+      target_kind: 'repo',
+      target: 'a/b',
+      scrutiny: 'standard',
+      gate_on_blocking: 'on',
+    });
+    expect(on.ok).toBe(true);
+    if (!on.ok) throw new Error('unreachable');
+    expect(on.input.gateOnBlocking).toBe(true);
+  });
+
   test('personality_prompt: missing ⇒ null', () => {
     const r = parseScopeForm({
       target_kind: 'repo',

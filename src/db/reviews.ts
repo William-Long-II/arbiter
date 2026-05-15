@@ -22,6 +22,7 @@ export type PendingReview = {
   scrutiny: Scrutiny;
   claudeMode: Exclude<ClaudeMode, 'default'>;
   autoApprove: boolean;
+  gateOnBlocking: boolean;
   /** Snapshotted from the matching scope at enqueue time. See db/scopes.ts. */
   footerTemplate: string | null;
   /** Snapshotted from the matching scope at enqueue time. See db/scopes.ts. */
@@ -67,6 +68,7 @@ export type EnqueueInput = {
   scrutiny: Scrutiny;
   claudeMode: Exclude<ClaudeMode, 'default'>;
   autoApprove: boolean;
+  gateOnBlocking: boolean;
   footerTemplate: string | null;
   personalityPrompt: string | null;
   reviewContext: ReviewContext;
@@ -86,6 +88,7 @@ const SELECT_REVIEW_COLUMNS = sql`
   scrutiny,
   claude_mode  AS "claudeMode",
   auto_approve AS "autoApprove",
+  gate_on_blocking AS "gateOnBlocking",
   footer_template AS "footerTemplate",
   personality_prompt AS "personalityPrompt",
   review_context AS "reviewContext",
@@ -137,8 +140,8 @@ export async function enqueueReview(input: EnqueueInput): Promise<PendingReview 
     INSERT INTO pending_reviews (
       user_id, scope_id, repo_full, pr_number, pr_title, pr_author,
       base_branch, head_branch, head_sha, scrutiny, claude_mode,
-      auto_approve, footer_template, personality_prompt, review_context,
-      status
+      auto_approve, gate_on_blocking, footer_template, personality_prompt,
+      review_context, status
     ) VALUES (
       ${input.userId},
       ${input.scopeId ?? null},
@@ -152,6 +155,7 @@ export async function enqueueReview(input: EnqueueInput): Promise<PendingReview 
       ${input.scrutiny},
       ${input.claudeMode},
       ${input.autoApprove},
+      ${input.gateOnBlocking},
       ${input.footerTemplate},
       ${input.personalityPrompt},
       ${input.reviewContext},

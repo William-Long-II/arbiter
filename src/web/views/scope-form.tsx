@@ -37,6 +37,7 @@ export const ScopeFormPage: FC<Props> = ({
       ['dependabot[bot]', 'renovate[bot]'],
     claudeMode: values?.claudeMode ?? scope?.claudeMode ?? 'default',
     autoApprove: values?.autoApprove ?? scope?.autoApprove ?? false,
+    gateOnBlocking: values?.gateOnBlocking ?? scope?.gateOnBlocking ?? false,
     footerTemplate: values?.footerTemplate ?? scope?.footerTemplate ?? null,
     personalityPrompt: values?.personalityPrompt ?? scope?.personalityPrompt ?? null,
     triggerMode: values?.triggerMode ?? scope?.triggerMode ?? 'open',
@@ -285,6 +286,26 @@ export const ScopeFormPage: FC<Props> = ({
             Post as a GitHub <code class="mono-sm">APPROVE</code> when the reviewer's verdict
             is <code class="mono-sm">approve</code>. Otherwise (or when the PR is yours, which
             GitHub blocks anyway) posts as a regular <code class="mono-sm">COMMENT</code>.
+          </p>
+        </fieldset>
+
+        <fieldset class="form-row">
+          <label class="checkbox">
+            <input
+              type="checkbox"
+              name="gate_on_blocking"
+              checked={v.gateOnBlocking}
+            />
+            <span>Gate on blocking findings</span>
+          </label>
+          <p class="form-hint">
+            When the review has blocking findings, post as{' '}
+            <code class="mono-sm">REQUEST_CHANGES</code> and set a failing{' '}
+            <code class="mono-sm">arbiter/review</code> commit status (make it a
+            required check in branch protection for a real merge gate).
+            Off ⇒ blocking findings still post, just as a{' '}
+            <code class="mono-sm">COMMENT</code>. Your own PRs fall back to{' '}
+            <code class="mono-sm">COMMENT</code> (GitHub blocks self-review).
           </p>
         </fieldset>
 
