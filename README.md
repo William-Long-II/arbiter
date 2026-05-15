@@ -65,6 +65,10 @@ review and reporting a misleading timeout.
 - **macOS snapshot drift.** The exported file is a point-in-time copy. The
   container refreshes its own copy independently of the host Keychain. If
   container reviews start timing out weeks later, re-run `bun run setup`.
+- **First-run config notice.** The image seeds a minimal `/root/.claude.json`;
+  if you ever see a `config file not found at /root/.claude.json` notice on
+  stderr it's harmless and self-heals on the first `claude -p` call — it
+  doesn't touch the JSON the runner parses on stdout.
 - **Escape hatch.** Set `CLAUDE_DEFAULT_MODE=api` + `ANTHROPIC_API_KEY` to
   skip all of this (no per-host login, no bind-mount), at the cost of
   per-token billing instead of the subscription.

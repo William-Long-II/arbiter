@@ -15,6 +15,14 @@ RUN apk add --no-cache nodejs npm \
   && npm install -g @anthropic-ai/claude-code \
   && claude --version || true
 
+# Seed a minimal global config. /root/.claude.json sits *next to* the
+# bind-mounted /root/.claude/ dir (not inside it), so without this the
+# first `claude -p` in every freshly-recreated container emits a
+# harmless "config file not found" notice 3x to stderr while it builds
+# a default. Claude Code tolerates/migrates {}; seeding it keeps logs
+# clean. The bind-mount only covers the dir, so this file is never shadowed.
+RUN echo '{}' > /root/.claude.json
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json tsconfig.json ./
 COPY src ./src
