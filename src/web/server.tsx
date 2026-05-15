@@ -43,10 +43,12 @@ import {
   isReviewStatus,
   listReviews,
   listReviewsForPR,
+  markDone,
   recordApprovalOverride,
   retryFailedReview,
   type ReviewStatus,
 } from '../db/reviews.ts';
+import { describeError } from '../errors.ts';
 import { postPullRequestReview } from '../github/pulls.ts';
 import { QueuePage } from './views/queue-list.tsx';
 import { QueueDetailPage } from './views/queue-detail.tsx';
@@ -443,11 +445,61 @@ export function buildApp(): Hono {
         'APPROVE',
       );
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return c.text(`Failed to post approval to GitHub: ${message}`, 502);
+      return c.text(
+        `Failed to post approval to GitHub: ${describeError(err)}`,
+        502,
+      );
     }
 
     await recordApprovalOverride(review.id, user.id, reason);
+    return c.redirect(`/queue/${id}`);
+  });
+
+  // "Post anyway" for a review that was skipped because the PR
+  // conversation was locked at post time (markSkippedPendingPost). The
+  // body is already generated and stored; re-post it with the originally
+  // intended event. On success the row transitions skipped → done. If
+  // GitHub still rejects it (conversation still locked), surface that so
+  // the user knows to unlock first. Same-origin POST (CSRF guard applies).
+  app.post('/queue/:id/post-anyway', requireUser, async (c) => {
+    const user = c.get('user');
+    const id = parseInt(c.req.param('id'), 10);
+    if (Number.isNaN(id)) return c.notFound();
+    const review = await getReview(user.id, id);
+    if (!review) return c.notFound();
+
+    // Eligible only for a skipped row whose body was preserved. Structural
+    // skips (diff too large) have output === null and never qualify.
+    if (
+      review.status !== 'skipped' ||
+      !review.output ||
+      !review.verdict ||
+      !review.postedEvent
+    ) {
+      return c.text(
+        'Post-anyway is only available for a skipped review whose body was ' +
+          'preserved because the PR conversation was locked.',
+        409,
+      );
+    }
+
+    try {
+      await postPullRequestReview(
+        user.githubToken,
+        review.repoFull,
+        review.prNumber,
+        review.output,
+        review.postedEvent,
+      );
+    } catch (err) {
+      return c.text(
+        `Still couldn't post to GitHub — is the PR conversation still ` +
+          `locked? ${describeError(err)}`,
+        502,
+      );
+    }
+
+    await markDone(review.id, review.output, review.verdict, review.postedEvent);
     return c.redirect(`/queue/${id}`);
   });
 

@@ -6,16 +6,19 @@ import {
   markDone,
   markFailed,
   markSkipped,
+  markSkippedPendingPost,
   setReviewPhase,
   type PendingReview,
   type PostedEvent,
 } from './db/reviews.ts';
 import { markTokenRevoked } from './db/users.ts';
 import { subscribeAll } from './events.ts';
+import { describeError } from './errors.ts';
 import { stampReviewBody } from './review/footer.ts';
 import {
   DiffTooManyFilesError,
   fetchPullRequest,
+  isLockedConversationError,
   postPullRequestReview,
   type ReviewEvent,
 } from './github/pulls.ts';
@@ -166,11 +169,30 @@ async function processJob(job: PendingReview): Promise<void> {
       postedEvent: event,
     });
     await setReviewPhase(job.id, 'posting');
-    await postPullRequestReview(userRow.token, job.repoFull, job.prNumber, stamped, event);
+    try {
+      await postPullRequestReview(userRow.token, job.repoFull, job.prNumber, stamped, event);
+    } catch (postErr) {
+      // The review is generated and valid — only the POST failed because
+      // the PR conversation is locked. A retry would just re-lock, so
+      // don't fail: skip but PRESERVE the body so the user can
+      // "Post anyway" after unlocking. Any other post error falls
+      // through to the generic handler below.
+      if (isLockedConversationError(postErr)) {
+        const reason =
+          'PR conversation is locked — review generated but not posted. ' +
+          'Use "Post anyway" once the conversation is unlocked on GitHub.';
+        await markSkippedPendingPost(job.id, reason, stamped, result.verdict, event);
+        console.log(
+          `[worker] skipped #${job.id} (locked conversation; body preserved for post-anyway)`,
+        );
+        return;
+      }
+      throw postErr;
+    }
     await markDone(job.id, stamped, result.verdict, event);
     console.log(`[worker] done #${job.id} (verdict=${result.verdict}, event=${event})`);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = describeError(err);
     // Structural limits (PR too big, diff over our size cap) — not failures
     // worth retrying. Mark skipped so the queue UI doesn't offer a retry
     // button; the row stays in the timeline as a record of "we saw it,

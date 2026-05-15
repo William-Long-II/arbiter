@@ -35,6 +35,14 @@ export const QueueDetailPage: FC<Props> = ({
     review.postedEvent !== 'APPROVE' &&
     !isSelfAuthor &&
     !override;
+  // A review skipped because the PR conversation was locked: the body was
+  // generated and preserved (output set) so it can still be posted once
+  // the user unlocks the PR. Structural skips have output === null.
+  const isPendingPost =
+    review.status === 'skipped' &&
+    !!review.output &&
+    !!review.verdict &&
+    !!review.postedEvent;
   return (
     <Layout title={`#${review.prNumber} ${review.prTitle}`} user={user} active="queue">
       <header class="page-header page-header-with-action">
@@ -175,10 +183,42 @@ export const QueueDetailPage: FC<Props> = ({
         </section>
       ) : null}
 
+      {isPendingPost ? (
+        <section class="queue-output-section queue-override-section">
+          <h2 class="queue-output-title">Post anyway</h2>
+          <p class="page-subhead queue-override-hint">
+            This review was generated but not posted because the pull
+            request conversation was locked. Unlock it on{' '}
+            <a href={ghUrl} target="_blank" rel="noreferrer">
+              GitHub
+            </a>
+            , then post the saved review below as{' '}
+            <code class="mono-sm">{review.postedEvent}</code>.
+          </p>
+          <form
+            method="post"
+            action={`/queue/${review.id}/post-anyway`}
+            class="queue-override-form"
+          >
+            <button class="cta-primary" type="submit">
+              Post saved review to GitHub
+            </button>
+          </form>
+        </section>
+      ) : null}
+
       {review.error ? (
         <section class="queue-output-section">
           <div class="queue-output-header">
-            <h2 class="queue-output-title queue-output-title-error">Error</h2>
+            <h2
+              class={
+                isPendingPost
+                  ? 'queue-output-title'
+                  : 'queue-output-title queue-output-title-error'
+              }
+            >
+              {isPendingPost ? 'Why this was skipped' : 'Error'}
+            </h2>
             {review.status === 'failed' ? (
               <form method="post" action={`/queue/${review.id}/retry`}>
                 <button class="cta-secondary" type="submit">
@@ -200,7 +240,9 @@ export const QueueDetailPage: FC<Props> = ({
 
       {review.output ? (
         <section class="queue-output-section">
-          <h2 class="queue-output-title">Posted review</h2>
+          <h2 class="queue-output-title">
+            {isPendingPost ? 'Generated review (not posted yet)' : 'Posted review'}
+          </h2>
           <div
             class="md-output"
             dangerouslySetInnerHTML={{ __html: marked.parse(review.output) as string }}
