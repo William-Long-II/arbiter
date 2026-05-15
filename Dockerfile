@@ -11,7 +11,9 @@ WORKDIR /app
 # claude-code is published with node-style global bin shims that bun's
 # global install doesn't always wire up identically. Credentials come
 # from the host's ~/.claude/ via the docker-compose bind-mount.
-RUN apk add --no-cache nodejs npm \
+# git is needed for 'checkout'-context reviews (shallow-fetch the PR head
+# so the reviewer can verify cross-module references).
+RUN apk add --no-cache nodejs npm git \
   && npm install -g @anthropic-ai/claude-code \
   && claude --version || true
 

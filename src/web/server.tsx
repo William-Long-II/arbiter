@@ -21,6 +21,7 @@ import {
   deleteScope,
   getScope,
   isClaudeMode,
+  isReviewContext,
   isScrutiny,
   isTargetKind,
   isTriggerMode,
@@ -311,6 +312,7 @@ export function buildApp(): Hono {
         // or personality. Built-in defaults are the safe choice.
         footerTemplate: null,
         personalityPrompt: null,
+        reviewContext: 'isolated',
       });
       if (!row) {
         // Idempotency hit — same head SHA already queued. Find the existing
@@ -620,6 +622,7 @@ export function buildApp(): Hono {
         // Real scope-driven enqueues honor those fields via the poller.
         footerTemplate: null,
         personalityPrompt: null,
+        reviewContext: 'isolated',
       });
       if (!row) {
         return c.json(
@@ -810,6 +813,9 @@ function partialFromForm(form: Record<string, string>): Parameters<typeof ScopeF
       return v.length > 0 ? v : null;
     })(),
     triggerMode: isTriggerMode(form.trigger_mode) ? form.trigger_mode : 'open',
+    reviewContext: isReviewContext(form.review_context)
+      ? form.review_context
+      : 'isolated',
     enabled: form.enabled === 'on' || form.enabled === 'true',
   };
 }

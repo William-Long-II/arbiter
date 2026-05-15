@@ -40,6 +40,8 @@ export const ScopeFormPage: FC<Props> = ({
     footerTemplate: values?.footerTemplate ?? scope?.footerTemplate ?? null,
     personalityPrompt: values?.personalityPrompt ?? scope?.personalityPrompt ?? null,
     triggerMode: values?.triggerMode ?? scope?.triggerMode ?? 'open',
+    reviewContext:
+      values?.reviewContext ?? scope?.reviewContext ?? 'isolated',
     enabled: values?.enabled ?? scope?.enabled ?? true,
   };
 
@@ -207,6 +209,37 @@ export const ScopeFormPage: FC<Props> = ({
             Review-requested uses GitHub's <code class="mono-sm">review-requested:@me</code>{' '}
             search — accounts for team memberships and dramatically shrinks the set of PRs
             the bot picks up. Drafts and PRs you haven't been tagged on are skipped.
+          </p>
+        </fieldset>
+
+        <fieldset class="form-row">
+          <legend>Review context</legend>
+          <label class="radio">
+            <input
+              type="radio"
+              name="review_context"
+              value="isolated"
+              checked={v.reviewContext === 'isolated'}
+            />
+            <span>Isolated — review from the diff only (default)</span>
+          </label>
+          <label class="radio">
+            <input
+              type="radio"
+              name="review_context"
+              value="checkout"
+              checked={v.reviewContext === 'checkout'}
+            />
+            <span>Repo checkout — fetch the PR head so cross-module refs can be verified</span>
+          </label>
+          <p class="form-hint">
+            Isolated runs the reviewer in an empty working directory — fast, and
+            it won't wander into unrelated code or hedge about "the working
+            directory contains an unrelated project." Repo checkout shallow-fetches
+            the PR's head commit so the reviewer can confirm symbols and
+            cross-module references; it adds a clone per review and falls back to
+            isolated automatically if the fetch fails. Only applies in
+            subscription (CLI) mode — API mode is always diff-only.
           </p>
         </fieldset>
 

@@ -19,6 +19,13 @@ export type ReviewInput = {
    * partial and the model is told to open with a visible caveat. Null for
    * normal full diffs. */
   diffNotice?: string | null;
+  /** What the reviewer subprocess sees. 'isolated' (default): diff only,
+   * empty working dir. 'checkout': PR head checked out so cross-module
+   * refs can be verified. Snapshotted from scope at enqueue. */
+  reviewContext?: 'isolated' | 'checkout';
+  /** Only consulted when reviewContext === 'checkout' (CLI mode). The
+   * token + PR ref needed to shallow-checkout the PR head. */
+  checkout?: { token: string; prNumber: number; headSha: string } | null;
 };
 
 export type Verdict = 'approve' | 'comment' | 'request-changes';
