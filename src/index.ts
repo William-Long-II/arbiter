@@ -1,11 +1,32 @@
 import { config } from './config.ts';
 import { runMigrations, startEventListener } from './db.ts';
+import {
+  formatSubscriptionPreflightError,
+  preflightClaudeCli,
+} from './review/runner.ts';
 import { buildApp } from './web/server.tsx';
 import { startWorker, stopWorker } from './worker.ts';
 import { startPoller, stopPoller } from './github/poller.ts';
 import { startRetention, stopRetention } from './retention.ts';
 
 async function main(): Promise<void> {
+  // Fail fast on unreachable subscription credentials. Done before any
+  // other boot work (no DB dependency) so the error is the first thing
+  // in the logs. Gated on the default mode: per-scope api overrides are
+  // unaffected; a per-scope subscription override while the default is
+  // api is the one edge this doesn't pre-check (rare, and that review
+  // still fails loudly via ReviewTimeoutError rather than hanging silently
+  // forever — the watchdog already bounds it).
+  if (config.claude.defaultMode === 'subscription') {
+    console.log('[boot] preflighting subscription credentials (claude -p)…');
+    const pre = await preflightClaudeCli();
+    if (!pre.ok) {
+      console.error(formatSubscriptionPreflightError(pre.detail));
+      process.exit(1);
+    }
+    console.log('[boot] subscription credentials OK');
+  }
+
   console.log('[boot] running migrations…');
   await runMigrations();
 

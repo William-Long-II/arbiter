@@ -37,8 +37,12 @@ services:
     volumes:
       # Mount host ~/.claude/ so the container can use the user's
       # Claude Code subscription credentials when running `claude -p`.
-      # Comment out if you only use api mode.
-      - ${HOME:-/root}/.claude:/root/.claude
+      # CLAUDE_HOST_DIR pins an explicit host path: required on
+      # Windows, where ${HOME} is unset under PowerShell so the old
+      # default fell back to a nonexistent /root/.claude and mounted
+      # empty. Set it in .env. Linux/macOS still auto-resolve
+      # ~/.claude. Comment the line out entirely for api-only mode.
+      - ${CLAUDE_HOST_DIR:-${HOME:-/root}/.claude}:/root/.claude
     ports:
       - "8787:8787"
 
