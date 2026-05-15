@@ -1,5 +1,6 @@
 import type { FC } from 'hono/jsx';
 import { marked } from 'marked';
+import sanitizeHtml from 'sanitize-html';
 import type { User } from '../../db/users.ts';
 import type { PendingReview, ReviewOverride, ReviewStatus } from '../../db/reviews.ts';
 import { Layout } from './layout.tsx';
@@ -16,10 +17,43 @@ export function detailProgress(r: PendingReview): string {
 }
 
 // Configure marked once. GFM extensions (tables, strikethrough, etc.) match
-// what GitHub will render. Body comes from Claude API → the row's owner —
-// same trust boundary as the GitHub PR comment we'd post — so we don't
-// run a DOMPurify pass.
+// what GitHub will render.
 marked.setOptions({ gfm: true, breaks: false });
+
+// The review body is model output produced from a third-party PR diff
+// (reviewing other people's PRs is the whole point), so it is NOT trusted
+// HTML. GitHub renders the same text through its own sanitizer; we must do
+// the equivalent before dangerouslySetInnerHTML or a crafted PR can land
+// active content in the operator's authenticated session. Allowlist is the
+// tag/attribute set GFM markdown actually emits — anything else (script,
+// event handlers, javascript: URLs, raw style) is discarded.
+function renderReviewMarkdown(md: string): string {
+  const html = marked.parse(md) as string;
+  return sanitizeHtml(html, {
+    allowedTags: [
+      'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'a', 'ul', 'ol', 'li',
+      'blockquote', 'code', 'pre', 'em', 'strong', 'del', 'hr', 'br',
+      'table', 'thead', 'tbody', 'tr', 'th', 'td', 'img', 'span',
+    ],
+    allowedAttributes: {
+      a: ['href', 'title'],
+      img: ['src', 'alt', 'title'],
+      th: ['align'],
+      td: ['align'],
+      code: ['class'],
+      span: ['class'],
+    },
+    allowedSchemes: ['http', 'https', 'mailto'],
+    allowedSchemesByTag: { img: ['http', 'https'] },
+    disallowedTagsMode: 'discard',
+    transformTags: {
+      a: sanitizeHtml.simpleTransform('a', {
+        rel: 'noopener nofollow ugc',
+        target: '_blank',
+      }),
+    },
+  });
+}
 
 type Props = {
   user: User;
@@ -278,7 +312,7 @@ export const QueueDetailPage: FC<Props> = ({
           </h2>
           <div
             class="md-output"
-            dangerouslySetInnerHTML={{ __html: marked.parse(review.output) as string }}
+            dangerouslySetInnerHTML={{ __html: renderReviewMarkdown(review.output) }}
           />
         </section>
       ) : !review.error ? (

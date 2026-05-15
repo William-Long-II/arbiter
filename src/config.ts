@@ -18,6 +18,12 @@ function intEnv(name: string, fallback: number): number {
   return n;
 }
 
+function boolEnv(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return fallback;
+  return raw === '1' || raw.toLowerCase() === 'true';
+}
+
 function claudeMode(name: string, fallback: ClaudeMode): ClaudeMode {
   const v = process.env[name] ?? fallback;
   if (v !== 'subscription' && v !== 'api') {
@@ -45,6 +51,10 @@ export const config = {
   // Terminal reviews (done/failed/skipped) older than this are pruned every
   // hour by the retention task. 0 disables pruning entirely.
   reviewRetentionDays: intEnv('REVIEW_RETENTION_DAYS', 30),
+  // The /api/debug/* routes (run-review burns a real Claude call; enqueue
+  // mutates the queue) are useful in dev but should not be reachable in a
+  // normal deployment. Off by default; opt in with ENABLE_DEBUG_ENDPOINTS=1.
+  enableDebugEndpoints: boolEnv('ENABLE_DEBUG_ENDPOINTS', false),
 } as const;
 
 export type Config = typeof config;

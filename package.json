@@ -15,10 +15,12 @@
     "@octokit/rest": "^21.1.1",
     "hono": "^4.7.0",
     "marked": "^18.0.3",
-    "postgres": "^3.4.5"
+    "postgres": "^3.4.5",
+    "sanitize-html": "^2.17.4"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/sanitize-html": "^2.16.1",
     "typescript": "^5.7.3"
   }
 }
