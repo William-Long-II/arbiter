@@ -43,6 +43,9 @@ export type PendingReview = {
   output: string | null;
   verdict: Verdict | null;
   postedEvent: PostedEvent | null;
+  /** USD cost of the model call that produced this review. Null for
+   *  API-mode reviews, structural skips, and rows predating the column. */
+  costUsd: number | null;
   createdAt: Date;
   startedAt: Date | null;
   finishedAt: Date | null;
@@ -92,6 +95,7 @@ const SELECT_REVIEW_COLUMNS = sql`
   output,
   verdict,
   posted_event AS "postedEvent",
+  cost_usd     AS "costUsd",
   created_at   AS "createdAt",
   started_at   AS "startedAt",
   finished_at  AS "finishedAt"
@@ -228,6 +232,7 @@ export async function markDone(
   output: string,
   verdict: Verdict,
   postedEvent: PostedEvent,
+  costUsd: number | null = null,
 ): Promise<void> {
   const rows = await sql<PendingReview[]>`
     UPDATE pending_reviews
@@ -237,7 +242,8 @@ export async function markDone(
         output = ${output},
         error = null,
         verdict = ${verdict},
-        posted_event = ${postedEvent}
+        posted_event = ${postedEvent},
+        cost_usd = ${costUsd}
     WHERE id = ${id}
     RETURNING ${SELECT_REVIEW_COLUMNS}
   `;
@@ -322,6 +328,7 @@ export async function markSkippedPendingPost(
   output: string,
   verdict: Verdict,
   postedEvent: PostedEvent,
+  costUsd: number | null = null,
 ): Promise<void> {
   const rows = await sql<PendingReview[]>`
     UPDATE pending_reviews
@@ -331,7 +338,8 @@ export async function markSkippedPendingPost(
         error = ${reason},
         output = ${output},
         verdict = ${verdict},
-        posted_event = ${postedEvent}
+        posted_event = ${postedEvent},
+        cost_usd = ${costUsd}
     WHERE id = ${id}
     RETURNING ${SELECT_REVIEW_COLUMNS}
   `;

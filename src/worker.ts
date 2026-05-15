@@ -187,7 +187,14 @@ async function processJob(job: PendingReview): Promise<void> {
         const reason =
           'PR conversation is locked — review generated but not posted. ' +
           'Use "Post anyway" once the conversation is unlocked on GitHub.';
-        await markSkippedPendingPost(job.id, reason, stamped, result.verdict, event);
+        await markSkippedPendingPost(
+          job.id,
+          reason,
+          stamped,
+          result.verdict,
+          event,
+          result.costUsd ?? null,
+        );
         console.log(
           `[worker] skipped #${job.id} (locked conversation; body preserved for post-anyway)`,
         );
@@ -195,8 +202,11 @@ async function processJob(job: PendingReview): Promise<void> {
       }
       throw postErr;
     }
-    await markDone(job.id, stamped, result.verdict, event);
-    console.log(`[worker] done #${job.id} (verdict=${result.verdict}, event=${event})`);
+    await markDone(job.id, stamped, result.verdict, event, result.costUsd ?? null);
+    console.log(
+      `[worker] done #${job.id} (verdict=${result.verdict}, event=${event}` +
+        `${result.costUsd != null ? `, cost=$${result.costUsd}` : ''})`,
+    );
   } catch (err) {
     const message = describeError(err);
     // Structural limits (PR too big, diff over our size cap) — not failures

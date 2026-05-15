@@ -21,6 +21,11 @@ const FILTER_CHIPS: { status: ReviewStatus | null; label: string }[] = [
 export const QueuePage: FC<Props> = ({ user, reviews, statusFilter = [] }) => {
   const active = new Set(statusFilter);
   const isAll = active.size === 0;
+  // Spend across the rows actually shown (the same set the page renders,
+  // so the number always reconciles with what's on screen). Subscription
+  // /api-mode reviews without a reported cost are simply not counted.
+  const priced = reviews.filter((r) => r.costUsd != null);
+  const spend = priced.reduce((sum, r) => sum + (r.costUsd ?? 0), 0);
   return (
     <Layout title="Queue" user={user} active="queue">
       <header class="page-header">
@@ -28,6 +33,13 @@ export const QueuePage: FC<Props> = ({ user, reviews, statusFilter = [] }) => {
         <p class="page-subhead">
           PR reviews waiting to run, in flight, or recently completed.
         </p>
+        {priced.length > 0 ? (
+          <p class="page-subhead">
+            Model spend (shown):{' '}
+            <span class="mono-sm">{fmtCostUsd(spend)}</span> across{' '}
+            {priced.length} priced review{priced.length === 1 ? '' : 's'}.
+          </p>
+        ) : null}
       </header>
 
       <nav class="queue-filter-row">
@@ -212,6 +224,17 @@ function formatRelative(d: Date | string): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+/**
+ * Format a USD model cost. Costs span ~$0.001 (Haiku/light) to a few
+ * dollars (Opus/strict on a big diff), so precision scales with size:
+ * sub-cent → 4dp, sub-dollar → 3dp, else 2dp. Non-finite/≤0 → "$0.00".
+ */
+export function fmtCostUsd(usd: number): string {
+  const n = Number.isFinite(usd) && usd > 0 ? usd : 0;
+  const decimals = n === 0 ? 2 : n < 0.01 ? 4 : n < 1 ? 3 : 2;
+  return `$${n.toFixed(decimals)}`;
 }
 
 // Elapsed (counting up), not relative ("ago"). Kept byte-identical to the
