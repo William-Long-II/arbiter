@@ -28,6 +28,40 @@ export async function postPullRequestReview(
 }
 
 /**
+ * GitHub rejects posting a review when the PR conversation is locked:
+ * HTTP 422 with "lock prevents review" in the body (the detail arrives as
+ * a quoted string in `errors`, not the usual {code} object). The review
+ * itself is already generated and valid — only the POST failed — so the
+ * worker skips (not fails) and preserves the body for a later
+ * "Post anyway", instead of a retry that would just re-lock.
+ */
+export function isLockedConversationError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const e = err as {
+    status?: unknown;
+    message?: unknown;
+    response?: { data?: unknown };
+  };
+  if (e.status !== 422) return false;
+
+  const parts: string[] = [];
+  if (typeof e.message === 'string') parts.push(e.message);
+  const data = e.response?.data;
+  if (typeof data === 'string') {
+    parts.push(data);
+  } else if (data && typeof data === 'object') {
+    const d = data as { message?: unknown; errors?: unknown };
+    if (typeof d.message === 'string') parts.push(d.message);
+    if (Array.isArray(d.errors)) {
+      for (const x of d.errors) {
+        parts.push(typeof x === 'string' ? x : JSON.stringify(x));
+      }
+    }
+  }
+  return /lock prevents review/i.test(parts.join(' '));
+}
+
+/**
  * GitHub's unified-diff endpoint refuses PRs over its structural limits
  * (>300 changed files, or >20000 diff lines). It signals this with
  * `code: "too_large"` in the error payload — NOT with HTTP 422 (an earlier

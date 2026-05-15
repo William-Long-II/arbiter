@@ -302,6 +302,35 @@ export async function markSkipped(id: number, reason: string): Promise<void> {
   if (rows[0]) await notifyReviewChanged(rows[0]);
 }
 
+/**
+ * Skip a review whose body was generated but couldn't be posted because
+ * the PR conversation is locked. Unlike a structural skip (diff too
+ * large), we KEEP the generated body + verdict + intended event so the
+ * user can "Post anyway" once they unlock the PR. The detail page tells
+ * the two skip kinds apart by `output IS NOT NULL` on a skipped row.
+ */
+export async function markSkippedPendingPost(
+  id: number,
+  reason: string,
+  output: string,
+  verdict: Verdict,
+  postedEvent: PostedEvent,
+): Promise<void> {
+  const rows = await sql<PendingReview[]>`
+    UPDATE pending_reviews
+    SET status = 'skipped',
+        phase = NULL,
+        finished_at = now(),
+        error = ${reason},
+        output = ${output},
+        verdict = ${verdict},
+        posted_event = ${postedEvent}
+    WHERE id = ${id}
+    RETURNING ${SELECT_REVIEW_COLUMNS}
+  `;
+  if (rows[0]) await notifyReviewChanged(rows[0]);
+}
+
 export type ListReviewsOptions = {
   limit?: number;
   /** Restrict to these statuses. Empty/undefined = all. */
