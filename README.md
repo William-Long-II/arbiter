@@ -2,14 +2,21 @@
 
 Automated GitHub PR review on your own infrastructure, powered by Claude Code.
 
-> **Status:** scaffold. The previous v1 is preserved on the `archive/v1` branch.
+> **Status:** working. Single-process app; one DB-backed review queue drained
+> by one worker. The previous v1 is preserved on the `archive/v1` branch.
 
-## What it does (planned)
+## What it does
 
 - Sign in with GitHub (OAuth) → arbiter polls your accessible repos.
-- Define **scope rules**: which repos / orgs / branches to review, at what scrutiny tier (`light` / `standard` / `strict`).
-- For every matching PR (skipping your own and configured bots), arbiter runs `claude -p` against the diff using the scrutiny prompt and posts the review to the PR.
-- A web UI shows the queue, run history, and scope configuration.
+- Define **scope rules**: which repos / orgs / branches to review, at what
+  scrutiny tier (`light` / `standard` / `strict`), with optional per-scope
+  trigger mode (`open` vs `review_requested`), review context
+  (`isolated` vs `checkout`), auto-approve, footer, and personality prompt.
+- For every matching PR (skipping your own, configured bots, drafts, and
+  auto-merge PRs), arbiter waits out pending CI, runs `claude -p` against the
+  diff with the scrutiny prompt, and posts the review back to the PR.
+- A web UI shows the live queue (SSE, no polling), per-review detail with the
+  rendered review + prior runs, scope configuration, and accessible repos.
 
 ## Stack
 
@@ -78,21 +85,35 @@ review and reporting a misleading timeout.
 ```
 src/
   config.ts              env parsing
-  db.ts                  postgres + migration runner
+  db.ts                  postgres pool + migration runner + LISTEN bus
+  errors.ts              thrown-value → useful string
+  events.ts              in-process pub/sub (SSE fan-out)
+  retention.ts           hourly prune: old reviews + expired sessions
+  scope.ts               scope rule matching (glob branch patterns)
+  worker.ts              review queue worker (claim → review → post)
+  index.ts               boot (preflight, migrate, serve, schedules)
   github/
-    oauth.ts             OAuth login flow (stub)
-    api.ts               octokit wrapper
-    poller.ts            periodic PR poller (stub)
-  scope.ts               scope rule matching
+    api.ts               octokit factory
+    oauth.ts             GitHub OAuth login flow
+    poller.ts            periodic PR poller (GraphQL search)
+    pulls.ts             PR fetch + large-diff reconstruction
+    repos.ts             accessible-repo listing + cache
+    checks.ts            CI/checks summary
   review/
-    runner.ts            claude -p / API runner (stub)
+    runner.ts            claude -p / Anthropic API runner
+    format.ts            pure prompt/parse helpers
+    footer.ts            review footer templating
     prompts/             scrutiny-tier prompt templates
-  worker.ts              review queue worker (stub)
+  db/
+    users.ts             users + sessions
+    scopes.ts            scope CRUD + form parsing
+    reviews.ts           queue: enqueue/claim/defer/retry, overrides
   web/
-    server.ts            Hono app
-  index.ts               boot
-migrations/
-  001_init.sql           initial schema
+    server.tsx           Hono app + routes
+    auth.ts              session middleware
+    cookies.ts           HMAC-signed cookies
+    views/               server-rendered JSX pages
+migrations/              001..010 — incremental schema
 DESIGN.md                visual design system
 docker-compose.yml       app + postgres
 Dockerfile
@@ -100,4 +121,4 @@ Dockerfile
 
 ## License
 
-MIT (placeholder — no LICENSE file in scaffold yet).
+MIT (placeholder — no LICENSE file yet).

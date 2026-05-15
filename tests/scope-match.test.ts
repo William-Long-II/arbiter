@@ -114,4 +114,33 @@ describe('matchScope — branch pattern', () => {
     expect(matchScope(pr({ baseBranch: 'release/v2.1' }), [s], 'me')).not.toBeNull();
     expect(matchScope(pr({ baseBranch: 'main' }), [s], 'me')).toBeNull();
   });
+
+  test('leading-* glob matches suffix', () => {
+    const s = scope({ baseBranchPattern: '*/hotfix' });
+    expect(matchScope(pr({ baseBranch: 'team-a/hotfix' }), [s], 'me')).not.toBeNull();
+    expect(matchScope(pr({ baseBranch: 'hotfix' }), [s], 'me')).toBeNull();
+    expect(matchScope(pr({ baseBranch: 'team-a/hotfix/2' }), [s], 'me')).toBeNull();
+  });
+
+  test('mid-* glob matches an interior segment', () => {
+    const s = scope({ baseBranchPattern: 'feat/*/wip' });
+    expect(matchScope(pr({ baseBranch: 'feat/abc/wip' }), [s], 'me')).not.toBeNull();
+    expect(matchScope(pr({ baseBranch: 'feat/a/b/wip' }), [s], 'me')).not.toBeNull();
+    expect(matchScope(pr({ baseBranch: 'feat/wip' }), [s], 'me')).toBeNull();
+  });
+
+  test('? matches exactly one character', () => {
+    const s = scope({ baseBranchPattern: 'v?' });
+    expect(matchScope(pr({ baseBranch: 'v2' }), [s], 'me')).not.toBeNull();
+    expect(matchScope(pr({ baseBranch: 'v' }), [s], 'me')).toBeNull();
+    expect(matchScope(pr({ baseBranch: 'v25' }), [s], 'me')).toBeNull();
+  });
+
+  test('regex metacharacters in the pattern are treated literally', () => {
+    // The dot must match a literal dot, not "any char" — otherwise
+    // `release.x` would also match `releaseAx`.
+    const s = scope({ baseBranchPattern: 'release.*' });
+    expect(matchScope(pr({ baseBranch: 'release.hotfix' }), [s], 'me')).not.toBeNull();
+    expect(matchScope(pr({ baseBranch: 'releaseXhotfix' }), [s], 'me')).toBeNull();
+  });
 });

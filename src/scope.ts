@@ -28,7 +28,13 @@ export function matchScope(
 function matchBranch(pattern: string, branch: string): boolean {
   if (pattern === '*' || pattern === '') return true;
   if (pattern === branch) return true;
-  // Simple glob: prefix-match with trailing *
-  if (pattern.endsWith('*') && branch.startsWith(pattern.slice(0, -1))) return true;
-  return false;
+  // Full glob: `*` (any run, including `/`) and `?` (one char) anywhere —
+  // so `release/*`, `*/hotfix`, and `feat/*/wip` all work, not just a
+  // trailing-star prefix. Literal regex metacharacters are escaped first.
+  if (!pattern.includes('*') && !pattern.includes('?')) return false;
+  const re = pattern
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*/g, '.*')
+    .replace(/\?/g, '.');
+  return new RegExp(`^${re}$`).test(branch);
 }
