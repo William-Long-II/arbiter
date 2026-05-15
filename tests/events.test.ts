@@ -13,6 +13,7 @@ function ev(over: Partial<ReviewEvent> = {}): ReviewEvent {
     userId: 1,
     reviewId: 100,
     status: 'done',
+    phase: null,
     verdict: 'approve',
     postedEvent: 'APPROVE',
     startedAt: '2026-05-12T12:00:00.000Z',
