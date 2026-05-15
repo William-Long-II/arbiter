@@ -34,11 +34,24 @@ export type ReviewInput = {
 
 export type Verdict = 'approve' | 'comment' | 'request-changes';
 
+export type Severity = 'blocking' | 'major' | 'minor' | 'nit';
+
+/** Issue counts the model self-reports, by severity. The foundation for
+ *  filtering, a Checks/merge gate, and (later) per-finding inline comments. */
+export type FindingCounts = {
+  blocking: number;
+  major: number;
+  minor: number;
+  nit: number;
+};
+
 export type ReviewOutput = {
-  /** Body to post to GitHub, with the verdict marker stripped. */
+  /** Body to post to GitHub, with the verdict + findings markers stripped. */
   body: string;
   /** Parsed from the verdict marker; defaults to `comment` if absent. */
   verdict: Verdict;
+  /** Parsed from the findings marker; null if absent/unparseable. */
+  findings?: FindingCounts | null;
   costUsd?: number;
   /** Raw underlying response for debugging — not persisted. */
   raw?: unknown;
@@ -61,6 +74,87 @@ export function parseVerdict(body: string): { verdict: Verdict; body: string } {
   const stripped = body.replace(match[0], '').replace(/^\s+/, '');
   return { verdict, body: stripped };
 }
+
+/**
+ * Second machine-readable marker, on the line after the verdict:
+ * `<!-- arbiter:findings={"blocking":N,"major":N,"minor":N,"nit":N} -->`.
+ * Counts object only (no nested braces), so a non-greedy `{...}` is safe.
+ */
+const FINDINGS_RE = /<!--\s*arbiter:findings=(\{[^}]*\})\s*-->/i;
+
+const SEVERITY_KEYS: readonly Severity[] = ['blocking', 'major', 'minor', 'nit'];
+
+function coerceCount(v: unknown): number {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * Pull the findings marker off `body` and return the counts + the body
+ * with the marker removed. Returns `findings: null` (and the body
+ * unchanged) when the marker is absent or its JSON won't parse — the model
+ * may forget it, and a missing summary must never break the review.
+ * Missing/!invalid individual keys default to 0.
+ */
+export function parseFindings(body: string): {
+  findings: FindingCounts | null;
+  body: string;
+} {
+  const match = body.match(FINDINGS_RE);
+  if (!match) return { findings: null, body };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(match[1]!);
+  } catch {
+    return { findings: null, body };
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    return { findings: null, body };
+  }
+  const obj = parsed as Record<string, unknown>;
+  const findings: FindingCounts = {
+    blocking: coerceCount(obj.blocking),
+    major: coerceCount(obj.major),
+    minor: coerceCount(obj.minor),
+    nit: coerceCount(obj.nit),
+  };
+  const stripped = body.replace(match[0], '').replace(/^\s+/, '');
+  return { findings, body: stripped };
+}
+
+/** Highest severity with a non-zero count (blocking > major > minor > nit),
+ *  or null when there are no findings. Drives the queue badge + future
+ *  Checks gate without re-deriving the precedence everywhere. */
+export function topSeverity(findings: FindingCounts | null | undefined): Severity | null {
+  if (!findings) return null;
+  for (const key of SEVERITY_KEYS) {
+    if (findings[key] > 0) return key;
+  }
+  return null;
+}
+
+/**
+ * Appended to every scrutiny system prompt (single source of truth for the
+ * marker contract, alongside FINDINGS_RE). Asks for the counts marker on
+ * the line after the verdict marker.
+ */
+export const FINDINGS_INSTRUCTION = [
+  'MACHINE-READABLE FINDINGS — REQUIRED.',
+  'Immediately AFTER the verdict marker line, output exactly one more',
+  'HTML-comment marker on its own line, counting the issues you raised by',
+  'severity:',
+  '',
+  '`<!-- arbiter:findings={"blocking":<n>,"major":<n>,"minor":<n>,"nit":<n>} -->`',
+  '',
+  '- All four keys required, integer values >= 0, valid JSON, no extra keys,',
+  '  and nothing else on that line.',
+  '- blocking = must fix before merge (the issues that drive a non-approve',
+  '  verdict). major = significant but not merge-blocking. minor = small',
+  '  correctness/clarity. nit = stylistic/optional.',
+  '- Counts MUST be consistent with the body and verdict: `request-changes`',
+  '  implies blocking >= 1; `approve` implies blocking = 0.',
+  'Then continue with the human-readable Markdown review specified above.',
+].join('\n');
 
 /**
  * Build the user message we send to Claude. Includes PR metadata and the
@@ -132,8 +226,14 @@ export function parseClaudeCliOutput(stdout: string): ReviewOutput {
     throw new Error(`claude -p response had no "result" string: ${trimmed.slice(0, 200)}`);
   }
   const cost = typeof obj.total_cost_usd === 'number' ? obj.total_cost_usd : undefined;
-  const { verdict, body } = parseVerdict(result);
-  const out: ReviewOutput = { body, verdict, raw: parsed };
+  const v = parseVerdict(result);
+  const f = parseFindings(v.body);
+  const out: ReviewOutput = {
+    body: f.body,
+    verdict: v.verdict,
+    findings: f.findings,
+    raw: parsed,
+  };
   if (cost !== undefined) out.costUsd = cost;
   return out;
 }

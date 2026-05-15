@@ -148,6 +148,14 @@ export const QueueDetailPage: FC<Props> = ({
             <span class="mono-sm">{fmtCostUsd(review.costUsd)}</span>
           </MetaRow>
         ) : null}
+        {review.findings ? (
+          <MetaRow label="Findings">
+            <span class="mono-sm">
+              blocking {review.findings.blocking} · major {review.findings.major}{' '}
+              · minor {review.findings.minor} · nit {review.findings.nit}
+            </span>
+          </MetaRow>
+        ) : null}
         <MetaRow label="Review context">
           <span class="mono-sm">{review.reviewContext}</span>
         </MetaRow>
