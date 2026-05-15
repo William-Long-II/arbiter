@@ -291,6 +291,36 @@ export async function markFailed(id: number, error: string): Promise<void> {
 }
 
 /**
+ * Fail every review wedged in `running` past `olderThanMinutes`. A worker
+ * that dies mid-review (crash, OOM, container restart) leaves its claimed
+ * row `running` forever — `claimNext` only picks `queued`, so nothing ever
+ * fails, retries, or clears it, and at scale these leak and obscure the
+ * queue. The threshold must sit well beyond the longest *healthy* run
+ * (checkout + the 5-minute review watchdog + posting) so a slow-but-alive
+ * review is never reaped. Reaped rows become `failed`, so the existing
+ * retry button works. NOTE: single-worker assumption — revisit with a
+ * heartbeat when multiple workers can hold `running` concurrently.
+ * Returns the rows it reaped (NOTIFY fired per row for the live queue).
+ */
+export async function reapStuckReviews(
+  olderThanMinutes: number,
+): Promise<PendingReview[]> {
+  const rows = await sql<PendingReview[]>`
+    UPDATE pending_reviews
+    SET status = 'failed',
+        phase = NULL,
+        finished_at = now(),
+        error = ${`Worker did not finish this review within ${olderThanMinutes}m — likely a crashed or restarted worker. Marked failed so it can be retried.`}
+    WHERE status = 'running'
+      AND started_at IS NOT NULL
+      AND started_at < now() - make_interval(mins => ${olderThanMinutes})
+    RETURNING ${SELECT_REVIEW_COLUMNS}
+  `;
+  for (const row of rows) await notifyReviewChanged(row);
+  return rows;
+}
+
+/**
  * Mark a review as skipped — terminal but not "failed". Used for
  * structurally un-reviewable PRs (diff too large, too many files) where
  * retrying would just hit the same limit. The queue UI hides the retry

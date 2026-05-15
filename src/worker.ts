@@ -7,6 +7,7 @@ import {
   markFailed,
   markSkipped,
   markSkippedPendingPost,
+  reapStuckReviews,
   setReviewPhase,
   type PendingReview,
   type PostedEvent,
@@ -26,8 +27,18 @@ import { fetchChecksSummary, formatChecksSummary } from './github/checks.ts';
 import { DiffTooLargeError, runReview, type Verdict } from './review/runner.ts';
 
 let timer: ReturnType<typeof setInterval> | null = null;
+let reaperTimer: ReturnType<typeof setInterval> | null = null;
 let unsubscribe: (() => void) | null = null;
 let inFlight = false;
+
+// Stuck-review reaper. A healthy run is bounded by checkout (≤~6m) + the
+// 5-minute review watchdog + posting, so 30m is comfortably past any live
+// review and reaps a crashed-worker's orphaned row with zero false
+// positives. Swept every 5m (cheap UPDATE) plus once shortly after boot so
+// a restart clears its own debris promptly instead of after a full sweep.
+const STUCK_AFTER_MINUTES = 30;
+const STUCK_SWEEP_MS = 5 * 60_000;
+const STUCK_BOOT_DELAY_MS = 10_000;
 // Set when an event fires while a job is in flight, so we don't miss work
 // queued during a long-running review. Drained when the in-flight job ends.
 let pendingWake = false;
@@ -59,6 +70,11 @@ export function startWorker(): void {
     }
     void tick();
   });
+
+  // Reap rows orphaned in `running` by a dead/restarted worker. Runs soon
+  // after boot (clear our own debris) and then on a slow interval.
+  setTimeout(() => { void sweepStuck(); }, STUCK_BOOT_DELAY_MS);
+  reaperTimer = setInterval(() => { void sweepStuck(); }, STUCK_SWEEP_MS);
 }
 
 export function stopWorker(): void {
@@ -66,9 +82,28 @@ export function stopWorker(): void {
     clearInterval(timer);
     timer = null;
   }
+  if (reaperTimer) {
+    clearInterval(reaperTimer);
+    reaperTimer = null;
+  }
   if (unsubscribe) {
     unsubscribe();
     unsubscribe = null;
+  }
+}
+
+async function sweepStuck(): Promise<void> {
+  try {
+    const reaped = await reapStuckReviews(STUCK_AFTER_MINUTES);
+    if (reaped.length > 0) {
+      console.error(
+        `[worker] reaped ${reaped.length} stuck review(s) ` +
+          `(running > ${STUCK_AFTER_MINUTES}m): ` +
+          reaped.map((r) => `#${r.id} ${r.repoFull}#${r.prNumber}`).join(', '),
+      );
+    }
+  } catch (err) {
+    console.error('[worker] stuck sweep error:', err);
   }
 }
 
