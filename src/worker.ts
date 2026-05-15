@@ -8,6 +8,7 @@ import {
   markSkipped,
   markSkippedPendingPost,
   reapStuckReviews,
+  requeueForRetry,
   setReviewPhase,
   type PendingReview,
   type PostedEvent,
@@ -24,7 +25,13 @@ import {
   type ReviewEvent,
 } from './github/pulls.ts';
 import { fetchChecksSummary, formatChecksSummary } from './github/checks.ts';
-import { DiffTooLargeError, runReview, type Verdict } from './review/runner.ts';
+import {
+  DiffTooLargeError,
+  ReviewTimeoutError,
+  runReview,
+  type Verdict,
+} from './review/runner.ts';
+import { isTransientError, MAX_ATTEMPTS, retryDelaySeconds } from './retry.ts';
 import {
   buildSignalsNote,
   changedFilePaths,
@@ -276,6 +283,28 @@ async function processJob(job: PendingReview): Promise<void> {
       await markSkipped(job.id, message);
       console.log(`[worker] skipped #${job.id}: ${message}`);
       return;
+    }
+    // Transient infra failures (GitHub 5xx / rate limit, network resets)
+    // shouldn't need a human: auto-requeue with exponential backoff until
+    // `attempt` hits MAX_ATTEMPTS. ReviewTimeoutError is excluded on
+    // purpose — re-running a 5-minute model hang burns wall time and quota,
+    // so that stays a manual retry.
+    if (
+      !(err instanceof ReviewTimeoutError) &&
+      isTransientError(err) &&
+      job.attempt < MAX_ATTEMPTS
+    ) {
+      const delay = retryDelaySeconds(job.attempt);
+      const requeued = await requeueForRetry(job.id, delay, message);
+      if (requeued) {
+        console.warn(
+          `[worker] transient failure on #${job.id} ` +
+            `(attempt ${job.attempt}/${MAX_ATTEMPTS}); auto-retry in ${delay}s: ${message}`,
+        );
+        return;
+      }
+      // requeue no-op (row no longer running, e.g. reaped) — fall through
+      // to the normal failure path rather than silently dropping it.
     }
     // Detect a revoked OAuth token: Octokit RequestError surfaces a
     // `status` of 401 when GitHub rejects the token. Mark the user so the

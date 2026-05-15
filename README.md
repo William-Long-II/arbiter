@@ -80,6 +80,27 @@ review and reporting a misleading timeout.
   skip all of this (no per-host login, no bind-mount), at the cost of
   per-token billing instead of the subscription.
 
+## Webhooks (optional)
+
+By default arbiter polls GitHub every `POLL_INTERVAL_SECONDS`. Add a
+webhook for near-instant reviews — the poller stays on as a safety net, so
+a missed delivery still gets picked up within the poll interval.
+
+1. Set `GITHUB_WEBHOOK_SECRET` in `.env` (any random string). Blank = the
+   endpoint is disabled and only the poller runs.
+2. On the repo or org: **Settings → Webhooks → Add webhook**
+   - Payload URL: `$PUBLIC_URL/api/webhooks/github`
+   - Content type: `application/json`
+   - Secret: the same `GITHUB_WEBHOOK_SECRET`
+   - Events: **Pull requests** only.
+
+Deliveries are authenticated by GitHub's `X-Hub-Signature-256` HMAC (not
+the session), so the endpoint is exempt from the same-origin guard.
+Reviews fire on `opened`, `reopened`, `synchronize`, and
+`ready_for_review`; drafts are skipped. Scopes in `review_requested`
+trigger mode still rely on the poller (team-resolved review requests need
+the poller's GraphQL search).
+
 ## Layout
 
 ```

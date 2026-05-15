@@ -5,6 +5,8 @@ import { serveStatic } from 'hono/bun';
 import { streamSSE } from 'hono/streaming';
 import { subscribe } from '../events.ts';
 import { mountGithubOAuth } from '../github/oauth.ts';
+import { parsePullRequestEvent, verifyGithubSignature } from '../github/webhook.ts';
+import { enqueueAcrossUsers } from '../enqueue.ts';
 import { sql } from '../db.ts';
 import { currentUser, requireUser } from './auth.ts';
 import {
@@ -704,6 +706,51 @@ export function buildApp(): Hono {
     }
   });
 
+  // GitHub webhook receiver. Authenticated by HMAC signature (not the
+  // session) and exempt from the same-origin guard. Delivers near-instant
+  // reviews; the poller stays on as a safety net so a missed or
+  // mis-delivered hook is still picked up within the poll interval.
+  app.post('/api/webhooks/github', async (c) => {
+    if (!config.github.webhookSecret) {
+      return c.json(
+        { error: 'Webhook receiver disabled (no GITHUB_WEBHOOK_SECRET)' },
+        503,
+      );
+    }
+    const raw = await c.req.text();
+    const sigOk = await verifyGithubSignature(
+      config.github.webhookSecret,
+      raw,
+      c.req.header('x-hub-signature-256'),
+    );
+    if (!sigOk) return c.json({ error: 'Invalid signature' }, 401);
+
+    const eventName = c.req.header('x-github-event');
+    if (eventName === 'ping') return c.json({ ok: true, pong: true });
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      return c.json({ error: 'Body is not JSON' }, 400);
+    }
+
+    const parsed = parsePullRequestEvent(eventName, payload);
+    if (!parsed) {
+      // Valid + signed, but nothing to do (other event, draft, or an
+      // action we ignore). Acknowledge so GitHub doesn't retry.
+      return c.json({ ok: true, ignored: true });
+    }
+
+    try {
+      const enqueued = await enqueueAcrossUsers(parsed.pr);
+      return c.json({ ok: true, action: parsed.action, enqueued }, 202);
+    } catch (err) {
+      console.error('[webhook] dispatch error:', err);
+      return c.json({ error: 'Internal error handling webhook' }, 500);
+    }
+  });
+
   mountGithubOAuth(app);
 
   return app;
@@ -713,6 +760,9 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 const requireSameOrigin: MiddlewareHandler = async (c, next) => {
   if (SAFE_METHODS.has(c.req.method.toUpperCase())) return next();
+  // The webhook receiver authenticates by HMAC signature, not Origin —
+  // GitHub's server-to-server POST carries no Origin/Referer header.
+  if (c.req.path === '/api/webhooks/github') return next();
   const expected = safeOrigin(config.publicUrl);
   const origin = c.req.header('origin');
   const referer = c.req.header('referer');

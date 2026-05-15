@@ -1,9 +1,8 @@
 import { config } from '../config.ts';
 import { sql } from '../db.ts';
 import { listScopes } from '../db/scopes.ts';
-import { enqueueReview } from '../db/reviews.ts';
 import { markTokenRevoked } from '../db/users.ts';
-import { matchScope } from '../scope.ts';
+import { enqueueForUser } from '../enqueue.ts';
 import {
   listOpenPullsForScopes,
   type ScopeTarget,
@@ -153,42 +152,18 @@ async function pollUser(user: {
 
   let enqueued = 0;
   for (const pr of prs) {
-    // Skip PRs configured for auto-merge — the author has already
-    // committed to "merge when ready"; a generated review is wasted
-    // effort and may post comments to a PR that's about to disappear.
-    if (pr.autoMerge) continue;
-    const matched = matchScope(pr, scopes, user.login);
-    if (!matched) continue;
-    // Gate by trigger mode: review_requested scopes only fire on PRs
-    // GitHub returned from the review-requested:@me half of the search.
-    if (matched.triggerMode === 'review_requested' && !pr.reviewRequestedForViewer) {
-      continue;
-    }
-    const claudeMode =
-      matched.claudeMode === 'default'
-        ? config.claude.defaultMode
-        : matched.claudeMode;
-    const row = await enqueueReview({
+    // Shared with the webhook receiver: same auto-merge / scope-match /
+    // trigger-mode filtering and scope-snapshot mapping. See src/enqueue.ts.
+    const { review, matched } = await enqueueForUser({
       userId: user.id,
-      scopeId: matched.id,
-      repoFull: pr.repoFull,
-      prNumber: pr.number,
-      prTitle: pr.title,
-      prAuthor: pr.author,
-      baseBranch: pr.baseBranch,
-      headBranch: pr.headBranch,
-      headSha: pr.headSha,
-      scrutiny: matched.scrutiny,
-      claudeMode,
-      autoApprove: matched.autoApprove,
-      footerTemplate: matched.footerTemplate,
-      personalityPrompt: matched.personalityPrompt,
-      reviewContext: matched.reviewContext,
+      selfLogin: user.login,
+      scopes,
+      pr,
     });
-    if (row) {
+    if (review && matched) {
       enqueued++;
       console.log(
-        `[poller] enqueued #${row.id} ${pr.repoFull}#${pr.number} (scope ${matched.id}, scrutiny=${matched.scrutiny}, trigger=${matched.triggerMode})`,
+        `[poller] enqueued #${review.id} ${pr.repoFull}#${pr.number} (scope ${matched.id}, scrutiny=${matched.scrutiny}, trigger=${matched.triggerMode})`,
       );
     }
   }

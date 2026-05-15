@@ -40,6 +40,10 @@ export const config = {
   github: {
     clientId: optional('GITHUB_CLIENT_ID', ''),
     clientSecret: optional('GITHUB_CLIENT_SECRET', ''),
+    // Shared secret for the /api/webhooks/github receiver. Empty disables
+    // the endpoint (the poller still covers everything); set it to the
+    // same value configured on the GitHub repo/org webhook.
+    webhookSecret: optional('GITHUB_WEBHOOK_SECRET', ''),
   },
   claude: {
     defaultMode: claudeMode('CLAUDE_DEFAULT_MODE', 'subscription'),
