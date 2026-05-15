@@ -12,6 +12,8 @@ export type ReviewEvent = {
   userId: number;
   reviewId: number;
   status: 'queued' | 'running' | 'done' | 'failed' | 'skipped';
+  /** Sub-status while status === 'running'; null otherwise. */
+  phase: 'preparing' | 'reviewing' | 'posting' | null;
   verdict: 'approve' | 'comment' | 'request-changes' | null;
   postedEvent: 'APPROVE' | 'COMMENT' | 'REQUEST_CHANGES' | null;
   startedAt: string | null;

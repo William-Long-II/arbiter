@@ -4,6 +4,8 @@ import type { Verdict } from '../review/format.ts';
 import type { ReviewEvent } from '../events.ts';
 
 export type ReviewStatus = 'queued' | 'running' | 'done' | 'failed' | 'skipped';
+/** Sub-status of a `running` review. NULL in every other status. */
+export type ReviewPhase = 'preparing' | 'reviewing' | 'posting';
 export type PostedEvent = 'APPROVE' | 'COMMENT' | 'REQUEST_CHANGES';
 
 export type PendingReview = {
@@ -25,6 +27,8 @@ export type PendingReview = {
   /** Snapshotted from the matching scope at enqueue time. See db/scopes.ts. */
   personalityPrompt: string | null;
   status: ReviewStatus;
+  /** Sub-status while status === 'running'; null otherwise. */
+  phase: ReviewPhase | null;
   attempt: number;
   /** When set + in the future, the worker's claim query skips this row.
    *  Used to wait out pending CI before reviewing. See deferReview. */
@@ -75,6 +79,7 @@ const SELECT_REVIEW_COLUMNS = sql`
   footer_template AS "footerTemplate",
   personality_prompt AS "personalityPrompt",
   status,
+  phase,
   attempt,
   defer_until  AS "deferUntil",
   defer_count  AS "deferCount",
@@ -105,6 +110,7 @@ async function notifyReviewChanged(review: PendingReview): Promise<void> {
     userId: review.userId,
     reviewId: review.id,
     status: review.status,
+    phase: review.phase ?? null,
     verdict: review.verdict,
     postedEvent: review.postedEvent,
     startedAt: review.startedAt ? review.startedAt.toISOString() : null,
@@ -153,6 +159,7 @@ export async function claimNext(): Promise<PendingReview | null> {
   const rows = await sql<PendingReview[]>`
     UPDATE pending_reviews
     SET status = 'running',
+        phase = 'preparing',
         started_at = now(),
         attempt = attempt + 1
     WHERE id = (
@@ -180,6 +187,7 @@ export async function deferReview(id: number, deferSeconds: number): Promise<Pen
   const rows = await sql<PendingReview[]>`
     UPDATE pending_reviews
     SET status = 'queued',
+        phase = NULL,
         defer_until = now() + (${deferSeconds} || ' seconds')::interval,
         defer_count = defer_count + 1,
         started_at = NULL
@@ -191,6 +199,23 @@ export async function deferReview(id: number, deferSeconds: number): Promise<Pen
   return row;
 }
 
+/**
+ * Advance the sub-status of a running review (preparing → reviewing →
+ * posting). Guarded on status='running' so a late call can't resurrect
+ * phase on a row that already finished/failed. Fires the same NOTIFY as
+ * status transitions, so /api/events/queue pushes it to the UI live —
+ * this is the only signal emitted during the multi-minute claude call.
+ */
+export async function setReviewPhase(id: number, phase: ReviewPhase): Promise<void> {
+  const rows = await sql<PendingReview[]>`
+    UPDATE pending_reviews
+    SET phase = ${phase}
+    WHERE id = ${id} AND status = 'running'
+    RETURNING ${SELECT_REVIEW_COLUMNS}
+  `;
+  if (rows[0]) await notifyReviewChanged(rows[0]);
+}
+
 export async function markDone(
   id: number,
   output: string,
@@ -200,6 +225,7 @@ export async function markDone(
   const rows = await sql<PendingReview[]>`
     UPDATE pending_reviews
     SET status = 'done',
+        phase = NULL,
         finished_at = now(),
         output = ${output},
         error = null,
@@ -228,6 +254,7 @@ export async function retryFailedReview(
   const rows = await sql<PendingReview[]>`
     UPDATE pending_reviews
     SET status = 'queued',
+        phase = null,
         error = null,
         started_at = null,
         finished_at = null,
@@ -247,6 +274,7 @@ export async function markFailed(id: number, error: string): Promise<void> {
   const rows = await sql<PendingReview[]>`
     UPDATE pending_reviews
     SET status = 'failed',
+        phase = NULL,
         finished_at = now(),
         error = ${error}
     WHERE id = ${id}
@@ -265,6 +293,7 @@ export async function markSkipped(id: number, reason: string): Promise<void> {
   const rows = await sql<PendingReview[]>`
     UPDATE pending_reviews
     SET status = 'skipped',
+        phase = NULL,
         finished_at = now(),
         error = ${reason}
     WHERE id = ${id}

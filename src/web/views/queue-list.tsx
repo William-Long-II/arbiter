@@ -84,16 +84,46 @@ export const QueuePage: FC<Props> = ({ user, reviews, statusFilter = [] }) => {
       )}
 
       {/*
-        SSE client: subscribes to /api/events/queue and patches the DOM
-        in place when a review's status changes. No polling — events
-        only arrive when the worker actually commits a state change.
-        EventSource auto-reconnects if the connection drops.
+        SSE client + 1s ticker. SSE patches the row on every worker
+        state/phase change (no polling — events only fire on a real
+        commit, including the new setReviewPhase NOTIFY). The interval
+        only animates the elapsed counter on running rows client-side;
+        it issues no requests. EventSource auto-reconnects on drop.
       */}
       <script
         dangerouslySetInnerHTML={{
           __html: `
             (function() {
               if (typeof EventSource === 'undefined') return;
+              function fmtElapsed(s) {
+                if (s < 60) return s + 's';
+                var m = Math.floor(s / 60);
+                if (m < 60) return m + 'm ' + (s % 60) + 's';
+                return Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+              }
+              function rel(iso) {
+                var s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+                if (s < 60) return s + 's ago';
+                if (s < 3600) return Math.floor(s/60) + 'm ago';
+                if (s < 86400) return Math.floor(s/3600) + 'h ago';
+                return Math.floor(s/86400) + 'd ago';
+              }
+              function renderTime(row) {
+                var pill = row.querySelector('[data-status-pill]');
+                var t = row.querySelector('[data-started]');
+                if (!pill || !t) return;
+                var st = t.getAttribute('data-started-at');
+                if (pill.getAttribute('data-status') === 'running' && st) {
+                  var e = fmtElapsed(Math.max(0, Math.floor((Date.now() - new Date(st).getTime()) / 1000)));
+                  var ph = t.getAttribute('data-phase');
+                  t.textContent = ph ? (ph + ' · ' + e) : e;
+                } else {
+                  t.textContent = st ? rel(st) : '—';
+                }
+              }
+              function renderAll() {
+                document.querySelectorAll('[data-review-id]').forEach(renderTime);
+              }
               var es = new EventSource('/api/events/queue');
               es.addEventListener('review', function(ev) {
                 try {
@@ -111,17 +141,16 @@ export const QueuePage: FC<Props> = ({ user, reviews, statusFilter = [] }) => {
                     pill.textContent = e.status;
                     pill.setAttribute('data-status', e.status);
                   }
-                  var started = row.querySelector('[data-started]');
-                  if (started) started.textContent = e.startedAt ? rel(e.startedAt) : '—';
+                  var t = row.querySelector('[data-started]');
+                  if (t) {
+                    t.setAttribute('data-started-at', e.startedAt || '');
+                    t.setAttribute('data-phase', (e.status === 'running' && e.phase) ? e.phase : '');
+                  }
+                  renderTime(row);
                 } catch (err) { console.error('[sse]', err); }
               });
-              function rel(iso) {
-                var s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
-                if (s < 60) return s + 's ago';
-                if (s < 3600) return Math.floor(s/60) + 'm ago';
-                if (s < 86400) return Math.floor(s/3600) + 'h ago';
-                return Math.floor(s/86400) + 'd ago';
-              }
+              renderAll();
+              setInterval(renderAll, 1000);
             })();
           `,
         }}
@@ -147,8 +176,13 @@ const QueueRow: FC<{ review: PendingReview }> = ({ review }) => {
           waiting on CI
         </span>
       ) : null}
-      <span class="queue-row-time" data-started>
-        {review.startedAt ? formatRelative(review.startedAt) : '—'}
+      <span
+        class="queue-row-time"
+        data-started
+        data-started-at={review.startedAt ? new Date(review.startedAt).toISOString() : ''}
+        data-phase={review.status === 'running' && review.phase ? review.phase : ''}
+      >
+        {timeCell(review)}
       </span>
       <a class="cta-tertiary queue-row-link" href={`/queue/${review.id}`}>View</a>
     </li>
@@ -178,4 +212,30 @@ function formatRelative(d: Date | string): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+// Elapsed (counting up), not relative ("ago"). Kept byte-identical to the
+// client-side fmtElapsed below so the server render and the 1s ticker
+// never disagree.
+export function fmtElapsed(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  if (m < 60) return `${m}m ${seconds % 60}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
+/**
+ * Initial text for the time/progress column. Running rows show
+ * `phase · elapsed` (the ticker keeps elapsed live); everything else
+ * keeps the existing "Xs ago" relative form.
+ */
+function timeCell(r: PendingReview): string {
+  if (r.status === 'running' && r.startedAt) {
+    const e = fmtElapsed(
+      Math.max(0, Math.floor((Date.now() - new Date(r.startedAt).getTime()) / 1000)),
+    );
+    return r.phase ? `${r.phase} · ${e}` : e;
+  }
+  return r.startedAt ? formatRelative(r.startedAt) : '—';
 }

@@ -6,6 +6,7 @@ import {
   markDone,
   markFailed,
   markSkipped,
+  setReviewPhase,
   type PendingReview,
   type PostedEvent,
 } from './db/reviews.ts';
@@ -130,6 +131,9 @@ async function processJob(job: PendingReview): Promise<void> {
       return;
     }
 
+    // preparing (set by claimNext) → reviewing: the multi-minute claude
+    // call. This is the phase the queue UI dwells on; emit it explicitly.
+    await setReviewPhase(job.id, 'reviewing');
     const ciSummary = formatChecksSummary(checks);
     const result = await runReview(
       {
@@ -156,6 +160,7 @@ async function processJob(job: PendingReview): Promise<void> {
       verdict: result.verdict,
       postedEvent: event,
     });
+    await setReviewPhase(job.id, 'posting');
     await postPullRequestReview(userRow.token, job.repoFull, job.prNumber, stamped, event);
     await markDone(job.id, stamped, result.verdict, event);
     console.log(`[worker] done #${job.id} (verdict=${result.verdict}, event=${event})`);
