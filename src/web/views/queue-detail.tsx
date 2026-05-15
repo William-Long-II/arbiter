@@ -4,7 +4,7 @@ import sanitizeHtml from 'sanitize-html';
 import type { User } from '../../db/users.ts';
 import type { PendingReview, ReviewOverride, ReviewStatus } from '../../db/reviews.ts';
 import { Layout } from './layout.tsx';
-import { fmtElapsed } from './queue-list.tsx';
+import { fmtElapsed, fmtCostUsd } from './queue-list.tsx';
 
 /** Initial "phase · elapsed" text for a running review (the 1s ticker
  * keeps elapsed live thereafter). Empty for non-running rows. */
@@ -143,6 +143,11 @@ export const QueueDetailPage: FC<Props> = ({
         <MetaRow label="Mode">
           <span class="mono-sm">{review.claudeMode}</span>
         </MetaRow>
+        {review.costUsd != null ? (
+          <MetaRow label="Cost">
+            <span class="mono-sm">{fmtCostUsd(review.costUsd)}</span>
+          </MetaRow>
+        ) : null}
         <MetaRow label="Review context">
           <span class="mono-sm">{review.reviewContext}</span>
         </MetaRow>
