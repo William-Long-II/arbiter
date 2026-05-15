@@ -25,6 +25,12 @@ import {
 } from './github/pulls.ts';
 import { fetchChecksSummary, formatChecksSummary } from './github/checks.ts';
 import { DiffTooLargeError, runReview, type Verdict } from './review/runner.ts';
+import {
+  buildSignalsNote,
+  changedFilePaths,
+  escalateScrutiny,
+  testGapNote,
+} from './review/signals.ts';
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let reaperTimer: ReturnType<typeof setInterval> | null = null;
@@ -177,9 +183,26 @@ async function processJob(job: PendingReview): Promise<void> {
     // call. This is the phase the queue UI dwells on; emit it explicitly.
     await setReviewPhase(job.id, 'reviewing');
     const ciSummary = formatChecksSummary(checks);
+
+    // Changed-file signals: escalate scrutiny for sensitive paths and note
+    // a missing-tests gap. Advisory — escalation only ever raises rigor by
+    // one tier; the note is just guidance. Effective tier (not the scope's
+    // snapshot) drives both the prompt and the footer so the posted review
+    // honestly reflects what ran.
+    const changedPaths = changedFilePaths(diff);
+    const escalation = escalateScrutiny(job.scrutiny, changedPaths);
+    const effectiveScrutiny = escalation ? escalation.scrutiny : job.scrutiny;
+    const signalsNote = buildSignalsNote(escalation, testGapNote(changedPaths));
+    if (escalation) {
+      console.log(
+        `[worker] #${job.id} scrutiny ${job.scrutiny}→${effectiveScrutiny} ` +
+          `(sensitive: ${escalation.hits.join(', ')})`,
+      );
+    }
+
     const result = await runReview(
       {
-        scrutiny: job.scrutiny,
+        scrutiny: effectiveScrutiny,
         diff,
         prTitle: pr.title,
         prAuthor: pr.author,
@@ -187,6 +210,7 @@ async function processJob(job: PendingReview): Promise<void> {
         personalityPrompt: job.personalityPrompt,
         ciSummary,
         diffNotice,
+        signalsNote,
         reviewContext: job.reviewContext,
         checkout: {
           token: userRow.token,
@@ -204,7 +228,7 @@ async function processJob(job: PendingReview): Promise<void> {
       reviewerLogin: userRow.login,
     });
     const stamped = stampReviewBody(result.body, job.footerTemplate, {
-      scrutiny: job.scrutiny,
+      scrutiny: effectiveScrutiny,
       mode: job.claudeMode,
       verdict: result.verdict,
       postedEvent: event,

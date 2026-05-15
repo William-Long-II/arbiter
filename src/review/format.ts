@@ -19,6 +19,10 @@ export type ReviewInput = {
    * partial and the model is told to open with a visible caveat. Null for
    * normal full diffs. */
   diffNotice?: string | null;
+  /** Advisory reviewer guidance derived from the changed-file set
+   * (sensitive-path scrutiny escalation, test-gap). Rendered as a callout
+   * just before the diff. Null/undefined when no signal fired. */
+  signalsNote?: string | null;
   /** What the reviewer subprocess sees. 'isolated' (default): diff only,
    * empty working dir. 'checkout': PR head checked out so cross-module
    * refs can be verified. Snapshotted from scope at enqueue. */
@@ -87,6 +91,9 @@ export function formatUserMessage(input: ReviewInput): string {
       `> [!IMPORTANT] Large pull request — partial diff`,
       `> ${input.diffNotice.trim()}`,
     );
+  }
+  if (input.signalsNote && input.signalsNote.trim().length > 0) {
+    lines.push(``, `> [!NOTE] ${input.signalsNote.trim()}`);
   }
   lines.push(``, `Unified diff:`, `${fence}diff`, input.diff, fence);
   return lines.join('\n');
