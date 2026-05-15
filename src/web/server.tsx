@@ -613,7 +613,11 @@ export function buildApp(): Hono {
       b.mode === 'subscription' || b.mode === 'api' ? b.mode : config.claude.defaultMode;
 
     try {
-      const { pr, diff } = await fetchPullRequest(user.githubToken, repoFull, prNumber);
+      const { pr, diff, diffNotice } = await fetchPullRequest(
+        user.githubToken,
+        repoFull,
+        prNumber,
+      );
       const result = await runReview(
         {
           scrutiny,
@@ -621,6 +625,7 @@ export function buildApp(): Hono {
           prTitle: pr.title,
           prAuthor: pr.author,
           repoFull: pr.repoFull,
+          diffNotice,
         },
         requestedMode,
       );
