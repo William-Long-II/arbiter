@@ -1,6 +1,6 @@
 import { sql } from '../db.ts';
 import type { ClaudeMode, ReviewContext, Scrutiny } from './scopes.ts';
-import type { Verdict } from '../review/format.ts';
+import type { FindingCounts, Verdict } from '../review/format.ts';
 import type { ReviewEvent } from '../events.ts';
 
 export type ReviewStatus = 'queued' | 'running' | 'done' | 'failed' | 'skipped';
@@ -46,6 +46,9 @@ export type PendingReview = {
   /** USD cost of the model call that produced this review. Null for
    *  API-mode reviews, structural skips, and rows predating the column. */
   costUsd: number | null;
+  /** Self-reported issue counts by severity. Null when the model omitted
+   *  the marker or the row predates it. */
+  findings: FindingCounts | null;
   createdAt: Date;
   startedAt: Date | null;
   finishedAt: Date | null;
@@ -96,6 +99,7 @@ const SELECT_REVIEW_COLUMNS = sql`
   verdict,
   posted_event AS "postedEvent",
   cost_usd     AS "costUsd",
+  findings,
   created_at   AS "createdAt",
   started_at   AS "startedAt",
   finished_at  AS "finishedAt"
@@ -233,6 +237,7 @@ export async function markDone(
   verdict: Verdict,
   postedEvent: PostedEvent,
   costUsd: number | null = null,
+  findings: FindingCounts | null = null,
 ): Promise<void> {
   const rows = await sql<PendingReview[]>`
     UPDATE pending_reviews
@@ -243,7 +248,8 @@ export async function markDone(
         error = null,
         verdict = ${verdict},
         posted_event = ${postedEvent},
-        cost_usd = ${costUsd}
+        cost_usd = ${costUsd},
+        findings = ${findings ? sql.json(findings) : null}
     WHERE id = ${id}
     RETURNING ${SELECT_REVIEW_COLUMNS}
   `;
@@ -389,6 +395,7 @@ export async function markSkippedPendingPost(
   verdict: Verdict,
   postedEvent: PostedEvent,
   costUsd: number | null = null,
+  findings: FindingCounts | null = null,
 ): Promise<void> {
   const rows = await sql<PendingReview[]>`
     UPDATE pending_reviews
@@ -399,7 +406,8 @@ export async function markSkippedPendingPost(
         output = ${output},
         verdict = ${verdict},
         posted_event = ${postedEvent},
-        cost_usd = ${costUsd}
+        cost_usd = ${costUsd},
+        findings = ${findings ? sql.json(findings) : null}
     WHERE id = ${id}
     RETURNING ${SELECT_REVIEW_COLUMNS}
   `;

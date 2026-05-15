@@ -260,6 +260,7 @@ async function processJob(job: PendingReview): Promise<void> {
           result.verdict,
           event,
           result.costUsd ?? null,
+          result.findings ?? null,
         );
         console.log(
           `[worker] skipped #${job.id} (locked conversation; body preserved for post-anyway)`,
@@ -268,7 +269,14 @@ async function processJob(job: PendingReview): Promise<void> {
       }
       throw postErr;
     }
-    await markDone(job.id, stamped, result.verdict, event, result.costUsd ?? null);
+    await markDone(
+      job.id,
+      stamped,
+      result.verdict,
+      event,
+      result.costUsd ?? null,
+      result.findings ?? null,
+    );
     console.log(
       `[worker] done #${job.id} (verdict=${result.verdict}, event=${event}` +
         `${result.costUsd != null ? `, cost=$${result.costUsd}` : ''})`,

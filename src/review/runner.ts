@@ -5,8 +5,10 @@ import { tmpdir } from 'node:os';
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config.ts';
 import {
+  FINDINGS_INSTRUCTION,
   formatUserMessage,
   parseClaudeCliOutput,
+  parseFindings,
   parseVerdict,
   type ReviewInput,
   type ReviewOutput,
@@ -101,7 +103,7 @@ async function buildSystemPrompt(
   context: 'isolated' | 'checkout',
 ): Promise<string> {
   const base = await loadScrutinyPrompt(input.scrutiny);
-  let prompt = `${base}\n\n${CONTEXT_PROMPT[context]}`;
+  let prompt = `${base}\n\n${FINDINGS_INSTRUCTION}\n\n${CONTEXT_PROMPT[context]}`;
   const personality = input.personalityPrompt?.trim();
   if (personality) {
     prompt += `\n\n## Additional reviewer guidance for this scope\n\n${personality}`;
@@ -309,8 +311,9 @@ async function runViaAnthropicApi(input: ReviewInput): Promise<ReviewOutput> {
     throw new Error('Anthropic API returned no text content');
   }
 
-  const { verdict, body } = parseVerdict(text);
-  return { body, verdict, raw: response };
+  const v = parseVerdict(text);
+  const f = parseFindings(v.body);
+  return { body: f.body, verdict: v.verdict, findings: f.findings, raw: response };
 }
 
 export interface PreflightResult {
