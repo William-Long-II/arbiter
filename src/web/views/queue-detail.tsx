@@ -3,6 +3,17 @@ import { marked } from 'marked';
 import type { User } from '../../db/users.ts';
 import type { PendingReview, ReviewOverride, ReviewStatus } from '../../db/reviews.ts';
 import { Layout } from './layout.tsx';
+import { fmtElapsed } from './queue-list.tsx';
+
+/** Initial "phase · elapsed" text for a running review (the 1s ticker
+ * keeps elapsed live thereafter). Empty for non-running rows. */
+export function detailProgress(r: PendingReview): string {
+  if (r.status !== 'running' || !r.startedAt) return '';
+  const e = fmtElapsed(
+    Math.max(0, Math.floor((Date.now() - new Date(r.startedAt).getTime()) / 1000)),
+  );
+  return r.phase ? `${r.phase} · ${e}` : e;
+}
 
 // Configure marked once. GFM extensions (tables, strikethrough, etc.) match
 // what GitHub will render. Body comes from Claude API → the row's owner —
@@ -60,7 +71,26 @@ export const QueueDetailPage: FC<Props> = ({
 
       <div class="card queue-meta-card">
         <MetaRow label="Status">
-          <span class={`badge-pill status-${review.status}`}>{review.status}</span>
+          <span
+            class={`badge-pill status-${review.status}`}
+            data-status-pill
+            data-status={review.status}
+          >
+            {review.status}
+          </span>
+          {/* Live phase · elapsed while running. Always rendered (empty
+              when not running) so the SSE handler can fill it in on a
+              queued→running transition without a reload. */}
+          <span
+            class="queue-detail-phase mono-sm"
+            data-detail-progress
+            data-started-at={
+              review.startedAt ? new Date(review.startedAt).toISOString() : ''
+            }
+            data-phase={review.status === 'running' && review.phase ? review.phase : ''}
+          >
+            {detailProgress(review)}
+          </span>
         </MetaRow>
         <MetaRow label="Author">
           <span class="mono-sm">{review.prAuthor}</span>
@@ -78,6 +108,9 @@ export const QueueDetailPage: FC<Props> = ({
         </MetaRow>
         <MetaRow label="Mode">
           <span class="mono-sm">{review.claudeMode}</span>
+        </MetaRow>
+        <MetaRow label="Review context">
+          <span class="mono-sm">{review.reviewContext}</span>
         </MetaRow>
         <MetaRow label="Auto-approve">
           <span>{review.autoApprove ? 'enabled' : 'disabled'}</span>
@@ -277,12 +310,14 @@ export const QueueDetailPage: FC<Props> = ({
       ) : null}
 
       {/*
-        SSE client: while this review is still active (queued or running),
-        listen for state changes on the same SSE stream. When THIS review
-        flips to a terminal state, full-reload so the rendered output /
-        error / posted-event meta all show.
+        SSE client: while this review is active, live-update the status
+        badge and the "phase · elapsed" progress (same stream + payload
+        the queue list uses), and tick elapsed every second. When THIS
+        review flips to a terminal state, full-reload so the rendered
+        output / error / posted-event meta all show.
 
-        No polling — we only reload when the worker actually commits.
+        No polling — SSE drives state; the 1s timer only re-renders the
+        elapsed counter from data attributes.
       */}
       <script
         dangerouslySetInnerHTML={{
@@ -291,18 +326,58 @@ export const QueueDetailPage: FC<Props> = ({
               var status = ${JSON.stringify(review.status)};
               var id = ${JSON.stringify(review.id)};
               var TERMINAL = { done: 1, failed: 1, skipped: 1 };
-              if (TERMINAL[status] || typeof EventSource === 'undefined') return;
-              var es = new EventSource('/api/events/queue');
-              es.addEventListener('review', function(ev) {
-                try {
-                  var e = JSON.parse(ev.data);
-                  if (e.reviewId !== id) return;
-                  if (TERMINAL[e.status]) {
-                    es.close();
-                    location.reload();
-                  }
-                } catch (err) { console.error('[sse]', err); }
-              });
+              // Byte-identical to fmtElapsed() server-side so the SSR text
+              // and the ticker never disagree.
+              function fmtElapsed(s) {
+                if (s < 60) return s + 's';
+                var m = Math.floor(s / 60);
+                if (m < 60) return m + 'm ' + (s % 60) + 's';
+                return Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+              }
+              function tick() {
+                var pill = document.querySelector('[data-status-pill]');
+                var prog = document.querySelector('[data-detail-progress]');
+                if (!pill || !prog) return;
+                if (pill.getAttribute('data-status') !== 'running') {
+                  prog.textContent = '';
+                  return;
+                }
+                var st = prog.getAttribute('data-started-at');
+                if (!st) { prog.textContent = ''; return; }
+                var e = fmtElapsed(Math.max(0, Math.floor(
+                  (Date.now() - new Date(st).getTime()) / 1000)));
+                var ph = prog.getAttribute('data-phase');
+                prog.textContent = ph ? (ph + ' · ' + e) : e;
+              }
+              if (typeof EventSource !== 'undefined' && !TERMINAL[status]) {
+                var es = new EventSource('/api/events/queue');
+                es.addEventListener('review', function(ev) {
+                  try {
+                    var e = JSON.parse(ev.data);
+                    if (e.reviewId !== id) return;
+                    if (TERMINAL[e.status]) {
+                      es.close();
+                      location.reload();
+                      return;
+                    }
+                    var pill = document.querySelector('[data-status-pill]');
+                    if (pill) {
+                      pill.className = 'badge-pill status-' + e.status;
+                      pill.textContent = e.status;
+                      pill.setAttribute('data-status', e.status);
+                    }
+                    var prog = document.querySelector('[data-detail-progress]');
+                    if (prog) {
+                      prog.setAttribute('data-phase',
+                        (e.status === 'running' && e.phase) ? e.phase : '');
+                      if (e.startedAt) prog.setAttribute('data-started-at', e.startedAt);
+                    }
+                    tick();
+                  } catch (err) { console.error('[sse]', err); }
+                });
+              }
+              setInterval(tick, 1000);
+              tick();
             })();
           `,
         }}
