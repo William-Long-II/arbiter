@@ -12,6 +12,15 @@ export type ClaudeMode = 'default' | 'subscription' | 'api';
  *    on busy orgs.
  */
 export type TriggerMode = 'open' | 'review_requested';
+/**
+ * Execution context for the reviewer subprocess.
+ *  - 'isolated' — run in a fresh empty temp dir; review from the diff
+ *    alone. Default. Stops the subprocess wandering into the container's
+ *    own /app source and emitting "unrelated project" scope caveats.
+ *  - 'checkout' — shallow-checkout the PR head into the temp dir so the
+ *    reviewer can verify cross-module references. Heavier; opt-in.
+ */
+export type ReviewContext = 'isolated' | 'checkout';
 
 export type Scope = {
   id: number;
@@ -41,6 +50,8 @@ export type Scope = {
    */
   personalityPrompt: string | null;
   triggerMode: TriggerMode;
+  /** What the reviewer subprocess sees. Default 'isolated'. */
+  reviewContext: ReviewContext;
   enabled: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -50,6 +61,7 @@ const SCRUTINIES: readonly Scrutiny[] = ['light', 'standard', 'strict'];
 const KINDS: readonly TargetKind[] = ['repo', 'org'];
 const MODES: readonly ClaudeMode[] = ['default', 'subscription', 'api'];
 const TRIGGER_MODES: readonly TriggerMode[] = ['open', 'review_requested'];
+const REVIEW_CONTEXTS: readonly ReviewContext[] = ['isolated', 'checkout'];
 
 export function isScrutiny(v: unknown): v is Scrutiny {
   return typeof v === 'string' && (SCRUTINIES as readonly string[]).includes(v);
@@ -62,6 +74,9 @@ export function isClaudeMode(v: unknown): v is ClaudeMode {
 }
 export function isTriggerMode(v: unknown): v is TriggerMode {
   return typeof v === 'string' && (TRIGGER_MODES as readonly string[]).includes(v);
+}
+export function isReviewContext(v: unknown): v is ReviewContext {
+  return typeof v === 'string' && (REVIEW_CONTEXTS as readonly string[]).includes(v);
 }
 
 const SELECT_COLUMNS = sql`
@@ -77,6 +92,7 @@ const SELECT_COLUMNS = sql`
   footer_template    AS "footerTemplate",
   personality_prompt AS "personalityPrompt",
   trigger_mode       AS "triggerMode",
+  review_context     AS "reviewContext",
   enabled,
   created_at       AS "createdAt",
   updated_at       AS "updatedAt"
@@ -112,6 +128,7 @@ export type ScopeInput = {
   footerTemplate: string | null;
   personalityPrompt: string | null;
   triggerMode: TriggerMode;
+  reviewContext: ReviewContext;
   enabled: boolean;
 };
 
@@ -120,12 +137,13 @@ export async function createScope(userId: number, input: ScopeInput): Promise<Sc
     INSERT INTO scopes
       (user_id, target_kind, target, base_branch_pattern, scrutiny,
        exclude_authors, claude_mode, auto_approve, footer_template,
-       personality_prompt, trigger_mode, enabled)
+       personality_prompt, trigger_mode, review_context, enabled)
     VALUES
       (${userId}, ${input.targetKind}, ${input.target}, ${input.baseBranchPattern},
        ${input.scrutiny}, ${input.excludeAuthors}, ${input.claudeMode},
        ${input.autoApprove}, ${input.footerTemplate},
-       ${input.personalityPrompt}, ${input.triggerMode}, ${input.enabled})
+       ${input.personalityPrompt}, ${input.triggerMode},
+       ${input.reviewContext}, ${input.enabled})
     RETURNING ${SELECT_COLUMNS}
   `;
   if (!row) throw new Error('createScope: no row returned');
@@ -149,6 +167,7 @@ export async function updateScope(
         footer_template = ${input.footerTemplate},
         personality_prompt = ${input.personalityPrompt},
         trigger_mode = ${input.triggerMode},
+        review_context = ${input.reviewContext},
         enabled = ${input.enabled},
         updated_at = now()
     WHERE id = ${id} AND user_id = ${userId}
@@ -210,6 +229,11 @@ export function parseScopeForm(
     errors.push('Trigger mode must be "open" or "review_requested".');
   }
 
+  const reviewContext = form.review_context ?? 'isolated';
+  if (!isReviewContext(reviewContext)) {
+    errors.push('Review context must be "isolated" or "checkout".');
+  }
+
   const excludeAuthors = (form.exclude_authors ?? '')
     .split(/\r?\n/)
     .map((s) => s.trim())
@@ -255,6 +279,7 @@ export function parseScopeForm(
       footerTemplate,
       personalityPrompt,
       triggerMode: triggerMode as TriggerMode,
+      reviewContext: reviewContext as ReviewContext,
       enabled,
     },
   };

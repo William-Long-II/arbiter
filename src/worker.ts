@@ -152,6 +152,12 @@ async function processJob(job: PendingReview): Promise<void> {
         personalityPrompt: job.personalityPrompt,
         ciSummary,
         diffNotice,
+        reviewContext: job.reviewContext,
+        checkout: {
+          token: userRow.token,
+          prNumber: job.prNumber,
+          headSha: pr.headSha,
+        },
       },
       job.claudeMode,
     );

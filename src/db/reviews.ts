@@ -1,5 +1,5 @@
 import { sql } from '../db.ts';
-import type { ClaudeMode, Scrutiny } from './scopes.ts';
+import type { ClaudeMode, ReviewContext, Scrutiny } from './scopes.ts';
 import type { Verdict } from '../review/format.ts';
 import type { ReviewEvent } from '../events.ts';
 
@@ -26,6 +26,9 @@ export type PendingReview = {
   footerTemplate: string | null;
   /** Snapshotted from the matching scope at enqueue time. See db/scopes.ts. */
   personalityPrompt: string | null;
+  /** Snapshotted from the matching scope at enqueue time. What the
+   * reviewer subprocess sees ('isolated' default | 'checkout'). */
+  reviewContext: ReviewContext;
   status: ReviewStatus;
   /** Sub-status while status === 'running'; null otherwise. */
   phase: ReviewPhase | null;
@@ -60,6 +63,7 @@ export type EnqueueInput = {
   autoApprove: boolean;
   footerTemplate: string | null;
   personalityPrompt: string | null;
+  reviewContext: ReviewContext;
 };
 
 const SELECT_REVIEW_COLUMNS = sql`
@@ -78,6 +82,7 @@ const SELECT_REVIEW_COLUMNS = sql`
   auto_approve AS "autoApprove",
   footer_template AS "footerTemplate",
   personality_prompt AS "personalityPrompt",
+  review_context AS "reviewContext",
   status,
   phase,
   attempt,
@@ -124,7 +129,8 @@ export async function enqueueReview(input: EnqueueInput): Promise<PendingReview 
     INSERT INTO pending_reviews (
       user_id, scope_id, repo_full, pr_number, pr_title, pr_author,
       base_branch, head_branch, head_sha, scrutiny, claude_mode,
-      auto_approve, footer_template, personality_prompt, status
+      auto_approve, footer_template, personality_prompt, review_context,
+      status
     ) VALUES (
       ${input.userId},
       ${input.scopeId ?? null},
@@ -140,6 +146,7 @@ export async function enqueueReview(input: EnqueueInput): Promise<PendingReview 
       ${input.autoApprove},
       ${input.footerTemplate},
       ${input.personalityPrompt},
+      ${input.reviewContext},
       'queued'
     )
     ON CONFLICT (repo_full, pr_number, head_sha) DO NOTHING

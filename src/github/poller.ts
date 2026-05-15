@@ -183,6 +183,7 @@ async function pollUser(user: {
       autoApprove: matched.autoApprove,
       footerTemplate: matched.footerTemplate,
       personalityPrompt: matched.personalityPrompt,
+      reviewContext: matched.reviewContext,
     });
     if (row) {
       enqueued++;

@@ -17,6 +17,7 @@ function scope(over: Partial<Scope> = {}): Scope {
     footerTemplate: null,
     personalityPrompt: null,
     triggerMode: 'open',
+    reviewContext: 'isolated',
     enabled: true,
     createdAt: new Date(),
     updatedAt: new Date(),

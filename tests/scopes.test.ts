@@ -244,4 +244,37 @@ describe('parseScopeForm', () => {
     });
     expect(r.ok).toBe(false);
   });
+
+  test('review_context defaults to "isolated" when omitted', () => {
+    const r = parseScopeForm({
+      target_kind: 'repo',
+      target: 'a/b',
+      scrutiny: 'standard',
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('unreachable');
+    expect(r.input.reviewContext).toBe('isolated');
+  });
+
+  test('review_context accepts checkout', () => {
+    const r = parseScopeForm({
+      target_kind: 'repo',
+      target: 'a/b',
+      scrutiny: 'standard',
+      review_context: 'checkout',
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('unreachable');
+    expect(r.input.reviewContext).toBe('checkout');
+  });
+
+  test('rejects unknown review_context', () => {
+    const r = parseScopeForm({
+      target_kind: 'repo',
+      target: 'a/b',
+      scrutiny: 'standard',
+      review_context: 'sandbox',
+    });
+    expect(r.ok).toBe(false);
+  });
 });

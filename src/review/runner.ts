@@ -1,6 +1,7 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config.ts';
 import {
@@ -36,6 +37,10 @@ export const MAX_DIFF_BYTES = 1_000_000;  // ~1 MB of unified diff
 // unauthenticated CLI (which *hangs* rather than erroring) is caught in
 // seconds at startup instead of silently burning 5 minutes per review.
 const PREFLIGHT_TIMEOUT_MS = 30_000;
+// Each git step in a 'checkout'-context review is bounded so a slow or
+// huge repo can't eat the whole review window. Exceeding it falls back
+// to an isolated (diff-only) review rather than failing.
+const CHECKOUT_STEP_TIMEOUT_MS = 90_000;
 
 export class DiffTooLargeError extends Error {
   constructor(public readonly bytes: number, public readonly limit: number) {
@@ -62,16 +67,113 @@ async function loadScrutinyPrompt(scrutiny: ReviewInput['scrutiny']): Promise<st
   return readFile(join(promptsDir, `${scrutiny}.md`), 'utf8');
 }
 
+export const CONTEXT_PROMPT: Record<'isolated' | 'checkout', string> = {
+  isolated:
+    '## Review context\n\n' +
+    'You are reviewing from the unified diff in the user message ONLY. ' +
+    'There is no repository checkout or working tree, and your working ' +
+    'directory is intentionally empty. Do not attempt to read files, list ' +
+    'directories, or inspect a working directory — nothing relevant is ' +
+    'there. Do NOT add caveats about being unable to verify cross-module ' +
+    'references, missing files, or the working directory containing an ' +
+    'unrelated project. Review strictly what the diff shows, with the ' +
+    'confidence the diff supports.',
+  checkout:
+    '## Review context\n\n' +
+    "The pull request's repository is checked out at its head commit in " +
+    'your current working directory. You may read files there to verify ' +
+    'cross-module references, confirm symbols exist, and understand ' +
+    'surrounding code. Keep the review focused on the changes in the ' +
+    'provided diff; use the checkout to verify and add precision, not to ' +
+    'review unrelated code.',
+};
+
 /**
- * Concatenate the scrutiny base prompt with the scope's optional personality.
- * Personality is additive (doesn't replace) so the scrutiny tier's output
- * format rules (verdict marker, blocking-issues structure) still apply.
+ * Concatenate the scrutiny base prompt + a review-context note + the
+ * scope's optional personality. Both additions are additive (don't
+ * replace) so the scrutiny tier's output-format rules (verdict marker,
+ * blocking-issues structure) still apply. `context` is the *effective*
+ * context — it reflects a checkout that actually succeeded, so the model
+ * is never told it has a working tree it doesn't.
  */
-async function buildSystemPrompt(input: ReviewInput): Promise<string> {
+async function buildSystemPrompt(
+  input: ReviewInput,
+  context: 'isolated' | 'checkout',
+): Promise<string> {
   const base = await loadScrutinyPrompt(input.scrutiny);
+  let prompt = `${base}\n\n${CONTEXT_PROMPT[context]}`;
   const personality = input.personalityPrompt?.trim();
-  if (!personality) return base;
-  return `${base}\n\n## Additional reviewer guidance for this scope\n\n${personality}`;
+  if (personality) {
+    prompt += `\n\n## Additional reviewer guidance for this scope\n\n${personality}`;
+  }
+  return prompt;
+}
+
+/**
+ * Shallow-checkout the PR head into `dir`. Returns true on success. The
+ * token is passed via http.extraheader (not the remote URL) so it never
+ * lands in .git/config or the reflog; the dir is removed after the review
+ * regardless. Each git step is time-bounded. Any failure returns false —
+ * the caller degrades to an isolated, diff-only review instead of failing.
+ */
+async function checkoutPrHead(
+  dir: string,
+  repoFull: string,
+  prNumber: number,
+  token: string,
+): Promise<boolean> {
+  const [owner, repo] = repoFull.split('/');
+  if (!owner || !repo) return false;
+  const auth =
+    'AUTHORIZATION: basic ' +
+    Buffer.from(`x-access-token:${token}`).toString('base64');
+  const steps: string[][] = [
+    ['git', 'init', '-q'],
+    ['git', 'remote', 'add', 'origin', `https://github.com/${owner}/${repo}.git`],
+    [
+      'git', '-c', `http.extraheader=${auth}`,
+      'fetch', '-q', '--depth', '1', 'origin', `pull/${prNumber}/head`,
+    ],
+    ['git', 'checkout', '-q', 'FETCH_HEAD'],
+  ];
+  for (const cmd of steps) {
+    try {
+      const p = Bun.spawn({
+        cmd,
+        cwd: dir,
+        stdout: 'ignore',
+        stderr: 'pipe',
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      });
+      const killer = setTimeout(() => {
+        try { p.kill('SIGKILL'); } catch { /* already exited */ }
+      }, CHECKOUT_STEP_TIMEOUT_MS);
+      let code: number;
+      try {
+        code = await p.exited;
+      } finally {
+        clearTimeout(killer);
+      }
+      if (code !== 0) {
+        const why = (await new Response(p.stderr).text()).trim();
+        console.error(
+          `[runner] checkout step ${cmd.join(' ').replace(auth, '[redacted]')} ` +
+            `failed (${code}) for ${repoFull}#${prNumber}: ${why || '(no stderr)'}`,
+        );
+        return false;
+      }
+    } catch (err) {
+      // Bun.spawn throws synchronously if `git` isn't on PATH (e.g. an
+      // image built before git was added). Treat as a failed checkout so
+      // the caller degrades to an isolated review instead of failing.
+      console.error(
+        `[runner] checkout step ${cmd[0]} could not run for ` +
+          `${repoFull}#${prNumber}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return false;
+    }
+  }
+  return true;
 }
 
 export async function runReview(
@@ -84,63 +186,95 @@ export async function runReview(
 }
 
 async function runViaClaudeCli(input: ReviewInput): Promise<ReviewOutput> {
-  const systemPrompt = await buildSystemPrompt(input);
-  const userMessage = formatUserMessage(input);
-
-  const proc = Bun.spawn({
-    cmd: [
-      config.claude.bin,
-      '-p',
-      '--output-format',
-      'json',
-      '--append-system-prompt',
-      systemPrompt,
-    ],
-    stdin: 'pipe',
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-
-  // Watchdog: if the subprocess hasn't exited within REVIEW_TIMEOUT_MS,
-  // SIGKILL it so the request doesn't hang forever (e.g. on a stalled
-  // session or bad credentials).
-  const watchdog = setTimeout(() => {
-    try { proc.kill('SIGKILL'); } catch { /* already exited */ }
-  }, REVIEW_TIMEOUT_MS);
-
-  // Send the diff + PR meta on stdin so we don't blow up the argv length.
-  proc.stdin.write(userMessage);
-  await proc.stdin.end();
-
-  let exitCode: number;
-  let stdout: string;
-  let stderr: string;
+  // Always run in a fresh temp dir so the subprocess never inherits the
+  // container's /app cwd (arbiter's own source) — that was the cause of
+  // "the working directory contains an unrelated project" caveats and
+  // wasted filesystem exploration. For 'checkout' context we populate it
+  // with the PR head; otherwise it stays empty (diff-only review).
+  const workDir = await mkdtemp(join(tmpdir(), 'arbiter-review-'));
   try {
-    [exitCode, stdout, stderr] = await Promise.all([
-      proc.exited,
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-  } finally {
-    clearTimeout(watchdog);
-  }
+    let effectiveContext: 'isolated' | 'checkout' = 'isolated';
+    if (input.reviewContext === 'checkout' && input.checkout) {
+      const ok = await checkoutPrHead(
+        workDir,
+        input.repoFull,
+        input.checkout.prNumber,
+        input.checkout.token,
+      );
+      if (ok) {
+        effectiveContext = 'checkout';
+      } else {
+        console.error(
+          `[runner] ${input.repoFull}#${input.checkout.prNumber}: checkout ` +
+            `failed; falling back to isolated diff-only review`,
+        );
+      }
+    }
 
-  // SIGKILL by the watchdog typically surfaces as a non-zero exit code with
-  // no stderr. Distinguish that from a normal failure for clearer logging.
-  if (exitCode !== 0) {
-    if (proc.killed) throw new ReviewTimeoutError(REVIEW_TIMEOUT_MS);
-    throw new Error(
-      `claude -p exited with ${exitCode}: ${stderr.trim() || '(no stderr)'}`,
-    );
+    const systemPrompt = await buildSystemPrompt(input, effectiveContext);
+    const userMessage = formatUserMessage(input);
+
+    const proc = Bun.spawn({
+      cmd: [
+        config.claude.bin,
+        '-p',
+        '--output-format',
+        'json',
+        '--append-system-prompt',
+        systemPrompt,
+      ],
+      cwd: workDir,
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    // Watchdog: if the subprocess hasn't exited within REVIEW_TIMEOUT_MS,
+    // SIGKILL it so the request doesn't hang forever (e.g. on a stalled
+    // session or bad credentials).
+    const watchdog = setTimeout(() => {
+      try { proc.kill('SIGKILL'); } catch { /* already exited */ }
+    }, REVIEW_TIMEOUT_MS);
+
+    // Send the diff + PR meta on stdin so we don't blow up the argv length.
+    proc.stdin.write(userMessage);
+    await proc.stdin.end();
+
+    let exitCode: number;
+    let stdout: string;
+    let stderr: string;
+    try {
+      [exitCode, stdout, stderr] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+    } finally {
+      clearTimeout(watchdog);
+    }
+
+    // SIGKILL by the watchdog typically surfaces as a non-zero exit code
+    // with no stderr. Distinguish that from a normal failure for clearer
+    // logging.
+    if (exitCode !== 0) {
+      if (proc.killed) throw new ReviewTimeoutError(REVIEW_TIMEOUT_MS);
+      throw new Error(
+        `claude -p exited with ${exitCode}: ${stderr.trim() || '(no stderr)'}`,
+      );
+    }
+    return parseClaudeCliOutput(stdout);
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => {});
   }
-  return parseClaudeCliOutput(stdout);
 }
 
 async function runViaAnthropicApi(input: ReviewInput): Promise<ReviewOutput> {
   if (!config.claude.apiKey) {
     throw new Error('ANTHROPIC_API_KEY not configured (required for api mode)');
   }
-  const systemPrompt = await buildSystemPrompt(input);
+  // API mode has no tools/filesystem, so it is always diff-only — use the
+  // isolated wording regardless of the scope's review context.
+  const systemPrompt = await buildSystemPrompt(input, 'isolated');
   const userMessage = formatUserMessage(input);
 
   const client = new Anthropic({ apiKey: config.claude.apiKey });
