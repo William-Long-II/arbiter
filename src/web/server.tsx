@@ -5,7 +5,16 @@ import { serveStatic } from 'hono/bun';
 import { streamSSE } from 'hono/streaming';
 import { subscribe } from '../events.ts';
 import { mountGithubOAuth } from '../github/oauth.ts';
-import { parsePullRequestEvent, verifyGithubSignature } from '../github/webhook.ts';
+import {
+  parseInstallationEvent,
+  parsePullRequestEvent,
+  verifyGithubSignature,
+} from '../github/webhook.ts';
+import {
+  removeInstallation,
+  setInstallationSuspended,
+  upsertInstallation,
+} from '../db/installations.ts';
 import { enqueueAcrossUsers } from '../enqueue.ts';
 import { collectMetrics, renderPrometheus } from '../metrics.ts';
 import { sql } from '../db.ts';
@@ -761,19 +770,47 @@ export function buildApp(): Hono {
     }
 
     const parsed = parsePullRequestEvent(eventName, payload);
-    if (!parsed) {
-      // Valid + signed, but nothing to do (other event, draft, or an
-      // action we ignore). Acknowledge so GitHub doesn't retry.
-      return c.json({ ok: true, ignored: true });
+    if (parsed) {
+      try {
+        const enqueued = await enqueueAcrossUsers(parsed.pr);
+        return c.json({ ok: true, action: parsed.action, enqueued }, 202);
+      } catch (err) {
+        console.error('[webhook] dispatch error:', err);
+        return c.json({ error: 'Internal error handling webhook' }, 500);
+      }
     }
 
-    try {
-      const enqueued = await enqueueAcrossUsers(parsed.pr);
-      return c.json({ ok: true, action: parsed.action, enqueued }, 202);
-    } catch (err) {
-      console.error('[webhook] dispatch error:', err);
-      return c.json({ error: 'Internal error handling webhook' }, 500);
+    // App lifecycle: keep the installation registry in sync so the token
+    // resolver (slice 3) can mint per-installation tokens. Same signed
+    // endpoint/secret as the PR webhook — the App must be configured to
+    // deliver `installation` events here too (operator setup).
+    const inst = parseInstallationEvent(eventName, payload);
+    if (inst) {
+      try {
+        if (inst.kind === 'upsert') {
+          await upsertInstallation({
+            accountLogin: inst.accountLogin,
+            installationId: inst.installationId,
+            accountType: inst.accountType,
+          });
+        } else if (inst.kind === 'remove') {
+          await removeInstallation(inst.installationId);
+        } else {
+          await setInstallationSuspended(
+            inst.installationId,
+            inst.kind === 'suspend',
+          );
+        }
+        return c.json({ ok: true, installation: inst.kind }, 202);
+      } catch (err) {
+        console.error('[webhook] installation dispatch error:', err);
+        return c.json({ error: 'Internal error handling webhook' }, 500);
+      }
     }
+
+    // Valid + signed, but nothing to do (other event, draft, or an
+    // action we ignore). Acknowledge so GitHub doesn't retry.
+    return c.json({ ok: true, ignored: true });
   });
 
   mountGithubOAuth(app);

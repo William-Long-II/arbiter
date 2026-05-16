@@ -126,3 +126,69 @@ export function parsePullRequestEvent(
     },
   };
 }
+
+type GhInstallationPayload = {
+  action?: unknown;
+  installation?: {
+    id?: unknown;
+    account?: { login?: unknown; type?: unknown };
+  };
+};
+
+/** Normalized App-installation lifecycle change for db/installations. */
+export type ParsedInstallationEvent = {
+  /** upsert: created / re-permissioned. remove: uninstalled.
+   *  suspend|unsuspend: paused/resumed (row stays, resolver skips it). */
+  kind: 'upsert' | 'remove' | 'suspend' | 'unsuspend';
+  installationId: number;
+  /** Always present from GitHub; '' only if a malformed `remove` omitted
+   *  it (remove keys off installationId anyway). */
+  accountLogin: string;
+  accountType: string | null;
+};
+
+// `installation_repositories` (repos added/removed within an install) is
+// intentionally NOT handled here: slice 2 maps per *account*, and the
+// `installation` event already covers the create/delete the resolver
+// needs. The route acknowledges those deliveries as ignored.
+const INSTALLATION_ACTION_KIND: Record<string, ParsedInstallationEvent['kind']> = {
+  created: 'upsert',
+  new_permissions_accepted: 'upsert',
+  deleted: 'remove',
+  suspend: 'suspend',
+  unsuspend: 'unsuspend',
+};
+
+/**
+ * Normalize an `installation` webhook, or null when it should be ignored
+ * (wrong event, uninteresting action, or missing the id we key on).
+ * Pure — the route does the DB write.
+ */
+export function parseInstallationEvent(
+  eventName: string | null | undefined,
+  payload: unknown,
+): ParsedInstallationEvent | null {
+  if (eventName !== 'installation') return null;
+  if (typeof payload !== 'object' || payload === null) return null;
+  const p = payload as GhInstallationPayload;
+
+  const action = typeof p.action === 'string' ? p.action : '';
+  const kind = INSTALLATION_ACTION_KIND[action];
+  if (!kind) return null;
+
+  const inst = p.installation;
+  const installationId =
+    typeof inst?.id === 'number' ? inst.id : NaN;
+  if (!Number.isInteger(installationId) || installationId <= 0) return null;
+
+  const accountLogin =
+    typeof inst?.account?.login === 'string' ? inst.account.login : '';
+  const accountType =
+    typeof inst?.account?.type === 'string' ? inst.account.type : null;
+
+  // upsert needs a login to key the row; remove/suspend/unsuspend key off
+  // installationId so a login-less payload is still actionable.
+  if (kind === 'upsert' && !accountLogin) return null;
+
+  return { kind, installationId, accountLogin, accountType };
+}
