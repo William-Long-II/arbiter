@@ -45,6 +45,18 @@ export type FindingCounts = {
   nit: number;
 };
 
+/** One located finding, used to anchor an inline PR review comment. The
+ *  model reports these; diffmap validates each against the actual diff
+ *  before any are posted (GitHub rejects the whole review otherwise). */
+export type FindingItem = {
+  severity: Severity;
+  /** Repo-relative path, matching the diff's `+++ b/<path>`. */
+  path: string;
+  /** 1-based line number on the NEW (RIGHT) side of the diff. */
+  line: number;
+  body: string;
+};
+
 export type ReviewOutput = {
   /** Body to post to GitHub, with the verdict + findings markers stripped. */
   body: string;
@@ -52,6 +64,9 @@ export type ReviewOutput = {
   verdict: Verdict;
   /** Parsed from the findings marker; null if absent/unparseable. */
   findings?: FindingCounts | null;
+  /** Located findings for inline PR comments; [] if none/unparseable.
+   *  Validated against the diff before any are posted (see diffmap). */
+  items?: FindingItem[];
   costUsd?: number;
   /** Raw underlying response for debugging — not persisted. */
   raw?: unknown;
@@ -157,6 +172,90 @@ export const FINDINGS_INSTRUCTION = [
 ].join('\n');
 
 /**
+ * After the markdown review, the model MAY append a located-findings block
+ * so we can post inline PR comments. Optional and additive: when absent or
+ * unparseable we just post the summary (today's behavior). Format:
+ *
+ *   <!-- arbiter:items -->
+ *   ```json
+ *   [{"severity":"blocking","path":"src/x.ts","line":42,"body":"..."}]
+ *   ```
+ */
+export const ITEMS_INSTRUCTION = [
+  'OPTIONAL — LOCATED FINDINGS FOR INLINE COMMENTS.',
+  'If (and only if) you can attribute issues to specific changed lines, then',
+  'AFTER the entire Markdown review append this, exactly:',
+  '',
+  '<!-- arbiter:items -->',
+  '```json',
+  '[{"severity":"blocking|major|minor|nit","path":"<repo-relative path exactly as in the diff>","line":<line on the NEW side>,"body":"<the comment>"}]',
+  '```',
+  '',
+  '- `line` MUST be a line that appears in the diff on the new/added side',
+  '  (an added or unchanged context line) — never a deleted line or a line',
+  '  outside the shown hunks. If unsure, omit that item; it stays in the',
+  '  summary above. Anchors that don\'t match the diff are discarded.',
+  '- `path` MUST match the diff path exactly (no `a/`/`b/` prefix).',
+  '- Keep `body` concise and actionable. Omit the whole block if nothing',
+  '  can be confidently anchored.',
+].join('\n');
+
+// `<!-- arbiter:items -->` then a ```json fenced block. Non-greedy to the
+// first closing fence so trailing prose can't be swallowed.
+const ITEMS_RE =
+  /<!--\s*arbiter:items\s*-->\s*```(?:json)?\s*([\s\S]*?)```/i;
+
+function isSeverity(v: unknown): v is Severity {
+  return typeof v === 'string' && (SEVERITY_KEYS as readonly string[]).includes(v);
+}
+
+/**
+ * Pull the located-findings block off `body` and return validated items +
+ * the body with the block removed (so raw JSON never lands on the PR).
+ * Absent/unparseable ⇒ `items: []` and the body is returned unchanged
+ * (when there was no block) or with the unparseable block stripped. Invalid
+ * individual entries are dropped, not fatal.
+ */
+export function parseFindingItems(body: string): {
+  items: FindingItem[];
+  body: string;
+} {
+  const match = body.match(ITEMS_RE);
+  if (!match) return { items: [], body };
+  const cleaned = body.replace(match[0], '').replace(/\s+$/, '');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(match[1]!);
+  } catch {
+    return { items: [], body: cleaned };
+  }
+  if (!Array.isArray(parsed)) return { items: [], body: cleaned };
+  const items: FindingItem[] = [];
+  for (const el of parsed) {
+    if (typeof el !== 'object' || el === null) continue;
+    const e = el as Record<string, unknown>;
+    const line = typeof e.line === 'number' ? Math.floor(e.line) : NaN;
+    if (
+      isSeverity(e.severity) &&
+      typeof e.path === 'string' &&
+      e.path.trim() &&
+      Number.isInteger(line) &&
+      line > 0 &&
+      typeof e.body === 'string' &&
+      e.body.trim()
+    ) {
+      items.push({
+        severity: e.severity,
+        path: e.path.trim(),
+        line,
+        body: e.body.trim(),
+      });
+    }
+  }
+  return { items, body: cleaned };
+}
+
+/**
  * Build the user message we send to Claude. Includes PR metadata and the
  * unified diff in a fenced block so Claude knows to read it as code.
  *
@@ -228,10 +327,12 @@ export function parseClaudeCliOutput(stdout: string): ReviewOutput {
   const cost = typeof obj.total_cost_usd === 'number' ? obj.total_cost_usd : undefined;
   const v = parseVerdict(result);
   const f = parseFindings(v.body);
+  const i = parseFindingItems(f.body);
   const out: ReviewOutput = {
-    body: f.body,
+    body: i.body,
     verdict: v.verdict,
     findings: f.findings,
+    items: i.items,
     raw: parsed,
   };
   if (cost !== undefined) out.costUsd = cost;

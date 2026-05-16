@@ -31,6 +31,7 @@ import {
 import { isTransientError, MAX_ATTEMPTS, retryDelaySeconds } from './retry.ts';
 import { pickReviewEvent, statusForReview } from './review/gate.ts';
 import { postCommitStatus } from './github/status.ts';
+import { commentableLines, selectReviewComments } from './review/diffmap.ts';
 import {
   buildSignalsNote,
   changedFilePaths,
@@ -241,9 +242,30 @@ async function processJob(job: PendingReview): Promise<void> {
       verdict: result.verdict,
       postedEvent: event,
     });
+    // Inline comments: keep only model findings that anchor to a real
+    // line in this diff (GitHub 422s the whole review otherwise). The rest
+    // remain in the summary body the model already wrote.
+    const { comments: inlineComments, dropped } = selectReviewComments(
+      result.items ?? [],
+      commentableLines(diff),
+    );
+    if (inlineComments.length > 0 || dropped > 0) {
+      console.log(
+        `[worker] #${job.id} inline comments: ${inlineComments.length} anchored` +
+          `${dropped > 0 ? `, ${dropped} unmapped (kept in summary)` : ''}`,
+      );
+    }
+
     await setReviewPhase(job.id, 'posting');
     try {
-      await postPullRequestReview(userRow.token, job.repoFull, job.prNumber, stamped, event);
+      await postPullRequestReview(
+        userRow.token,
+        job.repoFull,
+        job.prNumber,
+        stamped,
+        event,
+        inlineComments,
+      );
     } catch (postErr) {
       // The review is generated and valid — only the POST failed because
       // the PR conversation is locked. A retry would just re-lock, so
