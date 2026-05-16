@@ -18,6 +18,12 @@ function intEnv(name: string, fallback: number): number {
   return n;
 }
 
+function intEnvMin(name: string, fallback: number, min: number): number {
+  const n = intEnv(name, fallback);
+  if (n < min) throw new Error(`Env ${name} must be >= ${min}, got: ${n}`);
+  return n;
+}
+
 function boolEnv(name: string, fallback: boolean): boolean {
   const raw = process.env[name];
   if (raw === undefined || raw === '') return fallback;
@@ -52,6 +58,12 @@ export const config = {
   },
   pollIntervalSeconds: intEnv('POLL_INTERVAL_SECONDS', 60),
   workerIntervalSeconds: intEnv('WORKER_INTERVAL_SECONDS', 5),
+  // How many reviews the worker processes concurrently in this process.
+  // Default 1 = the original single-flight behavior. The queue claim is
+  // `FOR UPDATE SKIP LOCKED`, so >1 is safe within a container; raise it to
+  // drain a deep backlog faster (each slot still spends a real Claude call,
+  // so size it against your quota/cost, not just CPU).
+  workerConcurrency: intEnvMin('WORKER_CONCURRENCY', 1, 1),
   // Terminal reviews (done/failed/skipped) older than this are pruned every
   // hour by the retention task. 0 disables pruning entirely.
   reviewRetentionDays: intEnv('REVIEW_RETENTION_DAYS', 30),
