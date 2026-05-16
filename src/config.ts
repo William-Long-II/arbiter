@@ -59,6 +59,10 @@ export const config = {
   // mutates the queue) are useful in dev but should not be reachable in a
   // normal deployment. Off by default; opt in with ENABLE_DEBUG_ENDPOINTS=1.
   enableDebugEndpoints: boolEnv('ENABLE_DEBUG_ENDPOINTS', false),
+  // Bearer token for GET /metrics (Prometheus). Empty disables the
+  // endpoint entirely (404) — off by default; set it and have your
+  // scraper send `Authorization: Bearer <token>`.
+  metricsToken: optional('METRICS_TOKEN', ''),
 } as const;
 
 export type Config = typeof config;

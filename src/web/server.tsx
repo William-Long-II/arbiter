@@ -7,6 +7,7 @@ import { subscribe } from '../events.ts';
 import { mountGithubOAuth } from '../github/oauth.ts';
 import { parsePullRequestEvent, verifyGithubSignature } from '../github/webhook.ts';
 import { enqueueAcrossUsers } from '../enqueue.ts';
+import { collectMetrics, renderPrometheus } from '../metrics.ts';
 import { sql } from '../db.ts';
 import { currentUser, requireUser } from './auth.ts';
 import {
@@ -77,6 +78,28 @@ export function buildApp(): Hono {
       return c.json({ ok: true });
     } catch (err) {
       return c.json({ ok: false, error: String(err) }, 503);
+    }
+  });
+
+  // Prometheus scrape. Off unless METRICS_TOKEN is set (404 — don't even
+  // advertise it); otherwise requires `Authorization: Bearer <token>`.
+  // GET, so the same-origin guard skips it; no session (scrapers have none).
+  app.get('/metrics', async (c) => {
+    const token = config.metricsToken;
+    if (!token) return c.notFound();
+    const auth = c.req.header('authorization') ?? '';
+    const expected = `Bearer ${token}`;
+    if (auth.length !== expected.length || !timingSafeEqualStr(auth, expected)) {
+      return c.text('Unauthorized', 401);
+    }
+    try {
+      const families = await collectMetrics();
+      return c.text(renderPrometheus(families), 200, {
+        'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
+      });
+    } catch (err) {
+      console.error('[metrics] collect failed:', err);
+      return c.text('# metrics collection failed\n', 503);
     }
   });
 
@@ -786,6 +809,15 @@ function safeOrigin(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** Constant-time equality for equal-length strings (metrics bearer token).
+ *  Callers pre-check length so a mismatch there short-circuits anyway. */
+function timingSafeEqualStr(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }
 
 /**
