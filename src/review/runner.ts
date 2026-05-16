@@ -15,6 +15,7 @@ import {
   type ReviewInput,
   type ReviewOutput,
 } from './format.ts';
+import { INJECTION_GUARD } from './injection.ts';
 
 export type { ReviewInput, ReviewOutput, Verdict } from './format.ts';
 
@@ -105,7 +106,9 @@ async function buildSystemPrompt(
   context: 'isolated' | 'checkout',
 ): Promise<string> {
   const base = await loadScrutinyPrompt(input.scrutiny);
-  let prompt = `${base}\n\n${FINDINGS_INSTRUCTION}\n\n${ITEMS_INSTRUCTION}\n\n${CONTEXT_PROMPT[context]}`;
+  let prompt =
+    `${base}\n\n${FINDINGS_INSTRUCTION}\n\n${ITEMS_INSTRUCTION}\n\n` +
+    `${CONTEXT_PROMPT[context]}\n\n${INJECTION_GUARD}`;
   const personality = input.personalityPrompt?.trim();
   if (personality) {
     prompt += `\n\n## Additional reviewer guidance for this scope\n\n${personality}`;
