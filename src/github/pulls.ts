@@ -1,11 +1,17 @@
 import { octokitFor } from './api.ts';
+import type { ReviewComment } from '../review/diffmap.ts';
 
 export type ReviewEvent = 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES';
 
 /**
- * Post a PR review with a body. Defaults to COMMENT — neither approving
- * nor requesting changes. Posting as the OAuth'd user (their token), so
- * the review will be authored by them on the PR thread.
+ * Post a PR review. Defaults to COMMENT — neither approving nor requesting
+ * changes. Posting as the OAuth'd user (their token).
+ *
+ * `comments` (optional) attaches inline review comments. They're already
+ * diff-validated by diffmap, but GitHub still rejects the WHOLE review if
+ * any anchor is off — so if a call carrying comments fails for any reason,
+ * we retry once body-only. An inline-mapping miss must never cost the
+ * review itself; the findings are also in the summary body.
  */
 export async function postPullRequestReview(
   token: string,
@@ -13,10 +19,38 @@ export async function postPullRequestReview(
   pullNumber: number,
   body: string,
   event: ReviewEvent = 'COMMENT',
+  comments: ReviewComment[] = [],
 ): Promise<{ id: number; htmlUrl: string }> {
   const [owner, repo] = repoFull.split('/');
   if (!owner || !repo) throw new Error(`Invalid repoFull: ${repoFull}`);
   const octokit = octokitFor(token);
+
+  if (comments.length > 0) {
+    try {
+      const res = await octokit.rest.pulls.createReview({
+        owner,
+        repo,
+        pull_number: pullNumber,
+        body,
+        event,
+        comments: comments.map((c) => ({
+          path: c.path,
+          line: c.line,
+          side: c.side,
+          body: c.body,
+        })),
+      });
+      return { id: res.data.id, htmlUrl: res.data.html_url };
+    } catch (err) {
+      console.error(
+        `[pulls] createReview with ${comments.length} inline comment(s) ` +
+          `failed for ${repoFull}#${pullNumber}; retrying body-only: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
+      // fall through to the plain post
+    }
+  }
+
   const res = await octokit.rest.pulls.createReview({
     owner,
     repo,
