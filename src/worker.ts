@@ -38,11 +38,12 @@ import {
   escalateScrutiny,
   testGapNote,
 } from './review/signals.ts';
+import { createWorkerPool, type WorkerPool } from './worker-pool.ts';
 
 let timer: ReturnType<typeof setInterval> | null = null;
 let reaperTimer: ReturnType<typeof setInterval> | null = null;
 let unsubscribe: (() => void) | null = null;
-let inFlight = false;
+let pool: WorkerPool | null = null;
 
 // Stuck-review reaper. A healthy run is bounded by checkout (≤~6m) + the
 // 5-minute review watchdog + posting, so 30m is comfortably past any live
@@ -52,9 +53,6 @@ let inFlight = false;
 const STUCK_AFTER_MINUTES = 30;
 const STUCK_SWEEP_MS = 5 * 60_000;
 const STUCK_BOOT_DELAY_MS = 10_000;
-// Set when an event fires while a job is in flight, so we don't miss work
-// queued during a long-running review. Drained when the in-flight job ends.
-let pendingWake = false;
 
 // Bounded deferral when CI hasn't finished yet. Two-minute interval × ten
 // attempts = ~20 minutes total before we proceed regardless. CI that takes
@@ -66,22 +64,33 @@ const MAX_DEFERS = 10;
 export function startWorker(): void {
   if (timer) return;
   const ms = config.workerIntervalSeconds * 1000;
-  console.log(`[worker] starting, interval=${config.workerIntervalSeconds}s`);
+  pool = createWorkerPool<PendingReview>({
+    concurrency: config.workerConcurrency,
+    claim: claimNext,
+    run: runJob,
+    onClaimError: (err) => console.error('[worker] claim error:', err),
+    // A job that throws past processJob's own handling is already logged
+    // there; this is the last-resort net so the pool always re-pumps.
+    onRunError: (err) => console.error('[worker] job error:', err),
+  });
+  console.log(
+    `[worker] starting, interval=${config.workerIntervalSeconds}s, ` +
+      `concurrency=${pool.concurrency}`,
+  );
+  // The timer is the safety net: it re-pumps so a deferred review whose
+  // window elapsed (no NOTIFY fires for that) is still picked up. When all
+  // slots are busy a pump is a cheap synchronous no-op.
   timer = setInterval(() => {
-    void tick();
+    pool?.pump();
   }, ms);
 
   // Wake immediately when a review is newly enqueued. NOTIFY-driven; no
-  // extra polling. While a tick is in-flight, the inFlight guard turns
-  // this into a no-op, but the timer + pendingWake flag together ensure
-  // the newly-queued review is picked up as soon as the worker is free.
+  // extra polling. The pool tops up only idle slots, so a pump during a
+  // long-running review is harmless and the new row is claimed the moment
+  // a slot frees (each finished job re-pumps).
   unsubscribe = subscribeAll((event) => {
     if (event.status !== 'queued') return;
-    if (inFlight) {
-      pendingWake = true;
-      return;
-    }
-    void tick();
+    pool?.pump();
   });
 
   // Reap rows orphaned in `running` by a dead/restarted worker. Runs soon
@@ -103,6 +112,18 @@ export function stopWorker(): void {
     unsubscribe();
     unsubscribe = null;
   }
+  // In-flight jobs are not aborted (same as before — shutdown calls
+  // process.exit); dropping the ref just stops new pumps from the timer.
+  pool = null;
+}
+
+export type WorkerStatus = { concurrency: number; active: number };
+
+export function getWorkerStatus(): WorkerStatus {
+  return {
+    concurrency: pool ? pool.concurrency : config.workerConcurrency,
+    active: pool ? pool.active : 0,
+  };
 }
 
 async function sweepStuck(): Promise<void> {
@@ -120,34 +141,15 @@ async function sweepStuck(): Promise<void> {
   }
 }
 
-async function tick(): Promise<void> {
-  if (inFlight) {
-    pendingWake = true;
-    return;
-  }
-  inFlight = true;
-  try {
-    const job = await claimNext();
-    if (!job) return;
-    console.log(
-      `[worker] processing #${job.id} ${job.repoFull}#${job.prNumber} (scrutiny=${job.scrutiny}, auto_approve=${job.autoApprove})`,
-    );
-    await processJob(job);
-  } catch (err) {
-    console.error('[worker] tick error:', err);
-  } finally {
-    inFlight = false;
-    // If events arrived while we were busy, drain immediately rather than
-    // waiting for the next 5s timer tick.
-    if (pendingWake) {
-      pendingWake = false;
-      // setImmediate-equivalent: yield to the event loop before recursing so
-      // we don't blow the stack on a backlog.
-      queueMicrotask(() => {
-        void tick();
-      });
-    }
-  }
+// One claimed job: log it, then hand off to the full review pipeline.
+// processJob handles its own failures (it marks the row failed/skipped and
+// never rethrows in the normal path); anything that still escapes is caught
+// by the pool's onRunError net, which logs and frees the slot.
+async function runJob(job: PendingReview): Promise<void> {
+  console.log(
+    `[worker] processing #${job.id} ${job.repoFull}#${job.prNumber} (scrutiny=${job.scrutiny}, auto_approve=${job.autoApprove})`,
+  );
+  await processJob(job);
 }
 
 async function processJob(job: PendingReview): Promise<void> {

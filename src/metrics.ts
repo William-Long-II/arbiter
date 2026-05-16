@@ -5,6 +5,7 @@
 
 import { sql } from './db.ts';
 import { getPollerStatus } from './github/poller.ts';
+import { getWorkerStatus } from './worker.ts';
 
 const REVIEW_STATUSES = [
   'queued',
@@ -85,6 +86,8 @@ export async function collectMetrics(): Promise<MetricFamily[]> {
     ? Math.max(0, (Date.now() - new Date(poller.lastTickAt).getTime()) / 1000)
     : 0;
 
+  const worker = getWorkerStatus();
+
   return [
     {
       name: 'arbiter_reviews',
@@ -118,6 +121,18 @@ export async function collectMetrics(): Promise<MetricFamily[]> {
       help: '1 while a poll tick is running, else 0.',
       type: 'gauge',
       samples: [{ value: poller.inFlight ? 1 : 0 }],
+    },
+    {
+      name: 'arbiter_worker_active',
+      help: 'Reviews currently being processed by the worker pool.',
+      type: 'gauge',
+      samples: [{ value: worker.active }],
+    },
+    {
+      name: 'arbiter_worker_concurrency',
+      help: 'Configured max concurrent reviews per process (saturation = active / concurrency).',
+      type: 'gauge',
+      samples: [{ value: worker.concurrency }],
     },
   ];
 }
