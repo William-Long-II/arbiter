@@ -38,6 +38,11 @@ import {
   escalateScrutiny,
   testGapNote,
 } from './review/signals.ts';
+import {
+  buildInjectionNote,
+  scanForInjection,
+  summarizeInjection,
+} from './review/injection.ts';
 import { createWorkerPool, type WorkerPool } from './worker-pool.ts';
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -209,6 +214,23 @@ async function processJob(job: PendingReview): Promise<void> {
       );
     }
 
+    // Prompt-injection scan over the untrusted PR inputs. Advisory: it
+    // hardens the prompt + warns the operator, never blocks/re-verdicts
+    // the review (the model is told to use judgment — benign occurrences
+    // exist, e.g. a PR that is itself about prompt injection).
+    const injection = scanForInjection([
+      { label: 'PR title', text: pr.title },
+      { label: 'PR author', text: pr.author },
+      { label: 'diff', text: diff },
+    ]);
+    const injectionNote = buildInjectionNote(injection);
+    if (injectionNote) {
+      console.warn(
+        `[worker] #${job.id} possible prompt-injection ` +
+          `(${injection.hits.length} hit(s)): ${summarizeInjection(injection)}`,
+      );
+    }
+
     const result = await runReview(
       {
         scrutiny: effectiveScrutiny,
@@ -220,6 +242,7 @@ async function processJob(job: PendingReview): Promise<void> {
         ciSummary,
         diffNotice,
         signalsNote,
+        injectionNote,
         reviewContext: job.reviewContext,
         checkout: {
           token: userRow.token,

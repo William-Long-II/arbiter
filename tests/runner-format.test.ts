@@ -76,6 +76,33 @@ describe('formatUserMessage', () => {
     expect(msg.indexOf('Reviewed in FULL')).toBeLessThan(msg.indexOf('```diff'));
   });
 
+  test('renders the injection CAUTION immediately before the diff', () => {
+    const msg = formatUserMessage({
+      scrutiny: 'standard',
+      diff: '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new',
+      prTitle: 't',
+      prAuthor: 'a',
+      repoFull: 'r/r',
+      signalsNote: 'some signal',
+      injectionNote: 'Possible prompt-injection in untrusted PR input — instruction-override.',
+    });
+    expect(msg).toContain('> [!CAUTION] Possible prompt-injection');
+    // After the signals NOTE but still before the fenced diff.
+    expect(msg.indexOf('some signal')).toBeLessThan(msg.indexOf('[!CAUTION]'));
+    expect(msg.indexOf('[!CAUTION]')).toBeLessThan(msg.indexOf('```diff'));
+  });
+
+  test('omits the CAUTION block when injectionNote is absent', () => {
+    const msg = formatUserMessage({
+      scrutiny: 'standard',
+      diff: '+ ok',
+      prTitle: 't',
+      prAuthor: 'a',
+      repoFull: 'r/r',
+    });
+    expect(msg).not.toContain('[!CAUTION]');
+  });
+
   test('omits the caveat block entirely for a normal full diff', () => {
     const msg = formatUserMessage({
       scrutiny: 'standard',
