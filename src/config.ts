@@ -50,6 +50,16 @@ export const config = {
     // the endpoint (the poller still covers everything); set it to the
     // same value configured on the GitHub repo/org webhook.
     webhookSecret: optional('GITHUB_WEBHOOK_SECRET', ''),
+    // GitHub App credentials. When both are set, arbiter can mint
+    // short-lived, finely-scoped per-installation tokens instead of
+    // storing a broad OAuth user token at rest (the migration keystone).
+    // Both empty = App auth fully disabled; OAuth path is unaffected.
+    // Raw env only — PEM normalization (base64 / literal-\n) lives in
+    // github/app.ts so config stays I/O-free and cycle-free.
+    app: {
+      appId: optional('GITHUB_APP_ID', ''),
+      privateKey: optional('GITHUB_APP_PRIVATE_KEY', ''),
+    },
   },
   claude: {
     defaultMode: claudeMode('CLAUDE_DEFAULT_MODE', 'subscription'),
