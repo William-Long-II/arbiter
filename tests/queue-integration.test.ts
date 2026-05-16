@@ -59,6 +59,7 @@ suite('queue helpers (Postgres integration)', () => {
       scrutiny: 'standard',
       claudeMode: 'subscription',
       autoApprove: false,
+      gateOnBlocking: false,
       footerTemplate: null,
       personalityPrompt: null,
       reviewContext: 'isolated',

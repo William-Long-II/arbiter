@@ -72,6 +72,7 @@ export async function enqueueForUser(args: {
     scrutiny: matched.scrutiny,
     claudeMode,
     autoApprove: matched.autoApprove,
+    gateOnBlocking: matched.gateOnBlocking,
     footerTemplate: matched.footerTemplate,
     personalityPrompt: matched.personalityPrompt,
     reviewContext: matched.reviewContext,

@@ -313,6 +313,7 @@ export function buildApp(): Hono {
         autoApprove,
         // Ad-hoc enqueue: no scope row to honor a custom footer template
         // or personality. Built-in defaults are the safe choice.
+        gateOnBlocking: false,
         footerTemplate: null,
         personalityPrompt: null,
         reviewContext: 'isolated',
@@ -619,6 +620,7 @@ export function buildApp(): Hono {
         autoApprove,
         // Debug endpoint: use built-in defaults for footer + personality.
         // Real scope-driven enqueues honor those fields via the poller.
+        gateOnBlocking: false,
         footerTemplate: null,
         personalityPrompt: null,
         reviewContext: 'isolated',
@@ -855,6 +857,8 @@ function partialFromForm(form: Record<string, string>): Parameters<typeof ScopeF
       .filter(Boolean),
     claudeMode: isClaudeMode(form.claude_mode) ? form.claude_mode : 'default',
     autoApprove: form.auto_approve === 'on' || form.auto_approve === 'true',
+    gateOnBlocking:
+      form.gate_on_blocking === 'on' || form.gate_on_blocking === 'true',
     footerTemplate,
     personalityPrompt: ((): string | null => {
       const v = (form.personality_prompt ?? '').replace(/\s+$/, '');

@@ -14,6 +14,7 @@ function scope(over: Partial<Scope> = {}): Scope {
     excludeAuthors: ['dependabot[bot]'],
     claudeMode: 'default',
     autoApprove: false,
+    gateOnBlocking: false,
     footerTemplate: null,
     personalityPrompt: null,
     triggerMode: 'open',

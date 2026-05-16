@@ -11,7 +11,6 @@ import {
   requeueForRetry,
   setReviewPhase,
   type PendingReview,
-  type PostedEvent,
 } from './db/reviews.ts';
 import { markTokenRevoked } from './db/users.ts';
 import { subscribeAll } from './events.ts';
@@ -22,16 +21,16 @@ import {
   fetchPullRequest,
   isLockedConversationError,
   postPullRequestReview,
-  type ReviewEvent,
 } from './github/pulls.ts';
 import { fetchChecksSummary, formatChecksSummary } from './github/checks.ts';
 import {
   DiffTooLargeError,
   ReviewTimeoutError,
   runReview,
-  type Verdict,
 } from './review/runner.ts';
 import { isTransientError, MAX_ATTEMPTS, retryDelaySeconds } from './retry.ts';
+import { pickReviewEvent, statusForReview } from './review/gate.ts';
+import { postCommitStatus } from './github/status.ts';
 import { commentableLines, selectReviewComments } from './review/diffmap.ts';
 import {
   buildSignalsNote,
@@ -229,9 +228,11 @@ async function processJob(job: PendingReview): Promise<void> {
       job.claudeMode,
     );
 
-    const event = pickEvent({
+    const event = pickReviewEvent({
       autoApprove: job.autoApprove,
+      gateOnBlocking: job.gateOnBlocking,
       verdict: result.verdict,
+      findings: result.findings ?? null,
       prAuthor: pr.author,
       reviewerLogin: userRow.login,
     });
@@ -291,6 +292,30 @@ async function processJob(job: PendingReview): Promise<void> {
       }
       throw postErr;
     }
+
+    // Opt-in soft merge gate: a commit status mirroring the verdict. Make
+    // it a required check in branch protection for an actual gate.
+    // Best-effort — a flaky status call must never fail a posted review.
+    if (job.gateOnBlocking) {
+      const s = statusForReview({
+        verdict: result.verdict,
+        findings: result.findings ?? null,
+      });
+      try {
+        await postCommitStatus(userRow.token, job.repoFull, pr.headSha, {
+          state: s.state,
+          context: 'arbiter/review',
+          description: s.description,
+          targetUrl: `${config.publicUrl}/queue/${job.id}`,
+        });
+      } catch (statusErr) {
+        console.error(
+          `[worker] commit status for #${job.id} failed (non-fatal): ` +
+            `${statusErr instanceof Error ? statusErr.message : String(statusErr)}`,
+        );
+      }
+    }
+
     await markDone(
       job.id,
       stamped,
@@ -353,32 +378,6 @@ function isUnauthorized(err: unknown): boolean {
   if (typeof err !== 'object' || err === null) return false;
   const status = (err as { status?: unknown }).status;
   return status === 401;
-}
-
-/**
- * Decide which GitHub review event to post.
- *
- * - Auto-approve is only honored when (a) the scope opted in, (b) the
- *   reviewer's verdict was `approve`, AND (c) the PR isn't authored by
- *   the same user posting the review (GitHub rejects self-approval).
- * - We deliberately do NOT auto-`REQUEST_CHANGES`. Auto-blocking a merge
- *   from a generated review is too aggressive for MVP; surfaces it as a
- *   comment with the verdict marker visible in the footer.
- */
-function pickEvent(args: {
-  autoApprove: boolean;
-  verdict: Verdict;
-  prAuthor: string;
-  reviewerLogin: string;
-}): ReviewEvent & PostedEvent {
-  if (
-    args.autoApprove &&
-    args.verdict === 'approve' &&
-    args.prAuthor.toLowerCase() !== args.reviewerLogin.toLowerCase()
-  ) {
-    return 'APPROVE';
-  }
-  return 'COMMENT';
 }
 
 async function loadUser(userId: number): Promise<{ token: string; login: string } | null> {

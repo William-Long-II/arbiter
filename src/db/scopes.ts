@@ -35,6 +35,13 @@ export type Scope = {
    * review with event=APPROVE instead of COMMENT. Self-authored PRs always
    * fall back to COMMENT regardless (GitHub blocks self-approval). */
   autoApprove: boolean;
+  /** Opt-in: when true and the review has blocking findings (verdict
+   * `request-changes` or findings.blocking > 0), post the review as
+   * REQUEST_CHANGES and set a failing commit status. Self-authored PRs
+   * fall back to COMMENT (GitHub blocks self-review-requests). Off by
+   * default — preserves the non-aggressive default for scopes that don't
+   * opt in. */
+  gateOnBlocking: boolean;
   /**
    * Tri-state footer config:
    * - null → use built-in default template
@@ -89,6 +96,7 @@ const SELECT_COLUMNS = sql`
   exclude_authors    AS "excludeAuthors",
   claude_mode        AS "claudeMode",
   auto_approve       AS "autoApprove",
+  gate_on_blocking   AS "gateOnBlocking",
   footer_template    AS "footerTemplate",
   personality_prompt AS "personalityPrompt",
   trigger_mode       AS "triggerMode",
@@ -125,6 +133,7 @@ export type ScopeInput = {
   excludeAuthors: string[];
   claudeMode: ClaudeMode;
   autoApprove: boolean;
+  gateOnBlocking: boolean;
   footerTemplate: string | null;
   personalityPrompt: string | null;
   triggerMode: TriggerMode;
@@ -136,12 +145,13 @@ export async function createScope(userId: number, input: ScopeInput): Promise<Sc
   const [row] = await sql<Scope[]>`
     INSERT INTO scopes
       (user_id, target_kind, target, base_branch_pattern, scrutiny,
-       exclude_authors, claude_mode, auto_approve, footer_template,
-       personality_prompt, trigger_mode, review_context, enabled)
+       exclude_authors, claude_mode, auto_approve, gate_on_blocking,
+       footer_template, personality_prompt, trigger_mode, review_context,
+       enabled)
     VALUES
       (${userId}, ${input.targetKind}, ${input.target}, ${input.baseBranchPattern},
        ${input.scrutiny}, ${input.excludeAuthors}, ${input.claudeMode},
-       ${input.autoApprove}, ${input.footerTemplate},
+       ${input.autoApprove}, ${input.gateOnBlocking}, ${input.footerTemplate},
        ${input.personalityPrompt}, ${input.triggerMode},
        ${input.reviewContext}, ${input.enabled})
     RETURNING ${SELECT_COLUMNS}
@@ -164,6 +174,7 @@ export async function updateScope(
         exclude_authors = ${input.excludeAuthors},
         claude_mode = ${input.claudeMode},
         auto_approve = ${input.autoApprove},
+        gate_on_blocking = ${input.gateOnBlocking},
         footer_template = ${input.footerTemplate},
         personality_prompt = ${input.personalityPrompt},
         trigger_mode = ${input.triggerMode},
@@ -241,6 +252,8 @@ export function parseScopeForm(
 
   const enabled = form.enabled === 'on' || form.enabled === 'true';
   const autoApprove = form.auto_approve === 'on' || form.auto_approve === 'true';
+  const gateOnBlocking =
+    form.gate_on_blocking === 'on' || form.gate_on_blocking === 'true';
   // Personality is plain text. Trim trailing whitespace, treat empty as null.
   const personalityRaw = (form.personality_prompt ?? '').replace(/\s+$/, '');
   const personalityPrompt = personalityRaw.length > 0 ? personalityRaw : null;
@@ -276,6 +289,7 @@ export function parseScopeForm(
       excludeAuthors,
       claudeMode: claudeMode as ClaudeMode,
       autoApprove,
+      gateOnBlocking,
       footerTemplate,
       personalityPrompt,
       triggerMode: triggerMode as TriggerMode,
