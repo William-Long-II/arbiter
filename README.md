@@ -101,6 +101,14 @@ Reviews fire on `opened`, `reopened`, `synchronize`, and
 trigger mode still rely on the poller (team-resolved review requests need
 the poller's GraphQL search).
 
+## Metrics (optional)
+
+Set `METRICS_TOKEN` to expose a Prometheus scrape at `GET /metrics`
+(blank ⇒ the endpoint 404s — off by default). The scraper must send
+`Authorization: Bearer $METRICS_TOKEN`. Exposed: reviews by status,
+oldest-queued age, cumulative model spend, and poller liveness — a small
+high-signal set, not a firehose.
+
 ## Layout
 
 ```
