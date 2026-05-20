@@ -62,6 +62,7 @@ suite('queue helpers (Postgres integration)', () => {
       gateOnBlocking: false,
       footerTemplate: null,
       personalityPrompt: null,
+      reviewerSkill: null,
       reviewContext: 'isolated',
       ...over,
     };

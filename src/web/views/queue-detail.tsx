@@ -143,6 +143,11 @@ export const QueueDetailPage: FC<Props> = ({
         <MetaRow label="Mode">
           <span class="mono-sm">{review.claudeMode}</span>
         </MetaRow>
+        {review.reviewerSkill ? (
+          <MetaRow label="Reviewer">
+            <span class="mono-sm">skill: /{review.reviewerSkill}</span>
+          </MetaRow>
+        ) : null}
         {review.costUsd != null ? (
           <MetaRow label="Cost">
             <span class="mono-sm">{fmtCostUsd(review.costUsd)}</span>
@@ -194,6 +199,25 @@ export const QueueDetailPage: FC<Props> = ({
           </MetaRow>
         ) : null}
       </div>
+
+      {review.prompts && review.prompts.length > 0 ? (
+        <details class="queue-output-section queue-prompts-section">
+          <summary class="queue-prompts-summary">
+            Prompts used <span class="queue-siblings-count">({review.prompts.length})</span>
+          </summary>
+          <p class="page-subhead queue-prompts-hint">
+            The system prompt(s) actually sent to the reviewer. Captured
+            after assembly (scrutiny tier + context + personality, or the
+            skill wrapper) so you can see and tune what the model saw.
+          </p>
+          {review.prompts.map((p) => (
+            <div class="queue-prompt-entry">
+              <div class="queue-prompt-label mono-sm">{p.label}</div>
+              <pre class="code-window queue-output-pre queue-prompt-pre">{p.prompt}</pre>
+            </div>
+          ))}
+        </details>
+      ) : null}
 
       {override ? (
         <section class="queue-output-section queue-override-section">

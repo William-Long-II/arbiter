@@ -239,6 +239,7 @@ async function processJob(job: PendingReview): Promise<void> {
         prAuthor: pr.author,
         repoFull: pr.repoFull,
         personalityPrompt: job.personalityPrompt,
+        reviewerSkill: job.reviewerSkill,
         ciSummary,
         diffNotice,
         signalsNote,
@@ -309,6 +310,7 @@ async function processJob(job: PendingReview): Promise<void> {
           event,
           result.costUsd ?? null,
           result.findings ?? null,
+          result.prompts ?? null,
         );
         console.log(
           `[worker] skipped #${job.id} (locked conversation; body preserved for post-anyway)`,
@@ -348,6 +350,7 @@ async function processJob(job: PendingReview): Promise<void> {
       event,
       result.costUsd ?? null,
       result.findings ?? null,
+      result.prompts ?? null,
     );
     console.log(
       `[worker] done #${job.id} (verdict=${result.verdict}, event=${event}` +

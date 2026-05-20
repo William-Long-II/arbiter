@@ -40,6 +40,7 @@ export const ScopeFormPage: FC<Props> = ({
     gateOnBlocking: values?.gateOnBlocking ?? scope?.gateOnBlocking ?? false,
     footerTemplate: values?.footerTemplate ?? scope?.footerTemplate ?? null,
     personalityPrompt: values?.personalityPrompt ?? scope?.personalityPrompt ?? null,
+    reviewerSkill: values?.reviewerSkill ?? scope?.reviewerSkill ?? null,
     triggerMode: values?.triggerMode ?? scope?.triggerMode ?? 'open',
     reviewContext:
       values?.reviewContext ?? scope?.reviewContext ?? 'isolated',
@@ -306,6 +307,33 @@ export const ScopeFormPage: FC<Props> = ({
             Off ⇒ blocking findings still post, just as a{' '}
             <code class="mono-sm">COMMENT</code>. Your own PRs fall back to{' '}
             <code class="mono-sm">COMMENT</code> (GitHub blocks self-review).
+          </p>
+        </fieldset>
+
+        <fieldset class="form-row">
+          <legend>Reviewer skill (optional)</legend>
+          {/*
+            When set, the worker delegates the review to the named Claude
+            Code skill via `claude -p` instead of using the built-in
+            scrutiny prompt. Empty = built-in. Subscription mode only —
+            API mode has no skills and silently falls back.
+          */}
+          <input
+            class="text-input form-input-wide"
+            name="reviewer_skill"
+            placeholder="bmad-code-review"
+            value={v.reviewerSkill ?? ''}
+            autoComplete="off"
+          />
+          <p class="form-hint">
+            Bare skill name (with or without a leading{' '}
+            <code class="mono-sm">/</code>). The worker invokes{' '}
+            <code class="mono-sm">claude -p</code> with a wrapper prompt
+            that triggers the skill non-interactively. The skill must be
+            installed where the worker can see it (
+            <code class="mono-sm">~/.claude/skills/&lt;name&gt;</code> or via
+            an installed plugin). Subscription mode only; API mode falls
+            back to the built-in scrutiny prompt.
           </p>
         </fieldset>
 

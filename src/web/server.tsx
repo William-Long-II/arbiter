@@ -339,6 +339,7 @@ export function buildApp(): Hono {
         gateOnBlocking: false,
         footerTemplate: null,
         personalityPrompt: null,
+        reviewerSkill: null,
         reviewContext: 'isolated',
       });
       if (!row) {
@@ -646,6 +647,7 @@ export function buildApp(): Hono {
         gateOnBlocking: false,
         footerTemplate: null,
         personalityPrompt: null,
+        reviewerSkill: null,
         reviewContext: 'isolated',
       });
       if (!row) {

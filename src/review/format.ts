@@ -35,6 +35,11 @@ export type ReviewInput = {
   /** Only consulted when reviewContext === 'checkout' (CLI mode). The
    * token + PR ref needed to shallow-checkout the PR head. */
   checkout?: { token: string; prNumber: number; headSha: string } | null;
+  /** Optional Claude Code skill name (e.g. 'bmad-code-review'). When set
+   * AND mode is 'subscription', the runner takes the skill-driven path
+   * instead of the built-in scrutiny prompt. Subscription-only — API
+   * mode has no skills and silently falls back to built-in. */
+  reviewerSkill?: string | null;
 };
 
 export type Verdict = 'approve' | 'comment' | 'request-changes';
@@ -62,6 +67,17 @@ export type FindingItem = {
   body: string;
 };
 
+/** One system prompt the runner actually sent to the model, with a short
+ *  label identifying which reviewer/role it came from. Surfaced on the
+ *  queue detail page so the operator can see and tune what each reviewer
+ *  saw. Persisted as a JSONB array on pending_reviews.prompts. */
+export type ReviewPrompt = {
+  /** Short identifier: 'built-in', 'skill:bmad-code-review', etc. */
+  label: string;
+  /** The full system prompt text. */
+  prompt: string;
+};
+
 export type ReviewOutput = {
   /** Body to post to GitHub, with the verdict + findings markers stripped. */
   body: string;
@@ -73,6 +89,10 @@ export type ReviewOutput = {
    *  Validated against the diff before any are posted (see diffmap). */
   items?: FindingItem[];
   costUsd?: number;
+  /** System prompt(s) the runner assembled and sent. Captured so the queue
+   *  UI can show what the model actually saw. One entry for the built-in
+   *  path; multiple for skill-driven flows that combine reviewers. */
+  prompts?: ReviewPrompt[];
   /** Raw underlying response for debugging — not persisted. */
   raw?: unknown;
 };

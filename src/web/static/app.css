@@ -579,6 +579,23 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
   max-height: 600px;
   overflow: auto;
 }
+
+/* Prompts-used disclosure on /queue/:id (one entry per reviewer prompt). */
+.queue-prompts-section { padding: 0; }
+.queue-prompts-summary {
+  font-size: 14px; font-weight: 600; color: var(--ink);
+  cursor: pointer; padding: 8px 0; user-select: none;
+}
+.queue-prompts-summary:hover { color: var(--primary); }
+.queue-prompts-hint { margin: 0 0 12px; }
+.queue-prompt-entry { margin-bottom: 16px; }
+.queue-prompt-entry:last-child { margin-bottom: 0; }
+.queue-prompt-label {
+  color: var(--ink-subtle); font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.4px; margin-bottom: 6px;
+}
+.queue-prompt-pre { max-height: 400px; }
+
 .text-link { color: var(--primary); }
 .text-link:hover { color: var(--primary-hover); }
 

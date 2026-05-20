@@ -1,7 +1,9 @@
 import { sql } from '../db.ts';
 import type { ClaudeMode, ReviewContext, Scrutiny } from './scopes.ts';
-import type { FindingCounts, Verdict } from '../review/format.ts';
+import type { FindingCounts, ReviewPrompt, Verdict } from '../review/format.ts';
 import type { ReviewEvent } from '../events.ts';
+
+export type { ReviewPrompt } from '../review/format.ts';
 
 export type ReviewStatus = 'queued' | 'running' | 'done' | 'failed' | 'skipped';
 /** Sub-status of a `running` review. NULL in every other status. */
@@ -27,6 +29,11 @@ export type PendingReview = {
   footerTemplate: string | null;
   /** Snapshotted from the matching scope at enqueue time. See db/scopes.ts. */
   personalityPrompt: string | null;
+  /** Snapshotted from the matching scope at enqueue time. When set, the
+   * worker invokes the named Claude Code skill (e.g. 'bmad-code-review')
+   * via `claude -p` instead of the built-in scrutiny prompt. Null = the
+   * built-in claude path. */
+  reviewerSkill: string | null;
   /** Snapshotted from the matching scope at enqueue time. What the
    * reviewer subprocess sees ('isolated' default | 'checkout'). */
   reviewContext: ReviewContext;
@@ -50,6 +57,11 @@ export type PendingReview = {
   /** Self-reported issue counts by severity. Null when the model omitted
    *  the marker or the row predates it. */
   findings: FindingCounts | null;
+  /** System prompt(s) actually used to generate this review, captured by
+   *  the runner once assembled. One entry for the built-in path; one or
+   *  more for a skill-driven review. Null on rows that never reached the
+   *  runner (e.g. structural skip) or predate the column. JSONB. */
+  prompts: ReviewPrompt[] | null;
   createdAt: Date;
   startedAt: Date | null;
   finishedAt: Date | null;
@@ -71,6 +83,7 @@ export type EnqueueInput = {
   gateOnBlocking: boolean;
   footerTemplate: string | null;
   personalityPrompt: string | null;
+  reviewerSkill: string | null;
   reviewContext: ReviewContext;
 };
 
@@ -91,6 +104,7 @@ const SELECT_REVIEW_COLUMNS = sql`
   gate_on_blocking AS "gateOnBlocking",
   footer_template AS "footerTemplate",
   personality_prompt AS "personalityPrompt",
+  reviewer_skill AS "reviewerSkill",
   review_context AS "reviewContext",
   status,
   phase,
@@ -103,6 +117,7 @@ const SELECT_REVIEW_COLUMNS = sql`
   posted_event AS "postedEvent",
   cost_usd     AS "costUsd",
   findings,
+  prompts,
   created_at   AS "createdAt",
   started_at   AS "startedAt",
   finished_at  AS "finishedAt"
@@ -141,7 +156,7 @@ export async function enqueueReview(input: EnqueueInput): Promise<PendingReview 
       user_id, scope_id, repo_full, pr_number, pr_title, pr_author,
       base_branch, head_branch, head_sha, scrutiny, claude_mode,
       auto_approve, gate_on_blocking, footer_template, personality_prompt,
-      review_context, status
+      reviewer_skill, review_context, status
     ) VALUES (
       ${input.userId},
       ${input.scopeId ?? null},
@@ -158,6 +173,7 @@ export async function enqueueReview(input: EnqueueInput): Promise<PendingReview 
       ${input.gateOnBlocking},
       ${input.footerTemplate},
       ${input.personalityPrompt},
+      ${input.reviewerSkill ?? null},
       ${input.reviewContext},
       'queued'
     )
@@ -242,6 +258,7 @@ export async function markDone(
   postedEvent: PostedEvent,
   costUsd: number | null = null,
   findings: FindingCounts | null = null,
+  prompts: ReviewPrompt[] | null = null,
 ): Promise<void> {
   const rows = await sql<PendingReview[]>`
     UPDATE pending_reviews
@@ -253,7 +270,8 @@ export async function markDone(
         verdict = ${verdict},
         posted_event = ${postedEvent},
         cost_usd = ${costUsd},
-        findings = ${findings ? sql.json(findings) : null}
+        findings = ${findings ? sql.json(findings) : null},
+        prompts = ${prompts ? sql.json(prompts) : null}
     WHERE id = ${id}
     RETURNING ${SELECT_REVIEW_COLUMNS}
   `;
@@ -400,6 +418,7 @@ export async function markSkippedPendingPost(
   postedEvent: PostedEvent,
   costUsd: number | null = null,
   findings: FindingCounts | null = null,
+  prompts: ReviewPrompt[] | null = null,
 ): Promise<void> {
   const rows = await sql<PendingReview[]>`
     UPDATE pending_reviews
@@ -411,7 +430,8 @@ export async function markSkippedPendingPost(
         verdict = ${verdict},
         posted_event = ${postedEvent},
         cost_usd = ${costUsd},
-        findings = ${findings ? sql.json(findings) : null}
+        findings = ${findings ? sql.json(findings) : null},
+        prompts = ${prompts ? sql.json(prompts) : null}
     WHERE id = ${id}
     RETURNING ${SELECT_REVIEW_COLUMNS}
   `;
