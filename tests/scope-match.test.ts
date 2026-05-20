@@ -17,6 +17,7 @@ function scope(over: Partial<Scope> = {}): Scope {
     gateOnBlocking: false,
     footerTemplate: null,
     personalityPrompt: null,
+    reviewerSkill: null,
     triggerMode: 'open',
     reviewContext: 'isolated',
     enabled: true,

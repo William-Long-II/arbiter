@@ -188,7 +188,14 @@ export async function runReview(
   mode: 'subscription' | 'api',
 ): Promise<ReviewOutput> {
   assertDiffSize(input.diff);
-  if (mode === 'subscription') return runViaClaudeCli(input);
+  if (mode === 'subscription') {
+    // Skills only work through the CLI (the SDK has no skill surface), so
+    // API mode silently falls back to the built-in prompt regardless of
+    // reviewerSkill — the choice is recorded on the row either way.
+    const skill = input.reviewerSkill?.trim();
+    if (skill) return runViaSkillCli(input, skill);
+    return runViaClaudeCli(input);
+  }
   return runViaAnthropicApi(input);
 }
 
@@ -269,10 +276,134 @@ async function runViaClaudeCli(input: ReviewInput): Promise<ReviewOutput> {
         `claude -p exited with ${exitCode}: ${stderr.trim() || '(no stderr)'}`,
       );
     }
-    return parseClaudeCliOutput(stdout);
+    const out = parseClaudeCliOutput(stdout);
+    out.prompts = [{ label: 'built-in', prompt: systemPrompt }];
+    return out;
   } finally {
     await rm(workDir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+/**
+ * Skill-driven review path. Spawns `claude -p` with a wrapper system
+ * prompt that triggers the named Claude Code skill against the diff
+ * supplied on stdin, pre-supplying the answers the skill would otherwise
+ * HALT to ask (review target, no spec, do not pause). The wrapper also
+ * pins arbiter's output contract (verdict + findings markers, optional
+ * located items) so the skill's output still parses through
+ * parseClaudeCliOutput unchanged.
+ *
+ * The skill must be reachable from the worker's home directory
+ * (~/.claude/skills/<name>/ or via an installed plugin). If the skill is
+ * missing the CLI just won't invoke it and we'll get a degraded review;
+ * if the CLI errors, that surfaces as the existing non-zero-exit error
+ * with stderr.
+ */
+async function runViaSkillCli(
+  input: ReviewInput,
+  skillName: string,
+): Promise<ReviewOutput> {
+  const workDir = await mkdtemp(join(tmpdir(), 'arbiter-review-'));
+  try {
+    let effectiveContext: 'isolated' | 'checkout' = 'isolated';
+    if (input.reviewContext === 'checkout' && input.checkout) {
+      const ok = await checkoutPrHead(
+        workDir,
+        input.repoFull,
+        input.checkout.prNumber,
+        input.checkout.token,
+      );
+      if (ok) effectiveContext = 'checkout';
+    }
+
+    const systemPrompt = buildSkillSystemPrompt(skillName, effectiveContext);
+    const userMessage = formatUserMessage(input);
+
+    const proc = Bun.spawn({
+      cmd: [
+        config.claude.bin,
+        '-p',
+        '--output-format',
+        'json',
+        '--append-system-prompt',
+        systemPrompt,
+      ],
+      cwd: workDir,
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    const watchdog = setTimeout(() => {
+      try { proc.kill('SIGKILL'); } catch { /* already exited */ }
+    }, REVIEW_TIMEOUT_MS);
+
+    proc.stdin.write(userMessage);
+    await proc.stdin.end();
+
+    let exitCode: number;
+    let stdout: string;
+    let stderr: string;
+    try {
+      [exitCode, stdout, stderr] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+    } finally {
+      clearTimeout(watchdog);
+    }
+
+    if (exitCode !== 0) {
+      if (proc.killed) throw new ReviewTimeoutError(REVIEW_TIMEOUT_MS);
+      throw new Error(
+        `claude -p (skill=${skillName}) exited with ${exitCode}: ` +
+          `${stderr.trim() || '(no stderr)'}`,
+      );
+    }
+    const out = parseClaudeCliOutput(stdout);
+    out.prompts = [{ label: `skill:${skillName}`, prompt: systemPrompt }];
+    return out;
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
+ * Wrapper system prompt for skill-driven reviews. Pre-supplies the
+ * context that interactive skills (like bmad-code-review) would HALT to
+ * gather, then re-asserts arbiter's machine-readable output contract so
+ * whatever the skill produces still has the verdict + findings markers
+ * parseClaudeCliOutput expects.
+ */
+function buildSkillSystemPrompt(
+  skillName: string,
+  context: 'isolated' | 'checkout',
+): string {
+  return [
+    `You will review the pull request in the user message by running the`,
+    `Claude Code skill \`/${skillName}\`.`,
+    ``,
+    `Pre-supplied context for that skill (do NOT halt to ask for any of it):`,
+    `- Review target: the unified diff included in the user message.`,
+    `- Diff source: provided diff (do not run git to fetch a different one).`,
+    `- Spec: none. Run in no-spec mode if the skill supports it.`,
+    `- Do NOT pause or wait for user confirmation at any checkpoint —`,
+    `  proceed all the way through to the combined final review.`,
+    ``,
+    CONTEXT_PROMPT[context],
+    ``,
+    `## Output contract — REQUIRED regardless of the skill's native format`,
+    ``,
+    `After the skill finishes, your final response (the body that will be`,
+    `posted to GitHub) MUST start with arbiter's machine-readable markers:`,
+    ``,
+    FINDINGS_INSTRUCTION,
+    ``,
+    ITEMS_INSTRUCTION,
+    ``,
+    INJECTION_GUARD,
+  ].join('\n');
 }
 
 async function runViaAnthropicApi(input: ReviewInput): Promise<ReviewOutput> {
@@ -324,6 +455,7 @@ async function runViaAnthropicApi(input: ReviewInput): Promise<ReviewOutput> {
     verdict: v.verdict,
     findings: f.findings,
     items: i.items,
+    prompts: [{ label: 'built-in', prompt: systemPrompt }],
     raw: response,
   };
 }

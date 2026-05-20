@@ -56,6 +56,13 @@ export type Scope = {
    * ("snarky but constructive"), or context ("this is a Rust project").
    */
   personalityPrompt: string | null;
+  /**
+   * Optional Claude Code skill name (e.g. 'bmad-code-review'). When set,
+   * the reviewer delegates to that skill via `claude -p` instead of using
+   * the built-in scrutiny prompt. Null = built-in path. Subscription mode
+   * only — API mode has no skills and silently falls back.
+   */
+  reviewerSkill: string | null;
   triggerMode: TriggerMode;
   /** What the reviewer subprocess sees. Default 'isolated'. */
   reviewContext: ReviewContext;
@@ -99,6 +106,7 @@ const SELECT_COLUMNS = sql`
   gate_on_blocking   AS "gateOnBlocking",
   footer_template    AS "footerTemplate",
   personality_prompt AS "personalityPrompt",
+  reviewer_skill     AS "reviewerSkill",
   trigger_mode       AS "triggerMode",
   review_context     AS "reviewContext",
   enabled,
@@ -136,6 +144,7 @@ export type ScopeInput = {
   gateOnBlocking: boolean;
   footerTemplate: string | null;
   personalityPrompt: string | null;
+  reviewerSkill: string | null;
   triggerMode: TriggerMode;
   reviewContext: ReviewContext;
   enabled: boolean;
@@ -146,13 +155,13 @@ export async function createScope(userId: number, input: ScopeInput): Promise<Sc
     INSERT INTO scopes
       (user_id, target_kind, target, base_branch_pattern, scrutiny,
        exclude_authors, claude_mode, auto_approve, gate_on_blocking,
-       footer_template, personality_prompt, trigger_mode, review_context,
-       enabled)
+       footer_template, personality_prompt, reviewer_skill, trigger_mode,
+       review_context, enabled)
     VALUES
       (${userId}, ${input.targetKind}, ${input.target}, ${input.baseBranchPattern},
        ${input.scrutiny}, ${input.excludeAuthors}, ${input.claudeMode},
        ${input.autoApprove}, ${input.gateOnBlocking}, ${input.footerTemplate},
-       ${input.personalityPrompt}, ${input.triggerMode},
+       ${input.personalityPrompt}, ${input.reviewerSkill}, ${input.triggerMode},
        ${input.reviewContext}, ${input.enabled})
     RETURNING ${SELECT_COLUMNS}
   `;
@@ -177,6 +186,7 @@ export async function updateScope(
         gate_on_blocking = ${input.gateOnBlocking},
         footer_template = ${input.footerTemplate},
         personality_prompt = ${input.personalityPrompt},
+        reviewer_skill = ${input.reviewerSkill},
         trigger_mode = ${input.triggerMode},
         review_context = ${input.reviewContext},
         enabled = ${input.enabled},
@@ -258,6 +268,17 @@ export function parseScopeForm(
   const personalityRaw = (form.personality_prompt ?? '').replace(/\s+$/, '');
   const personalityPrompt = personalityRaw.length > 0 ? personalityRaw : null;
 
+  // Skill name: trimmed, leading slash optional (users may type either
+  // `bmad-code-review` or `/bmad-code-review`); strip the slash so the
+  // stored form is always the bare skill name. Empty = null = built-in.
+  const skillRaw = (form.reviewer_skill ?? '').trim().replace(/^\//, '');
+  const reviewerSkill = skillRaw.length > 0 ? skillRaw : null;
+  if (reviewerSkill && !/^[A-Za-z0-9_:.-]+$/.test(reviewerSkill)) {
+    errors.push(
+      'Reviewer skill name must contain only letters, digits, _, :, ., or -.',
+    );
+  }
+
   // Footer is a 3-way choice driven by a radio (footer_mode):
   //   'standard' → footerTemplate = null (worker uses built-in default)
   //   'none'     → footerTemplate = ''   (no footer at all)
@@ -292,6 +313,7 @@ export function parseScopeForm(
       gateOnBlocking,
       footerTemplate,
       personalityPrompt,
+      reviewerSkill,
       triggerMode: triggerMode as TriggerMode,
       reviewContext: reviewContext as ReviewContext,
       enabled,

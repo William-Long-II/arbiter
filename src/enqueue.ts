@@ -75,6 +75,7 @@ export async function enqueueForUser(args: {
     gateOnBlocking: matched.gateOnBlocking,
     footerTemplate: matched.footerTemplate,
     personalityPrompt: matched.personalityPrompt,
+    reviewerSkill: matched.reviewerSkill,
     reviewContext: matched.reviewContext,
   });
   return { review, matched };
