@@ -373,6 +373,7 @@ export function buildApp(): Hono {
       claudeApiKeySet: !!config.claude.apiKey,
       pollIntervalSeconds: config.pollIntervalSeconds,
       workerIntervalSeconds: config.workerIntervalSeconds,
+      workerConcurrency: config.workerConcurrency,
       reviewRetentionDays: config.reviewRetentionDays,
     };
     return c.html(<SettingsPage user={user} config={snapshot} dbConnected={dbConnected} />);
