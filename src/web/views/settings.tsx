@@ -22,6 +22,7 @@ export type ServerConfigSnapshot = {
   claudeApiKeySet: boolean;
   pollIntervalSeconds: number;
   workerIntervalSeconds: number;
+  workerConcurrency: number;
   reviewRetentionDays?: number;
 };
 
@@ -80,6 +81,11 @@ export const SettingsPage: FC<Props> = ({ user, config, dbConnected }) => {
         </Row>
         <Row label="Worker interval">
           <span class="mono-sm">{config.workerIntervalSeconds}s</span>
+        </Row>
+        <Row label="Worker concurrency">
+          <span class="mono-sm">
+            {config.workerConcurrency} review{config.workerConcurrency === 1 ? '' : 's'} in parallel
+          </span>
         </Row>
         {config.reviewRetentionDays !== undefined ? (
           <Row label="Review retention">

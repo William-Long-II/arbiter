@@ -69,11 +69,11 @@ export const config = {
   pollIntervalSeconds: intEnv('POLL_INTERVAL_SECONDS', 60),
   workerIntervalSeconds: intEnv('WORKER_INTERVAL_SECONDS', 5),
   // How many reviews the worker processes concurrently in this process.
-  // Default 1 = the original single-flight behavior. The queue claim is
-  // `FOR UPDATE SKIP LOCKED`, so >1 is safe within a container; raise it to
-  // drain a deep backlog faster (each slot still spends a real Claude call,
-  // so size it against your quota/cost, not just CPU).
-  workerConcurrency: intEnvMin('WORKER_CONCURRENCY', 1, 1),
+  // The queue claim is `FOR UPDATE SKIP LOCKED`, so >1 is safe within a
+  // container; raise it to drain a deep backlog faster (each slot still
+  // spends a real Claude call, so size it against your quota/cost, not
+  // just CPU). Set to 1 to restore the original single-flight behavior.
+  workerConcurrency: intEnvMin('WORKER_CONCURRENCY', 3, 1),
   // Terminal reviews (done/failed/skipped) older than this are pruned every
   // hour by the retention task. 0 disables pruning entirely.
   reviewRetentionDays: intEnv('REVIEW_RETENTION_DAYS', 30),
