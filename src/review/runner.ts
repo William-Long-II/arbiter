@@ -496,7 +496,14 @@ export async function preflightClaudeCli(): Promise<PreflightResult> {
     };
   }
 
+  // Track timeout via an explicit flag rather than `proc.killed`. Bun
+  // sets `proc.killed = true` on non-zero exits even when nothing called
+  // proc.kill() (observed with `claude -p` returning a 401 JSON in ~2s),
+  // so reading `proc.killed` here misattributes fast auth failures as
+  // 30-second hangs.
+  let timedOut = false;
   const watchdog = setTimeout(() => {
+    timedOut = true;
     try { proc.kill('SIGKILL'); } catch { /* already exited */ }
   }, PREFLIGHT_TIMEOUT_MS);
 
@@ -504,9 +511,10 @@ export async function preflightClaudeCli(): Promise<PreflightResult> {
   await proc.stdin.end();
 
   let exitCode: number;
+  let stdout: string;
   let stderr: string;
   try {
-    [exitCode, , stderr] = await Promise.all([
+    [exitCode, stdout, stderr] = await Promise.all([
       proc.exited,
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
@@ -515,16 +523,34 @@ export async function preflightClaudeCli(): Promise<PreflightResult> {
     clearTimeout(watchdog);
   }
 
-  if (exitCode === 0) return { ok: true, detail: 'claude -p responded' };
-  if (proc.killed) {
+  return classifyPreflight({ exitCode, timedOut, stdout, stderr });
+}
+
+/**
+ * Pure classifier for {@link preflightClaudeCli} so the decision logic
+ * can be unit-tested without spawning a real `claude` subprocess.
+ *
+ * `claude -p --output-format json` writes its structured failure to
+ * stdout (e.g. `{"result":"Failed to authenticate. API Error: 401 ..."}`)
+ * and leaves stderr empty, so we prefer stdout when surfacing the cause.
+ */
+export function classifyPreflight(args: {
+  exitCode: number;
+  timedOut: boolean;
+  stdout: string;
+  stderr: string;
+}): PreflightResult {
+  if (args.exitCode === 0) return { ok: true, detail: 'claude -p responded' };
+  if (args.timedOut) {
     return {
       ok: false,
       detail: `claude -p did not respond within ${PREFLIGHT_TIMEOUT_MS}ms — it is hanging, which almost always means the host's Claude credentials are not reachable inside the container`,
     };
   }
+  const detail = args.stdout.trim() || args.stderr.trim() || '(no output)';
   return {
     ok: false,
-    detail: `claude -p exited ${exitCode}: ${stderr.trim() || '(no stderr)'}`,
+    detail: `claude -p exited ${args.exitCode}: ${detail}`,
   };
 }
 

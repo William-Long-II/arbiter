@@ -115,28 +115,28 @@ function main(): void {
       ok('found valid Claude credentials on the host.');
     }
   } else if (host === 'darwin') {
-    if (validateCredsFile(credsFile)) {
-      ok(`found valid creds at ${credsFile} (Keychain export already done).`);
-    } else {
-      info('macOS keeps creds in the Keychain — exporting to a file the container can read…');
-      const r = Bun.spawnSync(['security', 'find-generic-password', '-s', 'Claude Code-credentials', '-w']);
-      const blob = r.stdout?.toString() ?? '';
-      if (r.exitCode === 0 && blob.trim()) {
-        mkdirSync(dirname(credsFile), { recursive: true });
-        writeFileSync(credsFile, blob.endsWith('\n') ? blob : `${blob}\n`);
-        chmodSync(credsFile, 0o600);
-        if (validateCredsFile(credsFile)) {
-          ok(`exported Keychain creds to ${credsFile} (chmod 600).`);
-          info('Note: this is a snapshot. The container refreshes its own copy');
-          info('independently of the host Keychain. If container reviews start');
-          info('timing out weeks later, just re-run `bun run setup` to reseed.');
-        } else {
-          warn('exported blob is not valid JSON — Keychain item may be unexpected.');
-        }
+    // Always re-export from the Keychain. Anthropic rotates session
+    // tokens, so a syntactically valid stale file still 401s — and the
+    // documented recovery path is "re-run `bun run setup` to reseed,"
+    // which only works if we actually reseed on every invocation.
+    info('macOS keeps creds in the Keychain — exporting to a file the container can read…');
+    const r = Bun.spawnSync(['security', 'find-generic-password', '-s', 'Claude Code-credentials', '-w']);
+    const blob = r.stdout?.toString() ?? '';
+    if (r.exitCode === 0 && blob.trim()) {
+      mkdirSync(dirname(credsFile), { recursive: true });
+      writeFileSync(credsFile, blob.endsWith('\n') ? blob : `${blob}\n`);
+      chmodSync(credsFile, 0o600);
+      if (validateCredsFile(credsFile)) {
+        ok(`exported Keychain creds to ${credsFile} (chmod 600).`);
+        info('Note: this is a snapshot. The container does NOT refresh it;');
+        info('re-run `bun run setup` whenever container `claude -p` starts');
+        info('failing with 401, then `docker compose up -d --force-recreate app`.');
       } else {
-        warn('could not read the Keychain item `Claude Code-credentials`.');
-        info('Run `claude` on the host and complete login, then re-run setup.');
+        warn('exported blob is not valid JSON — Keychain item may be unexpected.');
       }
+    } else {
+      warn('could not read the Keychain item `Claude Code-credentials`.');
+      info('Run `claude` on the host and complete login, then re-run setup.');
     }
     // $HOME is set on macOS, so the default compose mount resolves; no
     // CLAUDE_HOST_DIR needed.

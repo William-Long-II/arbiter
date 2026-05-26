@@ -1,6 +1,48 @@
 import { describe, expect, test } from 'bun:test';
-import { formatSubscriptionPreflightError } from '../src/review/runner.ts';
+import { classifyPreflight, formatSubscriptionPreflightError } from '../src/review/runner.ts';
 import { readEnvValue, upsertEnvLine } from '../scripts/setup.ts';
+
+describe('classifyPreflight', () => {
+  test('exit 0 is success', () => {
+    const r = classifyPreflight({ exitCode: 0, timedOut: false, stdout: '', stderr: '' });
+    expect(r.ok).toBe(true);
+    expect(r.detail).toContain('responded');
+  });
+
+  test('watchdog fires → "did not respond within"', () => {
+    const r = classifyPreflight({ exitCode: 137, timedOut: true, stdout: '', stderr: '' });
+    expect(r.ok).toBe(false);
+    expect(r.detail).toContain('did not respond within');
+    expect(r.detail).toContain('hanging');
+  });
+
+  test('fast non-zero exit is NOT misreported as a timeout — surfaces stdout (where claude -p emits JSON failures)', () => {
+    // Reproduces the original bug: `claude -p --output-format json` exited
+    // in ~2s with a 401 on stdout and an empty stderr. The pre-fix code
+    // saw `proc.killed === true` and reported "did not respond within
+    // 30000ms"; the fix routes through this classifier with timedOut=false.
+    const r = classifyPreflight({
+      exitCode: 1,
+      timedOut: false,
+      stdout: '{"result":"Failed to authenticate. API Error: 401 Invalid authentication credentials"}',
+      stderr: '',
+    });
+    expect(r.ok).toBe(false);
+    expect(r.detail).not.toContain('did not respond within');
+    expect(r.detail).toContain('exited 1');
+    expect(r.detail).toContain('401');
+  });
+
+  test('falls back to stderr when stdout is empty', () => {
+    const r = classifyPreflight({ exitCode: 2, timedOut: false, stdout: '', stderr: 'boom' });
+    expect(r.detail).toBe('claude -p exited 2: boom');
+  });
+
+  test('falls back to (no output) when both streams are empty', () => {
+    const r = classifyPreflight({ exitCode: 2, timedOut: false, stdout: '   ', stderr: '' });
+    expect(r.detail).toBe('claude -p exited 2: (no output)');
+  });
+});
 
 describe('formatSubscriptionPreflightError', () => {
   const out = formatSubscriptionPreflightError('claude -p did not respond within 30000ms');
