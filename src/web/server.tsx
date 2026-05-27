@@ -339,6 +339,7 @@ export function buildApp(): Hono {
         gateOnBlocking: false,
         footerTemplate: null,
         personalityPrompt: null,
+        humanize: false,
         reviewerSkill: null,
         reviewContext: 'isolated',
       });
@@ -648,6 +649,7 @@ export function buildApp(): Hono {
         gateOnBlocking: false,
         footerTemplate: null,
         personalityPrompt: null,
+        humanize: false,
         reviewerSkill: null,
         reviewContext: 'isolated',
       });

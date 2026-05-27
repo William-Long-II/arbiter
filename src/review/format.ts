@@ -40,6 +40,10 @@ export type ReviewInput = {
    * instead of the built-in scrutiny prompt. Subscription-only — API
    * mode has no skills and silently falls back to built-in. */
   reviewerSkill?: string | null;
+  /** Opt-in second LLM pass that rewrites the parsed prose body in
+   * personalityPrompt's voice. No-op unless personalityPrompt is also
+   * set. Off by default; doubles latency + cost. */
+  humanize?: boolean;
 };
 
 export type Verdict = 'approve' | 'comment' | 'request-changes';

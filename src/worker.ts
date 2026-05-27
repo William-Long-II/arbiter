@@ -239,6 +239,7 @@ async function processJob(job: PendingReview): Promise<void> {
         prAuthor: pr.author,
         repoFull: pr.repoFull,
         personalityPrompt: job.personalityPrompt,
+        humanize: job.humanize,
         reviewerSkill: job.reviewerSkill,
         ciSummary,
         diffNotice,
