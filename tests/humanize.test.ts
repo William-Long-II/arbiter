@@ -41,6 +41,34 @@ describe('buildHumanizeSystemPrompt', () => {
     expect(prompt).toContain('link');
     expect(prompt).toContain('code fence');
   });
+
+  test('permits restructuring — must not lock in the AI-shaped template', () => {
+    // The previous prompt told the rewriter to "keep the overall
+    // structure (sections, lists, ordering)", which preserved the very
+    // tells that made output read as AI (Major/Minor/Nit headers,
+    // "Things I checked" closer, bolded lead-ins on every bullet). The
+    // new contract explicitly permits restructuring so the cosmetic pass
+    // can actually take effect.
+    expect(prompt).toMatch(/MAY restructure/i);
+    expect(prompt).not.toMatch(/Keep the overall structure/i);
+  });
+
+  test('names the structural AI tells the rewrite must shed', () => {
+    // Naming the tells explicitly is what makes the rewrite restructure
+    // rather than just rephrase. "Sound human" alone is too vague —
+    // models keep the template and polish the prose. Spell out the
+    // concrete patterns to drop.
+    expect(prompt).toMatch(/Major.*Minor.*Nit/i);
+    expect(prompt).toMatch(/Things I checked/i);
+    expect(prompt).toMatch(/bolded lead-ins/i);
+  });
+
+  test('caps output length so the rewrite cannot dodge cuts by paraphrasing', () => {
+    // Without an explicit length target the rewrite tends to preserve
+    // every finding verbatim and just smooth the prose, which is exactly
+    // the non-restructuring failure mode we are trying to escape.
+    expect(prompt).toMatch(/50.*70%/);
+  });
 });
 
 describe('buildSkillSystemPrompt personality', () => {
