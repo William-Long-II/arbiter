@@ -52,7 +52,7 @@ it does and why:
 |---------|---------------|-----|
 | **Linux**   | Nothing — default mount works. | Creds live in `~/.claude/.credentials.json`; `$HOME` resolves. |
 | **Windows** | `CLAUDE_HOST_DIR` in `.env` (setup sets it). | `$HOME` is unset under PowerShell, so the compose default falls back to a nonexistent `/root/.claude` and mounts **empty**. |
-| **macOS**   | Export Keychain → `~/.claude/.credentials.json` (setup does it). | Claude Code stores creds in the Keychain, not a file, so the bind-mount has nothing to carry. |
+| **macOS**   | Export Keychain → `~/.claude/.credentials.json` + install a launchd resync agent (setup does both). | Claude Code stores creds in the Keychain, not a file, so the bind-mount has nothing to carry. Anthropic rotates refresh tokens, so a one-shot snapshot drifts; the launchd agent re-exports every 5 min. |
 
 Prereq for all: be logged in (`claude` once on the host).
 
@@ -69,9 +69,12 @@ review and reporting a misleading timeout.
   container's credentials and GitHub token. Running multiple containers
   against one DB means they compete on the same queue — fixing the mount
   doesn't change that.
-- **macOS snapshot drift.** The exported file is a point-in-time copy. The
-  container refreshes its own copy independently of the host Keychain. If
-  container reviews start timing out weeks later, re-run `bun run setup`.
+- **macOS auto-refresh.** Setup installs a launchd UserAgent
+  (`~/Library/LaunchAgents/com.arbiter.creds-refresh.plist`) that
+  re-exports the Keychain to the file every 5 minutes, so the bind-mounted
+  file tracks whatever's currently valid. Remove it with
+  `bun run setup --uninstall-agent`, or skip the install at setup time
+  with `bun run setup --no-agent`.
 - **First-run config notice.** The image seeds a minimal `/root/.claude.json`;
   if you ever see a `config file not found at /root/.claude.json` notice on
   stderr it's harmless and self-heals on the first `claude -p` call — it

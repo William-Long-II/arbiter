@@ -15,9 +15,10 @@
  *
  * Idempotent: safe to re-run (e.g. after a macOS token expiry).
  */
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
+import { exportKeychainToFile, installLaunchAgent, uninstallLaunchAgent } from './refresh-creds.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const ENV_PATH = join(ROOT, '.env');
@@ -84,6 +85,16 @@ function validateCredsFile(file: string): boolean {
 function main(): void {
   console.log('arbiter setup — subscription-mode Docker credentials\n');
 
+  const args = process.argv.slice(2);
+  // Teardown shortcut: `bun run setup --uninstall-agent` removes the
+  // macOS launchd refresher without touching anything else.
+  if (args.includes('--uninstall-agent')) {
+    const r = uninstallLaunchAgent();
+    console.log(r.ok ? `  ✓ ${r.detail}` : `  ! ${r.detail}`);
+    process.exit(r.ok ? 0 : 1);
+  }
+  const installAgent = !args.includes('--no-agent');
+
   let env = ensureEnvFile();
   const mode = readEnvValue(env, 'CLAUDE_DEFAULT_MODE') || 'subscription';
 
@@ -115,28 +126,28 @@ function main(): void {
       ok('found valid Claude credentials on the host.');
     }
   } else if (host === 'darwin') {
-    // Always re-export from the Keychain. Anthropic rotates session
-    // tokens, so a syntactically valid stale file still 401s — and the
-    // documented recovery path is "re-run `bun run setup` to reseed,"
-    // which only works if we actually reseed on every invocation.
     info('macOS keeps creds in the Keychain — exporting to a file the container can read…');
-    const r = Bun.spawnSync(['security', 'find-generic-password', '-s', 'Claude Code-credentials', '-w']);
-    const blob = r.stdout?.toString() ?? '';
-    if (r.exitCode === 0 && blob.trim()) {
-      mkdirSync(dirname(credsFile), { recursive: true });
-      writeFileSync(credsFile, blob.endsWith('\n') ? blob : `${blob}\n`);
-      chmodSync(credsFile, 0o600);
-      if (validateCredsFile(credsFile)) {
-        ok(`exported Keychain creds to ${credsFile} (chmod 600).`);
-        info('Note: this is a snapshot. The container does NOT refresh it;');
-        info('re-run `bun run setup` whenever container `claude -p` starts');
-        info('failing with 401, then `docker compose up -d --force-recreate app`.');
-      } else {
-        warn('exported blob is not valid JSON — Keychain item may be unexpected.');
-      }
+    const r = exportKeychainToFile();
+    if (r.ok) {
+      ok(r.detail);
     } else {
-      warn('could not read the Keychain item `Claude Code-credentials`.');
+      warn(r.detail);
       info('Run `claude` on the host and complete login, then re-run setup.');
+    }
+    // Anthropic rotates refresh tokens, so a one-shot export drifts the
+    // moment the host's `claude` CLI refreshes its Keychain copy — the
+    // container then 401s. Install a launchd UserAgent that resyncs the
+    // Keychain into the file every few minutes so the file tracks the
+    // currently-valid tokens. Idempotent; safe to re-run.
+    if (installAgent && r.ok) {
+      const a = installLaunchAgent();
+      if (a.ok) {
+        ok(a.detail);
+        info('Remove later with: bun run setup --uninstall-agent');
+      } else {
+        warn(`could not install launchd refresher: ${a.detail}`);
+        info('You can still re-run setup manually whenever reviews 401.');
+      }
     }
     // $HOME is set on macOS, so the default compose mount resolves; no
     // CLAUDE_HOST_DIR needed.

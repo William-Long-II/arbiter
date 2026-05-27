@@ -7,6 +7,7 @@
     "start": "bun run src/index.ts",
     "dev": "bun --hot run src/index.ts",
     "setup": "bun run scripts/setup.ts",
+    "refresh-creds": "bun run scripts/refresh-creds.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
