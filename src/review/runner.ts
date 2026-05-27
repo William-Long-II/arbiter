@@ -188,6 +188,39 @@ export async function runReview(
   mode: 'subscription' | 'api',
 ): Promise<ReviewOutput> {
   assertDiffSize(input.diff);
+  const out = await runReviewCore(input, mode);
+  // Opt-in second pass: when the scope set both personality and humanize,
+  // rewrite the parsed prose body in that voice. parseClaudeCliOutput and
+  // the API-mode parser have already stripped verdict/findings/items
+  // markers from `body`, so the rewrite is pure prose — no marker
+  // preservation needed and verdict/items pass through unchanged.
+  const personality = input.personalityPrompt?.trim();
+  if (input.humanize && personality && out.body.trim()) {
+    try {
+      const rewritten = await humanizeBody(out.body, personality, mode);
+      out.body = rewritten.body;
+      if (rewritten.costUsd !== undefined) {
+        out.costUsd = (out.costUsd ?? 0) + rewritten.costUsd;
+      }
+      out.prompts = [
+        ...(out.prompts ?? []),
+        { label: 'humanize', prompt: rewritten.systemPrompt },
+      ];
+    } catch (err) {
+      // Humanize must never break the review — fall back to the original
+      // body and log. The skill/built-in pass already produced something
+      // valid; losing the rewrite is strictly better than losing the row.
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[runner] humanize pass failed, keeping original body: ${msg}`);
+    }
+  }
+  return out;
+}
+
+async function runReviewCore(
+  input: ReviewInput,
+  mode: 'subscription' | 'api',
+): Promise<ReviewOutput> {
   if (mode === 'subscription') {
     // Skills only work through the CLI (the SDK has no skill surface), so
     // API mode silently falls back to the built-in prompt regardless of
@@ -316,7 +349,11 @@ async function runViaSkillCli(
       if (ok) effectiveContext = 'checkout';
     }
 
-    const systemPrompt = buildSkillSystemPrompt(skillName, effectiveContext);
+    const systemPrompt = buildSkillSystemPrompt(
+      skillName,
+      effectiveContext,
+      input.personalityPrompt,
+    );
     const userMessage = formatUserMessage(input);
 
     const proc = Bun.spawn({
@@ -375,12 +412,18 @@ async function runViaSkillCli(
  * gather, then re-asserts arbiter's machine-readable output contract so
  * whatever the skill produces still has the verdict + findings markers
  * parseClaudeCliOutput expects.
+ *
+ * `personalityPrompt` is appended as additional guidance — best-effort
+ * only: rigid skills often drown out an in-prompt voice instruction,
+ * which is why scopes can additionally opt into the post-parse humanize
+ * pass (see humanizeBody).
  */
-function buildSkillSystemPrompt(
+export function buildSkillSystemPrompt(
   skillName: string,
   context: 'isolated' | 'checkout',
+  personalityPrompt?: string | null,
 ): string {
-  return [
+  const sections = [
     `You will review the pull request in the user message by running the`,
     `Claude Code skill \`/${skillName}\`.`,
     ``,
@@ -403,7 +446,151 @@ function buildSkillSystemPrompt(
     ITEMS_INSTRUCTION,
     ``,
     INJECTION_GUARD,
+  ];
+  const personality = personalityPrompt?.trim();
+  if (personality) {
+    sections.push(
+      ``,
+      `## Additional reviewer guidance for this scope`,
+      ``,
+      personality,
+    );
+  }
+  return sections.join('\n');
+}
+
+/**
+ * System prompt for the humanize rewrite pass. The user message is the
+ * already-parsed review body (verdict/findings/items markers stripped),
+ * so we can be unambiguous: rewrite the prose, change nothing else.
+ *
+ * The pass is purely cosmetic — we do not want it inventing or removing
+ * findings, escalating severities, or reordering sections. The strict
+ * "substance must not change" clause + the "output ONLY the rewritten
+ * review" clause together keep the rewrite well-behaved across models.
+ */
+export function buildHumanizeSystemPrompt(personalityPrompt: string): string {
+  return [
+    'You will receive a Markdown code review. Rewrite it in the voice',
+    'described below WITHOUT changing the substance:',
+    '',
+    '- Keep every finding, claim, code reference, file path, line number,',
+    '  link, code fence, and HTML comment exactly as-is.',
+    '- Do NOT add new findings, remove existing ones, or change their',
+    '  severity. Do not soften or sharpen the technical conclusion.',
+    '- Do NOT add a preamble, explanation, or sign-off. Output ONLY the',
+    '  rewritten review — no "Here is the rewritten…" prefix, no fences',
+    '  wrapping the whole thing.',
+    '- Keep the overall structure (sections, lists, ordering) unless the',
+    '  voice explicitly calls for restructuring; even then, every finding',
+    '  must still be present.',
+    '',
+    '## Voice',
+    '',
+    personalityPrompt,
   ].join('\n');
+}
+
+interface HumanizeResult {
+  body: string;
+  costUsd?: number;
+  systemPrompt: string;
+}
+
+/**
+ * Run the rewrite pass. Picks the same transport as the originating
+ * review (subscription → `claude -p`; api → Anthropic SDK with haiku)
+ * so a humanize call doesn't quietly start charging api when the review
+ * is on subscription. Bounded by REVIEW_TIMEOUT_MS — a stuck rewrite
+ * must not eat the whole queue.
+ */
+async function humanizeBody(
+  body: string,
+  personalityPrompt: string,
+  mode: 'subscription' | 'api',
+): Promise<HumanizeResult> {
+  const systemPrompt = buildHumanizeSystemPrompt(personalityPrompt);
+
+  if (mode === 'subscription') {
+    const proc = Bun.spawn({
+      cmd: [
+        config.claude.bin,
+        '-p',
+        '--output-format',
+        'json',
+        '--append-system-prompt',
+        systemPrompt,
+      ],
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const watchdog = setTimeout(() => {
+      try { proc.kill('SIGKILL'); } catch { /* already exited */ }
+    }, REVIEW_TIMEOUT_MS);
+    proc.stdin.write(body);
+    await proc.stdin.end();
+    let exitCode: number;
+    let stdout: string;
+    let stderr: string;
+    try {
+      [exitCode, stdout, stderr] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+    } finally {
+      clearTimeout(watchdog);
+    }
+    if (exitCode !== 0) {
+      if (proc.killed) throw new ReviewTimeoutError(REVIEW_TIMEOUT_MS);
+      throw new Error(
+        `humanize claude -p exited with ${exitCode}: ${stderr.trim() || '(no stderr)'}`,
+      );
+    }
+    // Reuse parseClaudeCliOutput to pluck `result` + `total_cost_usd`.
+    // The verdict/findings parses inside it are harmless — the rewrite
+    // shouldn't emit those markers, so they'll just no-op and we keep
+    // the call site's verdict/findings/items untouched.
+    const parsed = parseClaudeCliOutput(stdout);
+    const text = parsed.body.trim();
+    if (!text) throw new Error('humanize claude -p returned empty body');
+    return { body: text, costUsd: parsed.costUsd, systemPrompt };
+  }
+
+  if (!config.claude.apiKey) {
+    throw new Error('ANTHROPIC_API_KEY not configured (required for api mode)');
+  }
+  const client = new Anthropic({ apiKey: config.claude.apiKey });
+  // Haiku for the rewrite regardless of the review's scrutiny tier —
+  // it's a prose transform, not a fresh judgment, and we don't want a
+  // Sonnet/Opus humanize bill on top of a Sonnet/Opus review.
+  let response;
+  try {
+    response = await client.messages.create(
+      {
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: MAX_OUTPUT_TOKENS,
+        system: [
+          { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
+        ],
+        messages: [{ role: 'user', content: body }],
+      },
+      { signal: AbortSignal.timeout(REVIEW_TIMEOUT_MS) },
+    );
+  } catch (err) {
+    if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
+      throw new ReviewTimeoutError(REVIEW_TIMEOUT_MS);
+    }
+    throw err;
+  }
+  const text = response.content
+    .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+    .map((block) => block.text)
+    .join('\n\n')
+    .trim();
+  if (!text) throw new Error('humanize Anthropic API returned no text');
+  return { body: text, systemPrompt };
 }
 
 async function runViaAnthropicApi(input: ReviewInput): Promise<ReviewOutput> {

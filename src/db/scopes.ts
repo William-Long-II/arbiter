@@ -57,6 +57,15 @@ export type Scope = {
    */
   personalityPrompt: string | null;
   /**
+   * Opt-in post-processing pass that rewrites the parsed review body in
+   * personalityPrompt's voice via a second LLM call. Only takes effect
+   * when personalityPrompt is also set. Off by default — doubles latency
+   * and cost per review, but the only reliable way to humanize the tone
+   * of skill-driven reviews (the skill's output format normally drowns
+   * out a personality appended to its system prompt).
+   */
+  humanize: boolean;
+  /**
    * Optional Claude Code skill name (e.g. 'bmad-code-review'). When set,
    * the reviewer delegates to that skill via `claude -p` instead of using
    * the built-in scrutiny prompt. Null = built-in path. Subscription mode
@@ -106,6 +115,7 @@ const SELECT_COLUMNS = sql`
   gate_on_blocking   AS "gateOnBlocking",
   footer_template    AS "footerTemplate",
   personality_prompt AS "personalityPrompt",
+  humanize,
   reviewer_skill     AS "reviewerSkill",
   trigger_mode       AS "triggerMode",
   review_context     AS "reviewContext",
@@ -144,6 +154,7 @@ export type ScopeInput = {
   gateOnBlocking: boolean;
   footerTemplate: string | null;
   personalityPrompt: string | null;
+  humanize: boolean;
   reviewerSkill: string | null;
   triggerMode: TriggerMode;
   reviewContext: ReviewContext;
@@ -155,14 +166,14 @@ export async function createScope(userId: number, input: ScopeInput): Promise<Sc
     INSERT INTO scopes
       (user_id, target_kind, target, base_branch_pattern, scrutiny,
        exclude_authors, claude_mode, auto_approve, gate_on_blocking,
-       footer_template, personality_prompt, reviewer_skill, trigger_mode,
-       review_context, enabled)
+       footer_template, personality_prompt, humanize, reviewer_skill,
+       trigger_mode, review_context, enabled)
     VALUES
       (${userId}, ${input.targetKind}, ${input.target}, ${input.baseBranchPattern},
        ${input.scrutiny}, ${input.excludeAuthors}, ${input.claudeMode},
        ${input.autoApprove}, ${input.gateOnBlocking}, ${input.footerTemplate},
-       ${input.personalityPrompt}, ${input.reviewerSkill}, ${input.triggerMode},
-       ${input.reviewContext}, ${input.enabled})
+       ${input.personalityPrompt}, ${input.humanize}, ${input.reviewerSkill},
+       ${input.triggerMode}, ${input.reviewContext}, ${input.enabled})
     RETURNING ${SELECT_COLUMNS}
   `;
   if (!row) throw new Error('createScope: no row returned');
@@ -186,6 +197,7 @@ export async function updateScope(
         gate_on_blocking = ${input.gateOnBlocking},
         footer_template = ${input.footerTemplate},
         personality_prompt = ${input.personalityPrompt},
+        humanize = ${input.humanize},
         reviewer_skill = ${input.reviewerSkill},
         trigger_mode = ${input.triggerMode},
         review_context = ${input.reviewContext},
@@ -267,6 +279,11 @@ export function parseScopeForm(
   // Personality is plain text. Trim trailing whitespace, treat empty as null.
   const personalityRaw = (form.personality_prompt ?? '').replace(/\s+$/, '');
   const personalityPrompt = personalityRaw.length > 0 ? personalityRaw : null;
+  // Humanize is meaningless without a personality — silently force false
+  // when there's nothing for the rewrite pass to apply, so the runner
+  // never wastes an LLM call on an empty voice prompt.
+  const humanize =
+    (form.humanize === 'on' || form.humanize === 'true') && personalityPrompt !== null;
 
   // Skill name: trimmed, leading slash optional (users may type either
   // `bmad-code-review` or `/bmad-code-review`); strip the slash so the
@@ -313,6 +330,7 @@ export function parseScopeForm(
       gateOnBlocking,
       footerTemplate,
       personalityPrompt,
+      humanize,
       reviewerSkill,
       triggerMode: triggerMode as TriggerMode,
       reviewContext: reviewContext as ReviewContext,

@@ -40,6 +40,7 @@ export const ScopeFormPage: FC<Props> = ({
     gateOnBlocking: values?.gateOnBlocking ?? scope?.gateOnBlocking ?? false,
     footerTemplate: values?.footerTemplate ?? scope?.footerTemplate ?? null,
     personalityPrompt: values?.personalityPrompt ?? scope?.personalityPrompt ?? null,
+    humanize: values?.humanize ?? scope?.humanize ?? false,
     reviewerSkill: values?.reviewerSkill ?? scope?.reviewerSkill ?? null,
     triggerMode: values?.triggerMode ?? scope?.triggerMode ?? 'open',
     reviewContext:
@@ -355,6 +356,31 @@ export const ScopeFormPage: FC<Props> = ({
             verdict thresholds and output format still come from{' '}
             <code class="mono-sm">{v.scrutiny}</code>. Leave blank for default
             behavior.
+          </p>
+          {/*
+            Opt-in second LLM call that rewrites the parsed review body in
+            the personality's voice. Only useful with a non-empty
+            personality (the form parser silently coerces to false
+            otherwise) and is the only reliable way to humanize the tone
+            when a skill drives the review — in-prompt personality usually
+            gets drowned out by the skill's own format instructions.
+          */}
+          <label class="checkbox" style="margin-top: 0.5rem;">
+            <input
+              type="checkbox"
+              name="humanize"
+              checked={v.humanize}
+            />
+            <span>
+              Rewrite output in this voice (second LLM call, ~2x latency
+              and cost)
+            </span>
+          </label>
+          <p class="form-hint">
+            Off by default. Best for skill-driven reviews (e.g.{' '}
+            <code class="mono-sm">bmad-code-review</code>) where the
+            skill's own formatting drowns out the personality. No-op if
+            the personality above is blank.
           </p>
         </fieldset>
 

@@ -29,6 +29,11 @@ export type PendingReview = {
   footerTemplate: string | null;
   /** Snapshotted from the matching scope at enqueue time. See db/scopes.ts. */
   personalityPrompt: string | null;
+  /** Snapshotted from the matching scope at enqueue time. When true (and
+   * personalityPrompt is set), the runner adds a second LLM call after
+   * the review parses to rewrite the prose body in the personality's
+   * voice. Doubles latency + cost; off by default. */
+  humanize: boolean;
   /** Snapshotted from the matching scope at enqueue time. When set, the
    * worker invokes the named Claude Code skill (e.g. 'bmad-code-review')
    * via `claude -p` instead of the built-in scrutiny prompt. Null = the
@@ -83,6 +88,7 @@ export type EnqueueInput = {
   gateOnBlocking: boolean;
   footerTemplate: string | null;
   personalityPrompt: string | null;
+  humanize: boolean;
   reviewerSkill: string | null;
   reviewContext: ReviewContext;
 };
@@ -104,6 +110,7 @@ const SELECT_REVIEW_COLUMNS = sql`
   gate_on_blocking AS "gateOnBlocking",
   footer_template AS "footerTemplate",
   personality_prompt AS "personalityPrompt",
+  humanize,
   reviewer_skill AS "reviewerSkill",
   review_context AS "reviewContext",
   status,
@@ -156,7 +163,7 @@ export async function enqueueReview(input: EnqueueInput): Promise<PendingReview 
       user_id, scope_id, repo_full, pr_number, pr_title, pr_author,
       base_branch, head_branch, head_sha, scrutiny, claude_mode,
       auto_approve, gate_on_blocking, footer_template, personality_prompt,
-      reviewer_skill, review_context, status
+      humanize, reviewer_skill, review_context, status
     ) VALUES (
       ${input.userId},
       ${input.scopeId ?? null},
@@ -173,6 +180,7 @@ export async function enqueueReview(input: EnqueueInput): Promise<PendingReview 
       ${input.gateOnBlocking},
       ${input.footerTemplate},
       ${input.personalityPrompt},
+      ${input.humanize},
       ${input.reviewerSkill ?? null},
       ${input.reviewContext},
       'queued'
