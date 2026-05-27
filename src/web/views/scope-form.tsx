@@ -382,6 +382,17 @@ export const ScopeFormPage: FC<Props> = ({
             skill's own formatting drowns out the personality. No-op if
             the personality above is blank.
           </p>
+          <p class="form-hint">
+            <strong>Voice tip:</strong> if humanize output still reads as
+            AI, the personality field above is probably too abstract.
+            "Sound like a senior developer" is unactionable — models keep
+            the AI-shaped template (Major/Minor/Nit headers, bolded
+            lead-ins, "things I checked" closers) and only polish the
+            prose. Paste a 2–3 sentence snippet of a real review whose
+            cadence you want to match, or name concrete patterns ("ask
+            direct questions, use 'nit:' inline, no severity headers, let
+            depth be uneven"). Concrete examples beat adjective lists.
+          </p>
         </fieldset>
 
         <fieldset class="form-row">
