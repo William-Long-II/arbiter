@@ -56,6 +56,7 @@ import { describeError } from '../errors.ts';
 import { postPullRequestReview } from '../github/pulls.ts';
 import { QueuePage } from './views/queue-list.tsx';
 import { QueueDetailPage } from './views/queue-detail.tsx';
+import { ReReviewPage } from './views/re-review.tsx';
 import { RepoPrsPage } from './views/repo-prs.tsx';
 import { SettingsPage, type ServerConfigSnapshot } from './views/settings.tsx';
 import { landingPage } from './views/landing.ts';
@@ -542,6 +543,93 @@ export function buildApp(): Hono {
       return c.text('Review not found or not in a failed state', 404);
     }
     return c.redirect(`/queue/${id}`);
+  });
+
+  // Manual re-review. Unlike retry (which resets a failed row in place),
+  // this enqueues a *fresh* row for the same PR — at its current head SHA —
+  // with optionally tweaked settings, keeping the prior run as history.
+  // The GET renders the prefilled form; the POST does the enqueue.
+  app.get('/queue/:id/re-review', requireUser, async (c) => {
+    const user = c.get('user');
+    const id = parseInt(c.req.param('id'), 10);
+    if (Number.isNaN(id)) return c.notFound();
+    const review = await getReview(user.id, id);
+    if (!review) return c.notFound();
+    return c.html(
+      <ReReviewPage user={user} review={review} error={c.req.query('error')} />,
+    );
+  });
+
+  app.post('/queue/:id/re-review', requireUser, async (c) => {
+    const user = c.get('user');
+    const id = parseInt(c.req.param('id'), 10);
+    if (Number.isNaN(id)) return c.notFound();
+    const source = await getReview(user.id, id);
+    if (!source) return c.notFound();
+
+    const form = await readFormStrings(c);
+    // Each setting falls back to the source review's value, so a bare submit
+    // reproduces the original run; the form just lets you raise the bar.
+    const scrutiny = isScrutiny(form.scrutiny) ? form.scrutiny : source.scrutiny;
+    const reviewContext = isReviewContext(form.review_context)
+      ? form.review_context
+      : source.reviewContext;
+    const claudeMode =
+      form.claude_mode === 'subscription' || form.claude_mode === 'api'
+        ? form.claude_mode
+        : source.claudeMode;
+    const autoApprove = form.auto_approve === '1' || form.auto_approve === 'on';
+    const humanize = form.humanize === '1' || form.humanize === 'on';
+    const personalityPrompt = form.personality_prompt?.trim()
+      ? form.personality_prompt.trim()
+      : null;
+
+    const backTo = `/queue/${id}/re-review`;
+    try {
+      // Re-fetch the live PR: posting a review attaches to the head commit,
+      // so we must review whatever HEAD is now (which may have advanced
+      // since the original run), not the stale snapshot on `source`.
+      const { pr } = await fetchPullRequest(
+        user.githubToken,
+        source.repoFull,
+        source.prNumber,
+      );
+      const row = await enqueueReview({
+        userId: user.id,
+        scopeId: source.scopeId,
+        repoFull: pr.repoFull,
+        prNumber: pr.number,
+        prTitle: pr.title,
+        prAuthor: pr.author,
+        baseBranch: pr.baseBranch,
+        headBranch: pr.headBranch,
+        headSha: pr.headSha,
+        scrutiny,
+        claudeMode,
+        autoApprove,
+        // Carried over from the original run, not exposed in the form.
+        gateOnBlocking: source.gateOnBlocking,
+        footerTemplate: source.footerTemplate,
+        personalityPrompt,
+        humanize,
+        reviewerSkill: source.reviewerSkill,
+        reviewContext,
+        // The whole point: a manual row is exempt from the (repo, pr, sha)
+        // idempotency index, so re-running on an unchanged HEAD still works.
+        trigger: 'manual',
+      });
+      if (!row) {
+        // Manual rows skip the idempotency index, so a null here means an
+        // unexpected insert failure rather than a dedupe.
+        return c.redirect(
+          `${backTo}?error=${encodeURIComponent('Could not enqueue the re-review. Try again.')}`,
+        );
+      }
+      return c.redirect(`/queue/${row.id}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.redirect(`${backTo}?error=${encodeURIComponent(message)}`);
+    }
   });
 
   // SSE stream of review state changes for the current user. Powered by

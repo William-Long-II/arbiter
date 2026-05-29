@@ -98,9 +98,20 @@ export const QueueDetailPage: FC<Props> = ({
           </h1>
           <p class="page-subhead queue-detail-subhead">{review.prTitle}</p>
         </div>
-        <a class="cta-secondary" href={ghUrl} target="_blank" rel="noopener noreferrer">
-          Open on GitHub ↗
-        </a>
+        <div class="page-header-actions">
+          {/* Re-review re-runs against the PR's current head; only meaningful
+              once this run has reached a terminal state. */}
+          {review.status === 'done' ||
+          review.status === 'failed' ||
+          review.status === 'skipped' ? (
+            <a class="cta-secondary" href={`/queue/${review.id}/re-review`}>
+              ↻ Re-review
+            </a>
+          ) : null}
+          <a class="cta-secondary" href={ghUrl} target="_blank" rel="noopener noreferrer">
+            Open on GitHub ↗
+          </a>
+        </div>
       </header>
 
       <div class="card queue-meta-card">
@@ -370,7 +381,7 @@ export const QueueDetailPage: FC<Props> = ({
           <p class="page-subhead queue-siblings-hint">
             Other reviews this user has run against{' '}
             <code class="mono-sm">{review.repoFull}#{review.prNumber}</code>{' '}
-            at different head SHAs.
+            — earlier head SHAs and any manual re-reviews.
           </p>
           <ul class="row-list queue-siblings">
             {siblings.map((s) => (
@@ -472,6 +483,9 @@ const SiblingRow: FC<{ review: PendingReview }> = ({ review }) => {
       <a href={`/queue/${review.id}`} class="queue-sibling-link">
         <span class={`badge-pill status-${review.status}`}>{review.status}</span>
         <span class="mono-sm queue-sibling-sha">{review.headSha.slice(0, 8)}</span>
+        {review.triggerSource === 'manual' ? (
+          <span class="badge-pill badge-pill-muted">re-review</span>
+        ) : null}
         {review.verdict ? (
           <span class={`badge-pill verdict-${review.verdict}`}>{review.verdict}</span>
         ) : null}

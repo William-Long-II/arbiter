@@ -603,6 +603,10 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
 .page-header-with-action {
   display: flex; align-items: flex-start; justify-content: space-between; gap: 24px;
 }
+/* Side-by-side actions in a page header (e.g. Re-review + Open on GitHub). */
+.page-header-actions {
+  display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+}
 
 /* Scope-specific pill colors */
 .scrutiny-light { color: #5db8a6; }
