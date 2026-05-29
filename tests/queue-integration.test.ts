@@ -151,4 +151,32 @@ suite('queue helpers (Postgres integration)', () => {
     // It's queued again but defer_until is in the future → not claimable.
     expect(await claimNext()).toBeNull();
   });
+
+  // Last in the suite: it leaves queued rows behind (cleaned up by the user
+  // cascade in afterAll), so keep it after the claimNext/defer tests that
+  // assume a drained queue.
+  test('manual re-review bypasses idempotency and stacks on the same head SHA', async () => {
+    // The (repo, pr, sha) unique index is partial on trigger='auto', so a
+    // manual re-review on an already-reviewed SHA must still insert — and a
+    // second one too, giving a history of re-runs.
+    const auto = await enqueueReview(input({ headSha: 'sha-ccc' }));
+    expect(auto).not.toBeNull();
+    expect(auto!.triggerSource).toBe('auto');
+
+    const dupAuto = await enqueueReview(input({ headSha: 'sha-ccc' }));
+    expect(dupAuto).toBeNull(); // same SHA, auto → deduped
+
+    const manual1 = await enqueueReview(
+      input({ headSha: 'sha-ccc', trigger: 'manual' }),
+    );
+    expect(manual1).not.toBeNull(); // same SHA, manual → inserts anyway
+    expect(manual1!.triggerSource).toBe('manual');
+    expect(manual1!.id).not.toBe(auto!.id);
+
+    const manual2 = await enqueueReview(
+      input({ headSha: 'sha-ccc', trigger: 'manual' }),
+    );
+    expect(manual2).not.toBeNull(); // re-reviews stack
+    expect(manual2!.id).not.toBe(manual1!.id);
+  });
 });

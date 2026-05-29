@@ -42,6 +42,10 @@ export type PendingReview = {
   /** Snapshotted from the matching scope at enqueue time. What the
    * reviewer subprocess sees ('isolated' default | 'checkout'). */
   reviewContext: ReviewContext;
+  /** How this row was created. 'auto' = poller/webhook ingestion (covered
+   * by the idempotency index); 'manual' = a user-initiated re-review, which
+   * is exempt from that index so it can stack on the same head SHA. */
+  triggerSource: 'auto' | 'manual';
   status: ReviewStatus;
   /** Sub-status while status === 'running'; null otherwise. */
   phase: ReviewPhase | null;
@@ -91,6 +95,10 @@ export type EnqueueInput = {
   humanize: boolean;
   reviewerSkill: string | null;
   reviewContext: ReviewContext;
+  /** Defaults to 'auto'. Set 'manual' for a user-initiated re-review so the
+   * (repo, pr, sha) idempotency index — which is partial on 'auto' — never
+   * collapses it into an existing row. */
+  trigger?: 'auto' | 'manual';
 };
 
 const SELECT_REVIEW_COLUMNS = sql`
@@ -113,6 +121,7 @@ const SELECT_REVIEW_COLUMNS = sql`
   humanize,
   reviewer_skill AS "reviewerSkill",
   review_context AS "reviewContext",
+  trigger_source AS "triggerSource",
   status,
   phase,
   attempt,
@@ -163,7 +172,7 @@ export async function enqueueReview(input: EnqueueInput): Promise<PendingReview 
       user_id, scope_id, repo_full, pr_number, pr_title, pr_author,
       base_branch, head_branch, head_sha, scrutiny, claude_mode,
       auto_approve, gate_on_blocking, footer_template, personality_prompt,
-      humanize, reviewer_skill, review_context, status
+      humanize, reviewer_skill, review_context, trigger_source, status
     ) VALUES (
       ${input.userId},
       ${input.scopeId ?? null},
@@ -183,9 +192,10 @@ export async function enqueueReview(input: EnqueueInput): Promise<PendingReview 
       ${input.humanize},
       ${input.reviewerSkill ?? null},
       ${input.reviewContext},
+      ${input.trigger ?? 'auto'},
       'queued'
     )
-    ON CONFLICT (repo_full, pr_number, head_sha) DO NOTHING
+    ON CONFLICT (repo_full, pr_number, head_sha) WHERE trigger_source = 'auto' DO NOTHING
     RETURNING ${SELECT_REVIEW_COLUMNS}
   `;
   const row = rows[0] ?? null;
