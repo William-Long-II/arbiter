@@ -34,13 +34,13 @@ const MAX_OUTPUT_TOKENS = 4096;
 
 // Hard caps to protect the worker (and your subscription quota / API
 // budget) from runaway inputs and stuck subprocesses.
-const REVIEW_TIMEOUT_MS = 5 * 60_000;     // 5 minutes
+const REVIEW_TIMEOUT_MS = config.reviewTimeoutSeconds * 1000;  // default 15 min, REVIEW_TIMEOUT_SECONDS
 export const MAX_DIFF_BYTES = 1_000_000;  // ~1 MB of unified diff
 
 // Boot-time credential check. A real `claude -p` round-trip is ~5-15s;
 // 30s is comfortably above that but far below REVIEW_TIMEOUT_MS, so an
 // unauthenticated CLI (which *hangs* rather than erroring) is caught in
-// seconds at startup instead of silently burning 5 minutes per review.
+// seconds at startup instead of silently burning the full review window.
 const PREFLIGHT_TIMEOUT_MS = 30_000;
 // Each git step in a 'checkout'-context review is bounded so a slow or
 // huge repo can't eat the whole review window. Exceeding it falls back

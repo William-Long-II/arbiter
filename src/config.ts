@@ -66,6 +66,11 @@ export const config = {
     bin: optional('CLAUDE_BIN', 'claude'),
     apiKey: optional('ANTHROPIC_API_KEY', ''),
   },
+  // Wall-clock budget for a single review's Claude call (and each git step
+  // in a checkout review is separately bounded below this). Large PRs need
+  // more headroom, so this is tunable; the default is generous. Bumping it
+  // trades faster failure-detection for fewer timeouts on big diffs.
+  reviewTimeoutSeconds: intEnvMin('REVIEW_TIMEOUT_SECONDS', 900, 60),
   pollIntervalSeconds: intEnv('POLL_INTERVAL_SECONDS', 60),
   workerIntervalSeconds: intEnv('WORKER_INTERVAL_SECONDS', 5),
   // How many reviews the worker processes concurrently in this process.
