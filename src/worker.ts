@@ -31,6 +31,11 @@ import {
 import { isTransientError, MAX_ATTEMPTS, retryDelaySeconds } from './retry.ts';
 import { pickReviewEvent, selectInlineFindings, statusForReview } from './review/gate.ts';
 import { postCommitStatus } from './github/status.ts';
+import {
+  listReviewThreads,
+  resolveReviewThread,
+  selectThreadsToResolve,
+} from './github/threads.ts';
 import { commentableLines, selectReviewComments } from './review/diffmap.ts';
 import {
   buildSignalsNote,
@@ -291,6 +296,24 @@ async function processJob(job: PendingReview): Promise<void> {
       );
     }
 
+    // Snapshot the PR's review threads BEFORE posting, so the new
+    // review's own inline threads can't be swept up by the resolve pass
+    // below. Best-effort: thread hygiene must never cost the review.
+    let staleThreadIds: string[] = [];
+    try {
+      const priorThreads = await listReviewThreads(
+        userRow.token,
+        job.repoFull,
+        job.prNumber,
+      );
+      staleThreadIds = selectThreadsToResolve(priorThreads, userRow.login);
+    } catch (threadErr) {
+      console.warn(
+        `[worker] #${job.id} listing review threads failed (non-fatal): ` +
+          `${threadErr instanceof Error ? threadErr.message : String(threadErr)}`,
+      );
+    }
+
     await setReviewPhase(job.id, 'posting');
     try {
       await postPullRequestReview(
@@ -327,6 +350,31 @@ async function processJob(job: PendingReview): Promise<void> {
         return;
       }
       throw postErr;
+    }
+
+    // This pass supersedes the threads arbiter opened on earlier passes:
+    // resolve them so "require conversation resolution" rules don't gate
+    // the merge on stale findings (anything still wrong was just re-flagged
+    // by the review we posted above). Only arbiter's own threads, and only
+    // ones nobody else has replied to — see selectThreadsToResolve.
+    // Best-effort per thread; a resolve failure must never fail the review.
+    if (staleThreadIds.length > 0) {
+      let resolved = 0;
+      for (const threadId of staleThreadIds) {
+        try {
+          await resolveReviewThread(userRow.token, threadId);
+          resolved++;
+        } catch (resolveErr) {
+          console.warn(
+            `[worker] #${job.id} resolving thread ${threadId} failed (non-fatal): ` +
+              `${resolveErr instanceof Error ? resolveErr.message : String(resolveErr)}`,
+          );
+        }
+      }
+      console.log(
+        `[worker] #${job.id} resolved ${resolved}/${staleThreadIds.length} ` +
+          `stale arbiter thread(s) from prior passes`,
+      );
     }
 
     // Opt-in soft merge gate: a commit status mirroring the verdict. Make
