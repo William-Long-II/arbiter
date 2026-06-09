@@ -6,6 +6,7 @@
 // in the GraphQL API, hence no octokit.rest here.
 
 import { octokitFor } from './api.ts';
+import { describeError } from '../errors.ts';
 
 /** The slice of a PR review thread the resolve policy needs. */
 export type PRReviewThread = {
@@ -15,6 +16,10 @@ export type PRReviewThread = {
   /** Author login of every comment in the thread, in order. `null` for
    *  comments whose author is unavailable (deleted account, some bots). */
   commentAuthors: Array<string | null>;
+  /** True when the thread holds more comments than the query fetched.
+   *  The unseen tail could be anyone, so the resolve policy must treat
+   *  the author list as incomplete and leave the thread alone. */
+  hasUnfetchedComments: boolean;
 };
 
 type ThreadsResponse = {
@@ -25,7 +30,10 @@ type ThreadsResponse = {
         nodes: Array<{
           id: string;
           isResolved: boolean;
-          comments: { nodes: Array<{ author: { login: string } | null } | null> };
+          comments: {
+            totalCount: number;
+            nodes: Array<{ author: { login: string } | null } | null>;
+          };
         } | null>;
       };
     } | null;
@@ -42,6 +50,7 @@ const THREADS_QUERY = /* GraphQL */ `
             id
             isResolved
             comments(first: 50) {
+              totalCount
               nodes { author { login } }
             }
           }
@@ -76,12 +85,14 @@ export async function listReviewThreads(
     if (!threads) break;
     for (const node of threads.nodes) {
       if (!node) continue;
+      const commentAuthors = node.comments.nodes.map(
+        (c) => c?.author?.login ?? null,
+      );
       out.push({
         id: node.id,
         isResolved: node.isResolved,
-        commentAuthors: node.comments.nodes.map((c) =>
-          c ? c.author?.login ?? null : null,
-        ),
+        commentAuthors,
+        hasUnfetchedComments: node.comments.totalCount > commentAuthors.length,
       });
     }
     if (!threads.pageInfo.hasNextPage || !threads.pageInfo.endCursor) break;
@@ -112,9 +123,10 @@ export async function resolveReviewThread(
  *
  * A thread qualifies only when it is unresolved AND every comment in it
  * was written by the reviewing account itself. One reply from anyone
- * else (or an unattributable comment) means a live conversation that is
- * not arbiter's to close — GitHub shows WHO resolved a thread, so being
- * conservative here is what keeps the feature trustworthy.
+ * else, an unattributable comment, or an author list we know is
+ * incomplete (hasUnfetchedComments) means a conversation that is not
+ * provably arbiter's to close — GitHub shows WHO resolved a thread, so
+ * being conservative here is what keeps the feature trustworthy.
  */
 export function selectThreadsToResolve(
   threads: PRReviewThread[],
@@ -125,8 +137,62 @@ export function selectThreadsToResolve(
     .filter(
       (t) =>
         !t.isResolved &&
+        !t.hasUnfetchedComments &&
         t.commentAuthors.length > 0 &&
         t.commentAuthors.every((a) => a !== null && a.toLowerCase() === me),
     )
     .map((t) => t.id);
+}
+
+/**
+ * Snapshot the ids of stale arbiter threads on a PR. Call BEFORE posting
+ * a new review, so the new review's own inline threads can't be swept up
+ * by resolveStaleThreads afterwards. Best-effort: any API failure logs a
+ * warning and returns [] — thread hygiene must never cost the review.
+ */
+export async function snapshotStaleThreads(
+  token: string,
+  repoFull: string,
+  prNumber: number,
+  reviewerLogin: string,
+  logLabel: string,
+): Promise<string[]> {
+  try {
+    const threads = await listReviewThreads(token, repoFull, prNumber);
+    return selectThreadsToResolve(threads, reviewerLogin);
+  } catch (err) {
+    console.warn(
+      `${logLabel} listing review threads failed (non-fatal): ${describeError(err)}`,
+    );
+    return [];
+  }
+}
+
+/**
+ * Resolve previously-snapshotted stale threads. Call AFTER the new
+ * review posted successfully — the new pass supersedes the findings
+ * behind these threads, so "require conversation resolution" rules stop
+ * gating the merge on them. Best-effort per thread: failures are logged
+ * and skipped, never thrown.
+ */
+export async function resolveStaleThreads(
+  token: string,
+  threadIds: string[],
+  logLabel: string,
+): Promise<void> {
+  if (threadIds.length === 0) return;
+  let resolved = 0;
+  for (const threadId of threadIds) {
+    try {
+      await resolveReviewThread(token, threadId);
+      resolved++;
+    } catch (err) {
+      console.warn(
+        `${logLabel} resolving thread ${threadId} failed (non-fatal): ${describeError(err)}`,
+      );
+    }
+  }
+  console.log(
+    `${logLabel} resolved ${resolved}/${threadIds.length} stale arbiter thread(s) from prior passes`,
+  );
 }

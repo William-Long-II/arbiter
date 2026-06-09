@@ -54,6 +54,10 @@ import {
 } from '../db/reviews.ts';
 import { describeError } from '../errors.ts';
 import { postPullRequestReview } from '../github/pulls.ts';
+import {
+  resolveStaleThreads,
+  snapshotStaleThreads,
+} from '../github/threads.ts';
 import { QueuePage } from './views/queue-list.tsx';
 import { QueueDetailPage } from './views/queue-detail.tsx';
 import { ReReviewPage } from './views/re-review.tsx';
@@ -464,6 +468,18 @@ export function buildApp(): Hono {
     bodyLines.push('', '<!-- arbiter:override=approve -->');
     const body = bodyLines.join('\n');
 
+    // Approve-anyway exists to unblock a merge the automated review was
+    // holding up — arbiter's stale threads gate that same merge under
+    // "require conversation resolution", so sweep them too. Snapshot
+    // before posting (same ordering contract as the worker).
+    const staleThreadIds = await snapshotStaleThreads(
+      user.githubToken,
+      review.repoFull,
+      review.prNumber,
+      user.githubLogin,
+      `[web] approve-anyway #${id}`,
+    );
+
     try {
       await postPullRequestReview(
         user.githubToken,
@@ -478,6 +494,12 @@ export function buildApp(): Hono {
         502,
       );
     }
+
+    await resolveStaleThreads(
+      user.githubToken,
+      staleThreadIds,
+      `[web] approve-anyway #${id}`,
+    );
 
     await recordApprovalOverride(review.id, user.id, reason);
     return c.redirect(`/queue/${id}`);
@@ -511,6 +533,18 @@ export function buildApp(): Hono {
       );
     }
 
+    // The worker snapshotted stale threads for this review but its post
+    // failed on the locked conversation, discarding them. Re-snapshot
+    // here so the re-post gets the same supersede semantics as the
+    // worker's happy path: post, then resolve prior arbiter threads.
+    const staleThreadIds = await snapshotStaleThreads(
+      user.githubToken,
+      review.repoFull,
+      review.prNumber,
+      user.githubLogin,
+      `[web] post-anyway #${id}`,
+    );
+
     try {
       await postPullRequestReview(
         user.githubToken,
@@ -526,6 +560,12 @@ export function buildApp(): Hono {
         502,
       );
     }
+
+    await resolveStaleThreads(
+      user.githubToken,
+      staleThreadIds,
+      `[web] post-anyway #${id}`,
+    );
 
     await markDone(review.id, review.output, review.verdict, review.postedEvent);
     return c.redirect(`/queue/${id}`);

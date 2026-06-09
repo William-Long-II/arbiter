@@ -8,7 +8,8 @@ const thread = (
   id: string,
   commentAuthors: Array<string | null>,
   isResolved = false,
-): PRReviewThread => ({ id, isResolved, commentAuthors });
+  hasUnfetchedComments = false,
+): PRReviewThread => ({ id, isResolved, commentAuthors, hasUnfetchedComments });
 
 describe('selectThreadsToResolve', () => {
   test('keeps unresolved threads authored solely by the reviewer', () => {
@@ -50,6 +51,15 @@ describe('selectThreadsToResolve', () => {
     expect(
       selectThreadsToResolve(
         [thread('t1', ['arbiter-bot', null])],
+        'arbiter-bot',
+      ),
+    ).toEqual([]);
+  });
+
+  test('skips threads whose author list is truncated — unseen tail could be anyone', () => {
+    expect(
+      selectThreadsToResolve(
+        [thread('t1', ['arbiter-bot', 'arbiter-bot'], false, true)],
         'arbiter-bot',
       ),
     ).toEqual([]);
