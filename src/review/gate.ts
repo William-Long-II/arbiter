@@ -3,7 +3,7 @@
 // "deliberately non-aggressive by default" rule in one place: REQUEST_
 // CHANGES only happens when a scope explicitly opted into gate_on_blocking.
 
-import type { FindingCounts, Verdict } from './format.ts';
+import type { FindingCounts, FindingItem, Verdict } from './format.ts';
 
 export type ReviewEventChoice = 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES';
 
@@ -46,6 +46,26 @@ export function pickReviewEvent(args: {
     return 'REQUEST_CHANGES';
   }
   return 'COMMENT';
+}
+
+/**
+ * Which findings deserve their own inline thread, given the review event
+ * being posted. On APPROVE, minor/nit findings stay in the summary body
+ * only: every inline comment opens a conversation, and repos with
+ * "require conversation resolution" (ruleset or branch protection) turn
+ * each one into a merge blocker — on a PR the reviewer just approved.
+ * COMMENT and REQUEST_CHANGES keep everything inline; there the threads
+ * are the point.
+ */
+export function selectInlineFindings(
+  items: FindingItem[],
+  event: ReviewEventChoice,
+): { items: FindingItem[]; suppressed: number } {
+  if (event !== 'APPROVE') return { items, suppressed: 0 };
+  const kept = items.filter(
+    (it) => it.severity === 'blocking' || it.severity === 'major',
+  );
+  return { items: kept, suppressed: items.length - kept.length };
 }
 
 export type CommitStatusState = 'success' | 'failure';

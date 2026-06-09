@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test';
-import { hasBlocking, pickReviewEvent, statusForReview } from '../src/review/gate.ts';
-import type { FindingCounts } from '../src/review/format.ts';
+import {
+  hasBlocking,
+  pickReviewEvent,
+  selectInlineFindings,
+  statusForReview,
+} from '../src/review/gate.ts';
+import type { FindingCounts, FindingItem, Severity } from '../src/review/format.ts';
 
 const counts = (over: Partial<FindingCounts> = {}): FindingCounts => ({
   blocking: 0,
@@ -101,6 +106,46 @@ describe('pickReviewEvent', () => {
         verdict: 'request-changes',
       }),
     ).toBe('REQUEST_CHANGES');
+  });
+});
+
+describe('selectInlineFindings', () => {
+  const item = (severity: Severity, line = 1): FindingItem => ({
+    severity,
+    path: 'src/x.ts',
+    line,
+    body: `${severity} finding`,
+  });
+
+  test('APPROVE: minor/nit suppressed, blocking/major kept', () => {
+    const items = [item('blocking', 1), item('major', 2), item('minor', 3), item('nit', 4)];
+    const { items: kept, suppressed } = selectInlineFindings(items, 'APPROVE');
+    expect(kept.map((it) => it.severity)).toEqual(['blocking', 'major']);
+    expect(suppressed).toBe(2);
+  });
+
+  test('APPROVE with only minor/nit findings posts no inline comments', () => {
+    const { items: kept, suppressed } = selectInlineFindings(
+      [item('minor'), item('nit'), item('nit')],
+      'APPROVE',
+    );
+    expect(kept).toEqual([]);
+    expect(suppressed).toBe(3);
+  });
+
+  test('COMMENT and REQUEST_CHANGES keep everything inline', () => {
+    const items = [item('blocking'), item('major'), item('minor'), item('nit')];
+    for (const event of ['COMMENT', 'REQUEST_CHANGES'] as const) {
+      const { items: kept, suppressed } = selectInlineFindings(items, event);
+      expect(kept).toEqual(items);
+      expect(suppressed).toBe(0);
+    }
+  });
+
+  test('empty input is a no-op for every event', () => {
+    for (const event of ['APPROVE', 'COMMENT', 'REQUEST_CHANGES'] as const) {
+      expect(selectInlineFindings([], event)).toEqual({ items: [], suppressed: 0 });
+    }
   });
 });
 

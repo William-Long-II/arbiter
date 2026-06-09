@@ -29,7 +29,7 @@ import {
   runReview,
 } from './review/runner.ts';
 import { isTransientError, MAX_ATTEMPTS, retryDelaySeconds } from './retry.ts';
-import { pickReviewEvent, statusForReview } from './review/gate.ts';
+import { pickReviewEvent, selectInlineFindings, statusForReview } from './review/gate.ts';
 import { postCommitStatus } from './github/status.ts';
 import { commentableLines, selectReviewComments } from './review/diffmap.ts';
 import {
@@ -269,17 +269,25 @@ async function processJob(job: PendingReview): Promise<void> {
       verdict: result.verdict,
       postedEvent: event,
     });
-    // Inline comments: keep only model findings that anchor to a real
-    // line in this diff (GitHub 422s the whole review otherwise). The rest
-    // remain in the summary body the model already wrote.
-    const { comments: inlineComments, dropped } = selectReviewComments(
+    // Inline comments: on APPROVE, minor/nit findings stay in the summary
+    // body — each inline comment opens a conversation, and repos requiring
+    // thread resolution would gate the merge on nits the reviewer already
+    // approved past. Then keep only findings that anchor to a real line in
+    // this diff (GitHub 422s the whole review otherwise). Everything
+    // filtered here remains in the summary body the model already wrote.
+    const { items: inlineEligible, suppressed } = selectInlineFindings(
       result.items ?? [],
+      event,
+    );
+    const { comments: inlineComments, dropped } = selectReviewComments(
+      inlineEligible,
       commentableLines(diff),
     );
-    if (inlineComments.length > 0 || dropped > 0) {
+    if (inlineComments.length > 0 || dropped > 0 || suppressed > 0) {
       console.log(
         `[worker] #${job.id} inline comments: ${inlineComments.length} anchored` +
-          `${dropped > 0 ? `, ${dropped} unmapped (kept in summary)` : ''}`,
+          `${dropped > 0 ? `, ${dropped} unmapped (kept in summary)` : ''}` +
+          `${suppressed > 0 ? `, ${suppressed} minor/nit suppressed on approve (kept in summary)` : ''}`,
       );
     }
 
