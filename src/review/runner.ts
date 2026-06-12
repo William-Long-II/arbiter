@@ -7,11 +7,13 @@ import { config } from '../config.ts';
 import {
   FINDINGS_INSTRUCTION,
   ITEMS_INSTRUCTION,
+  PROCESS_GUARD,
   formatUserMessage,
   parseClaudeCliOutput,
   parseFindingItems,
   parseFindings,
   parseVerdict,
+  stripSkillMetaPreamble,
   type ReviewInput,
   type ReviewOutput,
 } from './format.ts';
@@ -108,7 +110,7 @@ async function buildSystemPrompt(
   const base = await loadScrutinyPrompt(input.scrutiny);
   let prompt =
     `${base}\n\n${FINDINGS_INSTRUCTION}\n\n${ITEMS_INSTRUCTION}\n\n` +
-    `${CONTEXT_PROMPT[context]}\n\n${INJECTION_GUARD}`;
+    `${CONTEXT_PROMPT[context]}\n\n${INJECTION_GUARD}\n\n${PROCESS_GUARD}`;
   const personality = input.personalityPrompt?.trim();
   if (personality) {
     prompt += `\n\n## Additional reviewer guidance for this scope\n\n${personality}`;
@@ -328,9 +330,11 @@ async function runViaClaudeCli(input: ReviewInput): Promise<ReviewOutput> {
  *
  * The skill must be reachable from the worker's home directory
  * (~/.claude/skills/<name>/ or via an installed plugin). If the skill is
- * missing the CLI just won't invoke it and we'll get a degraded review;
- * if the CLI errors, that surfaces as the existing non-zero-exit error
- * with stderr.
+ * missing the CLI just won't invoke it and we'll get a degraded review —
+ * the prompt tells the model to review silently anyway (PROCESS_GUARD),
+ * and stripSkillMetaPreamble scrubs + logs it if the model narrates the
+ * fallback into the body regardless. If the CLI errors, that surfaces as
+ * the existing non-zero-exit error with stderr.
  */
 async function runViaSkillCli(
   input: ReviewInput,
@@ -399,6 +403,19 @@ async function runViaSkillCli(
       );
     }
     const out = parseClaudeCliOutput(stdout);
+    // Known degraded-mode leak: the skill isn't installed in the worker
+    // and the model narrates the fallback into the posted body. The
+    // prompt forbids it (PROCESS_GUARD); this catches it anyway, and the
+    // log tells the operator the worker image is missing the skill.
+    const swept = stripSkillMetaPreamble(out.body, skillName);
+    if (swept.stripped !== null) {
+      console.error(
+        `[runner] skill review leaked process meta-commentary ` +
+          `(skill=${skillName}, likely not installed in worker); ` +
+          `stripped: ${swept.stripped.slice(0, 200)}`,
+      );
+      out.body = swept.body;
+    }
     out.prompts = [{ label: `skill:${skillName}`, prompt: systemPrompt }];
     return out;
   } finally {
@@ -433,6 +450,9 @@ export function buildSkillSystemPrompt(
     `- Spec: none. Run in no-spec mode if the skill supports it.`,
     `- Do NOT pause or wait for user confirmation at any checkpoint —`,
     `  proceed all the way through to the combined final review.`,
+    `- If \`/${skillName}\` is not installed or fails to load, perform a`,
+    `  review of equivalent rigor yourself, and never mention the skill or`,
+    `  its absence in your output.`,
     ``,
     CONTEXT_PROMPT[context],
     ``,
@@ -446,6 +466,8 @@ export function buildSkillSystemPrompt(
     ITEMS_INSTRUCTION,
     ``,
     INJECTION_GUARD,
+    ``,
+    PROCESS_GUARD,
   ];
   const personality = personalityPrompt?.trim();
   if (personality) {
