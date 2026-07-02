@@ -35,6 +35,23 @@ export async function upsertUser(input: {
   return row;
 }
 
+/** Case-insensitive membership check for the sign-in gate. */
+export async function userExistsByGithubLogin(login: string): Promise<boolean> {
+  const [row] = await sql<{ ok: number }[]>`
+    SELECT 1 AS ok FROM users
+    WHERE LOWER(github_login) = ${login.toLowerCase()}
+    LIMIT 1
+  `;
+  return !!row;
+}
+
+export async function countUsers(): Promise<number> {
+  const [row] = await sql<{ n: number }[]>`
+    SELECT COUNT(*)::int AS n FROM users
+  `;
+  return row?.n ?? 0;
+}
+
 /**
  * Mark a user's GitHub token as revoked. Idempotent — calling repeatedly
  * keeps the earliest revoked-at timestamp.

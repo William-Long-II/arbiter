@@ -2,10 +2,18 @@ import type { Hono } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { config } from '../config.ts';
 import { SESSION_COOKIE, STATE_COOKIE, sign, verify } from '../web/cookies.ts';
-import { createSession, deleteSession, upsertUser } from '../db/users.ts';
 import {
+  countUsers,
+  createSession,
+  deleteSession,
+  upsertUser,
+  userExistsByGithubLogin,
+} from '../db/users.ts';
+import {
+  effectiveAllowedLogins,
   effectiveGithubClientId,
   effectiveGithubClientSecret,
+  isSignInAllowed,
 } from '../settings.ts';
 
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
@@ -83,6 +91,29 @@ export function mountGithubOAuth(app: Hono): void {
       login: string;
       avatar_url?: string;
     };
+
+    // Sign-in gate: this instance's reviews spend the owner's Claude
+    // subscription, so a valid GitHub account is not enough. See
+    // isSignInAllowed for the policy (returning user / allowlist /
+    // first-sign-in claims a fresh instance).
+    const [isExistingUser, userCount] = await Promise.all([
+      userExistsByGithubLogin(ghUser.login),
+      countUsers(),
+    ]);
+    const allowed = isSignInAllowed({
+      login: ghUser.login,
+      isExistingUser,
+      userCount,
+      allowlist: effectiveAllowedLogins(),
+    });
+    if (!allowed) {
+      console.log(`[oauth] denied sign-in for ${ghUser.login} (not on allowlist)`);
+      return c.text(
+        'This arbiter instance is private. Ask the instance owner to add ' +
+          'your GitHub username to ALLOWED_GITHUB_LOGINS.',
+        403,
+      );
+    }
 
     const user = await upsertUser({
       githubId: ghUser.id,
