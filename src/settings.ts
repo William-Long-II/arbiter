@@ -23,6 +23,7 @@ export const SETTING_KEYS = [
   'github_client_secret',
   'github_webhook_secret',
   'claude_code_oauth_token',
+  'allowed_github_logins',
   'setup_completed_at',
 ] as const;
 
@@ -86,6 +87,50 @@ export function effectiveClaudeOauthToken(): string {
     process.env.CLAUDE_CODE_OAUTH_TOKEN ?? '',
     cached('claude_code_oauth_token'),
   );
+}
+
+/** Parse an allowlist string (comma/whitespace-separated GitHub logins,
+ *  optional leading @) into a lowercased set. Pure — exported for tests. */
+export function parseAllowedLogins(raw: string): Set<string> {
+  return new Set(
+    raw
+      .split(/[\s,]+/)
+      .map((s) => s.replace(/^@/, '').trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+export function effectiveAllowedLogins(): Set<string> {
+  return parseAllowedLogins(
+    resolveEffective(
+      process.env.ALLOWED_GITHUB_LOGINS ?? '',
+      cached('allowed_github_logins'),
+    ),
+  );
+}
+
+/**
+ * Sign-in policy for the OAuth callback. Reviews run on the instance's
+ * Claude credentials, so an open sign-in would let any GitHub account
+ * spend the owner's subscription. Allowed:
+ *  - returning users (already in the users table — revoke by deleting
+ *    the row and leaving them off the allowlist),
+ *  - logins on the allowlist (env ALLOWED_GITHUB_LOGINS or the
+ *    wizard-written setting),
+ *  - anyone, when the users table is empty — the first sign-in claims
+ *    the instance (the fresh-deploy bootstrap; mirrors the setup wizard,
+ *    which is similarly first-come via the logged code).
+ * Pure — exported for tests.
+ */
+export function isSignInAllowed(args: {
+  login: string;
+  isExistingUser: boolean;
+  userCount: number;
+  allowlist: Set<string>;
+}): boolean {
+  if (args.isExistingUser) return true;
+  if (args.allowlist.has(args.login.toLowerCase())) return true;
+  return args.userCount === 0;
 }
 
 /**

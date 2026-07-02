@@ -62,6 +62,15 @@ This is what makes multi-instance hosts practical: hand someone a bare
 container + subdomain and they configure their own credentials from the
 browser.
 
+## Who can sign in
+
+Not every GitHub account: reviews spend the instance's Claude
+credentials, so sign-in is gated. The first account to sign in on a
+fresh instance claims it; after that, only returning users and logins
+listed in `ALLOWED_GITHUB_LOGINS` (comma/space-separated, case-
+insensitive) get in — everyone else sees a 403. To revoke someone,
+remove them from the allowlist and delete their `users` row.
+
 ## Subscription mode in Docker
 
 Default mode shells out to `claude -p` inside the container, which needs
