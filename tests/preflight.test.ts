@@ -64,6 +64,11 @@ describe('formatSubscriptionPreflightError', () => {
     expect(out).toContain('bun run setup');
     expect(out).toContain('CLAUDE_DEFAULT_MODE=api');
   });
+
+  test('leads with the headless token path', () => {
+    expect(out).toContain('CLAUDE_CODE_OAUTH_TOKEN');
+    expect(out).toContain('claude setup-token');
+  });
 });
 
 describe('upsertEnvLine', () => {

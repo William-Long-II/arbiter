@@ -31,6 +31,10 @@ services:
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
       CLAUDE_DEFAULT_MODE: ${CLAUDE_DEFAULT_MODE:-subscription}
       CLAUDE_BIN: ${CLAUDE_BIN:-claude}
+      # Long-lived subscription token from `claude setup-token`. When set,
+      # `claude -p` authenticates with it directly and the ~/.claude
+      # bind-mount below is unnecessary — the headless/server path.
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-60}
       WORKER_INTERVAL_SECONDS: ${WORKER_INTERVAL_SECONDS:-5}
@@ -41,7 +45,9 @@ services:
       # Windows, where ${HOME} is unset under PowerShell so the old
       # default fell back to a nonexistent /root/.claude and mounted
       # empty. Set it in .env. Linux/macOS still auto-resolve
-      # ~/.claude. Comment the line out entirely for api-only mode.
+      # ~/.claude. Comment the line out entirely for api-only mode or
+      # when CLAUDE_CODE_OAUTH_TOKEN is set (token wins either way; an
+      # empty auto-created mount dir is harmless).
       - ${CLAUDE_HOST_DIR:-${HOME:-/root}/.claude}:/root/.claude
     ports:
       - "8787:8787"

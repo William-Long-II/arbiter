@@ -44,9 +44,22 @@ App listens on `http://localhost:8787`. Health check at `/healthz`.
 ## Subscription mode in Docker
 
 Default mode shells out to `claude -p` inside the container, which needs
-your host's Claude Code credentials bind-mounted at `/root/.claude`. The
-plumbing differs by host OS — `bun run setup` handles it, but here's what
-it does and why:
+credentials. There are two ways to provide them:
+
+### Token (recommended for servers/VMs)
+
+Run `claude setup-token` on any machine where you're logged in — it prints
+a long-lived `sk-ant-oat...` token. Put it in `.env` as
+`CLAUDE_CODE_OAUTH_TOKEN` and you're done: no host login, no bind-mount,
+no OS-specific plumbing. This is also the only workable path when one
+host runs several arbiter instances on different people's subscriptions —
+each instance's `.env` carries its own token.
+
+### Bind-mount (local dev)
+
+Alternatively the container can borrow your host's interactive login,
+bind-mounted at `/root/.claude`. The plumbing differs by host OS —
+`bun run setup` handles it, but here's what it does and why:
 
 | Host    | What's needed | Why |
 |---------|---------------|-----|
