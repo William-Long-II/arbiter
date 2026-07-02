@@ -133,10 +133,12 @@ a missed delivery still gets picked up within the poll interval.
 
 Deliveries are authenticated by GitHub's `X-Hub-Signature-256` HMAC (not
 the session), so the endpoint is exempt from the same-origin guard.
-Reviews fire on `opened`, `reopened`, `synchronize`, and
-`ready_for_review`; drafts are skipped. Scopes in `review_requested`
-trigger mode still rely on the poller (team-resolved review requests need
-the poller's GraphQL search).
+Reviews fire on `opened`, `reopened`, `synchronize`, `ready_for_review`,
+and `review_requested`; drafts are skipped. Scopes in `review_requested`
+trigger mode fire instantly when the request names the user directly
+(the payload's `requested_reviewers` list). Requests routed via a
+**team** still land on the poll cadence — team membership isn't in the
+payload, so resolving it takes the poller's GraphQL search.
 
 ## Metrics (optional)
 

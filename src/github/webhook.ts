@@ -5,15 +5,18 @@
 import type { PRDetails } from './pulls.ts';
 
 // Pull-request actions worth a (re)review. Deliberately excludes `edited`,
-// `labeled`, `closed`, `assigned`, etc. `review_requested` is intentionally
-// NOT here: resolving team-based review requests needs the GraphQL search
-// the poller already does, so review_requested-mode scopes keep relying on
-// the poller. `ready_for_review` covers the draft→ready transition.
+// `labeled`, `closed`, `assigned`, etc. `review_requested` fires when a
+// reviewer is added — the payload's `requested_reviewers` list lets
+// review_requested-mode scopes trigger instantly for directly-requested
+// users. Team-routed requests still rely on the poller: resolving team
+// membership needs the GraphQL search it already does.
+// `ready_for_review` covers the draft→ready transition.
 const RELEVANT_ACTIONS = new Set([
   'opened',
   'reopened',
   'synchronize',
   'ready_for_review',
+  'review_requested',
 ]);
 
 const encoder = new TextEncoder();
@@ -49,6 +52,10 @@ export async function verifyGithubSignature(
   return timingSafeEqual(computed, provided.toLowerCase());
 }
 
+function asString(v: unknown): string | null {
+  return typeof v === 'string' && v.length > 0 ? v : null;
+}
+
 /** Length-independent constant-time string compare (hex digests). */
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -68,10 +75,21 @@ type GhPullRequestPayload = {
     head?: { ref?: unknown; sha?: unknown };
     draft?: unknown;
     auto_merge?: unknown;
+    requested_reviewers?: unknown;
+    requested_teams?: unknown;
   };
 };
 
-export type ParsedPullRequestEvent = { action: string; pr: PRDetails };
+export type ParsedPullRequestEvent = {
+  action: string;
+  pr: PRDetails;
+  /** Logins (lowercased) with a pending direct review request on this PR.
+   *  GitHub clears a login from this list once that review is submitted. */
+  requestedReviewers: string[];
+  /** Slugs of teams with a pending review request. Not resolved to members
+   *  here — team-routed requests stay poller-driven (GraphQL search). */
+  requestedTeams: string[];
+};
 
 /**
  * Normalize a `pull_request` webhook into the same PRDetails the poller
@@ -111,8 +129,21 @@ export function parsePullRequestEvent(
   const headSha = typeof pull.head?.sha === 'string' ? pull.head.sha : '';
   if (!baseBranch || !headSha) return null;
 
+  const requestedReviewers = Array.isArray(pull.requested_reviewers)
+    ? pull.requested_reviewers
+        .map((r) => asString((r as { login?: unknown })?.login)?.toLowerCase())
+        .filter((x): x is string => !!x)
+    : [];
+  const requestedTeams = Array.isArray(pull.requested_teams)
+    ? pull.requested_teams
+        .map((t) => asString((t as { slug?: unknown })?.slug))
+        .filter((x): x is string => !!x)
+    : [];
+
   return {
     action,
+    requestedReviewers,
+    requestedTeams,
     pr: {
       repoFull,
       number,

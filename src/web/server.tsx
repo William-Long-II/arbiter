@@ -912,7 +912,7 @@ export function buildApp(): Hono {
     }
 
     try {
-      const enqueued = await enqueueAcrossUsers(parsed.pr);
+      const enqueued = await enqueueAcrossUsers(parsed.pr, parsed.requestedReviewers);
       return c.json({ ok: true, action: parsed.action, enqueued }, 202);
     } catch (err) {
       console.error('[webhook] dispatch error:', err);
