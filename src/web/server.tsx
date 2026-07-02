@@ -64,6 +64,12 @@ import { ReReviewPage } from './views/re-review.tsx';
 import { RepoPrsPage } from './views/repo-prs.tsx';
 import { SettingsPage, type ServerConfigSnapshot } from './views/settings.tsx';
 import { landingPage } from './views/landing.ts';
+import { mountSetup, setupGate } from './setup.ts';
+import {
+  effectiveGithubClientId,
+  effectiveGithubClientSecret,
+  effectiveWebhookSecret,
+} from '../settings.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const staticRoot = join(here, 'static');
@@ -76,6 +82,10 @@ export function buildApp(): Hono {
   // top-level form-driven POSTs from other sites. Origin/Referer matching
   // closes that gap. GETs are skipped (idempotent by convention).
   app.use('*', requireSameOrigin);
+
+  // Until first-run setup completes, everything redirects to the wizard.
+  // No-op on configured instances (env-configured ones never see it).
+  app.use('*', setupGate);
 
   app.get('/healthz', async (c) => {
     try {
@@ -165,7 +175,7 @@ export function buildApp(): Hono {
         sources={sources}
         query={query}
         includeArchived={includeArchived}
-        githubClientId={config.github.clientId}
+        githubClientId={effectiveGithubClientId()}
       />,
     );
   });
@@ -372,8 +382,8 @@ export function buildApp(): Hono {
     const snapshot: ServerConfigSnapshot = {
       port: config.port,
       publicUrl: config.publicUrl,
-      githubClientId: config.github.clientId,
-      githubClientSecretSet: !!config.github.clientSecret,
+      githubClientId: effectiveGithubClientId(),
+      githubClientSecretSet: !!effectiveGithubClientSecret(),
       claudeDefaultMode: config.claude.defaultMode,
       claudeBin: config.claude.bin,
       claudeApiKeySet: !!config.claude.apiKey,
@@ -869,7 +879,8 @@ export function buildApp(): Hono {
   // reviews; the poller stays on as a safety net so a missed or
   // mis-delivered hook is still picked up within the poll interval.
   app.post('/api/webhooks/github', async (c) => {
-    if (!config.github.webhookSecret) {
+    const webhookSecret = effectiveWebhookSecret();
+    if (!webhookSecret) {
       return c.json(
         { error: 'Webhook receiver disabled (no GITHUB_WEBHOOK_SECRET)' },
         503,
@@ -877,7 +888,7 @@ export function buildApp(): Hono {
     }
     const raw = await c.req.text();
     const sigOk = await verifyGithubSignature(
-      config.github.webhookSecret,
+      webhookSecret,
       raw,
       c.req.header('x-hub-signature-256'),
     );
@@ -910,6 +921,7 @@ export function buildApp(): Hono {
   });
 
   mountGithubOAuth(app);
+  mountSetup(app);
 
   return app;
 }
