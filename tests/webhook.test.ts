@@ -59,12 +59,36 @@ describe('parsePullRequestEvent', () => {
   });
 
   test('all relevant actions pass; irrelevant ones are ignored', () => {
-    for (const action of ['opened', 'reopened', 'synchronize', 'ready_for_review']) {
+    for (const action of ['opened', 'reopened', 'synchronize', 'ready_for_review', 'review_requested']) {
       expect(parsePullRequestEvent('pull_request', { ...base, action })).not.toBeNull();
     }
-    for (const action of ['edited', 'closed', 'labeled', 'assigned', 'review_requested']) {
+    for (const action of ['edited', 'closed', 'labeled', 'assigned', 'review_request_removed']) {
       expect(parsePullRequestEvent('pull_request', { ...base, action })).toBeNull();
     }
+  });
+
+  test('extracts requested reviewers (lowercased) and team slugs', () => {
+    const r = parsePullRequestEvent('pull_request', {
+      ...base,
+      action: 'review_requested',
+      pull_request: {
+        ...base.pull_request,
+        requested_reviewers: [
+          { login: 'William-Long-II' },
+          { login: 'brannon' },
+          { nope: true },
+        ],
+        requested_teams: [{ slug: 'platform-team' }, {}],
+      },
+    });
+    expect(r!.requestedReviewers).toEqual(['william-long-ii', 'brannon']);
+    expect(r!.requestedTeams).toEqual(['platform-team']);
+  });
+
+  test('missing reviewer/team lists default to empty arrays', () => {
+    const r = parsePullRequestEvent('pull_request', base);
+    expect(r!.requestedReviewers).toEqual([]);
+    expect(r!.requestedTeams).toEqual([]);
   });
 
   test('non-PR events and non-objects are ignored', () => {

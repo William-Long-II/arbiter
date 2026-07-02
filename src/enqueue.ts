@@ -11,8 +11,10 @@ import { listScopes, type Scope } from './db/scopes.ts';
 import { enqueueReview, type PendingReview } from './db/reviews.ts';
 import type { PRDetails } from './github/pulls.ts';
 
-/** A PR plus the poller-only flag for review-requested gating. The webhook
- *  path leaves it undefined (review_requested scopes stay poller-driven). */
+/** A PR plus the flag for review-requested gating. The poller sets it from
+ *  its GraphQL `review-requested:` search (covers team-routed requests);
+ *  the webhook path sets it per user from the payload's direct
+ *  `requested_reviewers` list. */
 export type MatchablePR = PRDetails & { reviewRequestedForViewer?: boolean };
 
 export type EnqueueDecision = {
@@ -88,8 +90,17 @@ export async function enqueueForUser(args: {
  * user query so both ingestion paths see the same population. Returns the
  * number of rows enqueued. enqueueReview's idempotency means a webhook and
  * the poller racing on the same push can't double-enqueue.
+ *
+ * `requestedReviewers` (lowercased logins from the delivery payload) drives
+ * review_requested-mode scopes: a user on that list gets the instant
+ * webhook path. Team-routed requests aren't resolvable from the payload
+ * alone, so those users still get picked up by the poller's GraphQL search
+ * within the poll interval.
  */
-export async function enqueueAcrossUsers(pr: MatchablePR): Promise<number> {
+export async function enqueueAcrossUsers(
+  pr: MatchablePR,
+  requestedReviewers: string[] = [],
+): Promise<number> {
   const users = await sql<{ id: number; login: string }[]>`
     SELECT DISTINCT u.id, u.github_login AS login
     FROM users u
@@ -104,7 +115,12 @@ export async function enqueueAcrossUsers(pr: MatchablePR): Promise<number> {
       userId: u.id,
       selfLogin: u.login,
       scopes,
-      pr,
+      pr: {
+        ...pr,
+        reviewRequestedForViewer: requestedReviewers.includes(
+          u.login.toLowerCase(),
+        ),
+      },
     });
     if (review && matched) {
       enqueued++;
