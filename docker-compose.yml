@@ -15,7 +15,12 @@ services:
       timeout: 5s
       retries: 10
     ports:
-      - "5432:5432"
+      # Host binding for Postgres. The app reaches the db over the compose
+      # network regardless — this only exists for host-side tooling (psql,
+      # integration tests). On shared/public hosts set DB_BIND to a
+      # loopback-scoped, per-instance port (e.g. 127.0.0.1:15432) so the
+      # db is never internet-reachable and two stacks don't collide.
+      - "${DB_BIND:-5432}:5432"
 
   app:
     build: .
@@ -50,7 +55,10 @@ services:
       # empty auto-created mount dir is harmless).
       - ${CLAUDE_HOST_DIR:-${HOME:-/root}/.claude}:/root/.claude
     ports:
-      - "8787:8787"
+      # Host binding for the app. Behind a reverse proxy, scope it to
+      # loopback with a per-instance port (e.g. 127.0.0.1:8801) so only
+      # the proxy is reachable from outside.
+      - "${APP_BIND:-8787}:8787"
 
 volumes:
   db-data:
