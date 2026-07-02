@@ -41,6 +41,27 @@ docker compose up --build
 
 App listens on `http://localhost:8787`. Health check at `/healthz`.
 
+## First-run setup wizard
+
+A fresh instance doesn't need GitHub or Claude credentials in `.env` at
+all — only `SESSION_SECRET`, `PUBLIC_URL`, and (outside compose)
+`DATABASE_URL`. On boot without them, arbiter prints a one-time setup
+code to the logs and serves a wizard at `$PUBLIC_URL/setup` that collects:
+
+1. **GitHub OAuth app** client ID + secret (the page shows the exact
+   callback URL to register),
+2. a **Claude subscription token** from `claude setup-token`,
+   live-validated with a real `claude -p` call before it's saved,
+3. an optional **webhook secret**.
+
+Values are stored in the instance's database and take effect immediately
+— no restart. Env vars always win over wizard values, and an instance
+with `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` in the environment never
+shows the wizard, so existing deployments behave exactly as before.
+This is what makes multi-instance hosts practical: hand someone a bare
+container + subdomain and they configure their own credentials from the
+browser.
+
 ## Subscription mode in Docker
 
 Default mode shells out to `claude -p` inside the container, which needs

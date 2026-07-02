@@ -18,8 +18,23 @@ import {
   type ReviewOutput,
 } from './format.ts';
 import { INJECTION_GUARD } from './injection.ts';
+import { effectiveClaudeOauthToken } from '../settings.ts';
 
 export type { ReviewInput, ReviewOutput, Verdict } from './format.ts';
+
+/**
+ * Environment for `claude -p` subprocesses. When the instance has a
+ * subscription token (env CLAUDE_CODE_OAUTH_TOKEN or the wizard-written
+ * setting), inject it so the CLI authenticates with it instead of the
+ * bind-mounted /root/.claude login. `tokenOverride` lets the setup wizard
+ * live-validate a candidate token before anything is saved.
+ */
+function claudeSpawnEnv(tokenOverride?: string): Record<string, string | undefined> {
+  const token = tokenOverride ?? effectiveClaudeOauthToken();
+  return token
+    ? { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: token }
+    : { ...process.env };
+}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const promptsDir = join(here, 'prompts');
@@ -273,6 +288,7 @@ async function runViaClaudeCli(input: ReviewInput): Promise<ReviewOutput> {
         systemPrompt,
       ],
       cwd: workDir,
+      env: claudeSpawnEnv(),
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',
@@ -370,6 +386,7 @@ async function runViaSkillCli(
         systemPrompt,
       ],
       cwd: workDir,
+      env: claudeSpawnEnv(),
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',
@@ -589,6 +606,7 @@ async function humanizeBody(
         '--append-system-prompt',
         systemPrompt,
       ],
+      env: claudeSpawnEnv(),
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',
@@ -731,7 +749,7 @@ export interface PreflightResult {
  *   - non-zero exit       → CLI ran but rejected (expired/invalid creds);
  *                           stderr usually says which
  */
-export async function preflightClaudeCli(): Promise<PreflightResult> {
+export async function preflightClaudeCli(tokenOverride?: string): Promise<PreflightResult> {
   // Explicit pipe type params so stdin/stdout narrow to FileSink /
   // ReadableStream (a bare ReturnType<typeof Bun.spawn> stays the broad
   // union and loses .write/.end and Response() compatibility).
@@ -739,6 +757,7 @@ export async function preflightClaudeCli(): Promise<PreflightResult> {
   try {
     proc = Bun.spawn({
       cmd: [config.claude.bin, '-p', '--output-format', 'json'],
+      env: claudeSpawnEnv(tokenOverride),
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',

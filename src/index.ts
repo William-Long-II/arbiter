@@ -1,6 +1,11 @@
 import { config } from './config.ts';
 import { runMigrations, startEventListener } from './db.ts';
 import {
+  formatSetupBanner,
+  loadAppSettings,
+  setupNeeded,
+} from './settings.ts';
+import {
   formatSubscriptionPreflightError,
   preflightClaudeCli,
 } from './review/runner.ts';
@@ -10,14 +15,27 @@ import { startPoller, stopPoller } from './github/poller.ts';
 import { startRetention, stopRetention } from './retention.ts';
 
 async function main(): Promise<void> {
-  // Fail fast on unreachable subscription credentials. Done before any
-  // other boot work (no DB dependency) so the error is the first thing
-  // in the logs. Gated on the default mode: per-scope api overrides are
-  // unaffected; a per-scope subscription override while the default is
-  // api is the one edge this doesn't pre-check (rare, and that review
-  // still fails loudly via ReviewTimeoutError rather than hanging silently
-  // forever — the watchdog already bounds it).
-  if (config.claude.defaultMode === 'subscription') {
+  // Migrations and settings come first: the credential preflight below
+  // needs the wizard-written token (app_settings) to judge fairly, so it
+  // can no longer run DB-free at the very top.
+  console.log('[boot] running migrations…');
+  await runMigrations();
+  await loadAppSettings();
+
+  if (setupNeeded()) {
+    // Fresh instance: no OAuth app to sign in with and (typically) no
+    // Claude credentials yet. Skip the preflight — the wizard validates
+    // the token live before saving — and boot into setup mode: the HTTP
+    // server runs (everything redirects to /setup), the worker and poller
+    // idle harmlessly with zero users.
+    console.error(formatSetupBanner());
+  } else if (config.claude.defaultMode === 'subscription') {
+    // Fail fast on unreachable subscription credentials. Gated on the
+    // default mode: per-scope api overrides are unaffected; a per-scope
+    // subscription override while the default is api is the one edge this
+    // doesn't pre-check (rare, and that review still fails loudly via
+    // ReviewTimeoutError rather than hanging silently forever — the
+    // watchdog already bounds it).
     console.log('[boot] preflighting subscription credentials (claude -p)…');
     const pre = await preflightClaudeCli();
     if (!pre.ok) {
@@ -26,9 +44,6 @@ async function main(): Promise<void> {
     }
     console.log('[boot] subscription credentials OK');
   }
-
-  console.log('[boot] running migrations…');
-  await runMigrations();
 
   // Start the Postgres LISTEN for review state changes BEFORE accepting
   // HTTP requests, so the SSE route can subscribe to a live bus from

@@ -3,6 +3,10 @@ import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { config } from '../config.ts';
 import { SESSION_COOKIE, STATE_COOKIE, sign, verify } from '../web/cookies.ts';
 import { createSession, deleteSession, upsertUser } from '../db/users.ts';
+import {
+  effectiveGithubClientId,
+  effectiveGithubClientSecret,
+} from '../settings.ts';
 
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 const STATE_TTL_SECONDS = 60 * 10;             // 10 minutes
@@ -12,8 +16,10 @@ const isProd = process.env.NODE_ENV === 'production';
 
 export function mountGithubOAuth(app: Hono): void {
   app.get('/auth/github', async (c) => {
-    if (!config.github.clientId || !config.github.clientSecret) {
-      return c.text('GitHub OAuth not configured (set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET)', 500);
+    // Effective = env override or the wizard-written setting (settings.ts).
+    // Read per-request, not at mount: the wizard may complete after boot.
+    if (!effectiveGithubClientId() || !effectiveGithubClientSecret()) {
+      return c.text('GitHub OAuth not configured (set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET, or complete /setup)', 500);
     }
     const state = crypto.randomUUID();
     setCookie(c, STATE_COOKIE, await sign(state), {
@@ -24,7 +30,7 @@ export function mountGithubOAuth(app: Hono): void {
       maxAge: STATE_TTL_SECONDS,
     });
     const url = new URL('https://github.com/login/oauth/authorize');
-    url.searchParams.set('client_id', config.github.clientId);
+    url.searchParams.set('client_id', effectiveGithubClientId());
     url.searchParams.set('redirect_uri', `${config.publicUrl}/auth/github/callback`);
     url.searchParams.set('scope', SCOPES);
     url.searchParams.set('state', state);
@@ -48,8 +54,8 @@ export function mountGithubOAuth(app: Hono): void {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({
-        client_id: config.github.clientId,
-        client_secret: config.github.clientSecret,
+        client_id: effectiveGithubClientId(),
+        client_secret: effectiveGithubClientSecret(),
         code,
         redirect_uri: `${config.publicUrl}/auth/github/callback`,
       }),
