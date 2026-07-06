@@ -329,6 +329,49 @@ export async function retryFailedReview(
   return row;
 }
 
+/** Error text stamped on rows cleared via the queue's bulk-clear button.
+ *  The detail page shows it verbatim, so keep it human-readable. */
+export const CLEARED_BY_USER = 'Cleared from the queue before running.';
+
+/**
+ * Bulk-clear every queued review for a user — the recovery path for a
+ * scope misconfiguration that flooded the queue (e.g. an org-wide scope
+ * left in `open` trigger mode). Rows are marked `skipped`, NOT deleted:
+ * enqueueReview's idempotency guard is the row itself (ON CONFLICT on
+ * repo/pr/sha), so a delete would just let the next poll tick re-insert
+ * every PR that still matches a scope. Skipped keeps the dedup guard in
+ * place; retention prunes the rows on the normal schedule.
+ *
+ * Only `queued` rows: running rows have a worker process attached, and
+ * terminal rows are history. No per-row NOTIFY — clearing hundreds of
+ * rows would flood the events channel, and the acting tab redirects
+ * straight back to /queue anyway.
+ *
+ * Returns how many rows were cleared.
+ */
+export async function clearQueuedReviews(userId: number): Promise<number> {
+  const rows = await sql<{ id: number }[]>`
+    UPDATE pending_reviews
+    SET status = 'skipped',
+        phase = NULL,
+        finished_at = now(),
+        error = ${CLEARED_BY_USER}
+    WHERE user_id = ${userId} AND status = 'queued'
+    RETURNING id
+  `;
+  return rows.length;
+}
+
+/** Number of queued rows for a user; drives the "Clear queued" button. */
+export async function countQueuedReviews(userId: number): Promise<number> {
+  const rows = await sql<{ count: number }[]>`
+    SELECT count(*)::int AS count
+    FROM pending_reviews
+    WHERE user_id = ${userId} AND status = 'queued'
+  `;
+  return rows[0]?.count ?? 0;
+}
+
 export async function markFailed(id: number, error: string): Promise<void> {
   const rows = await sql<PendingReview[]>`
     UPDATE pending_reviews

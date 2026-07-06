@@ -8,6 +8,8 @@ type Props = {
   reviews: PendingReview[];
   /** Active filter from the URL. Empty = "all statuses". */
   statusFilter?: ReviewStatus[];
+  /** Total queued rows for this user (unfiltered) — drives "Clear queued". */
+  queuedCount?: number;
 };
 
 const FILTER_CHIPS: { status: ReviewStatus | null; label: string }[] = [
@@ -18,7 +20,12 @@ const FILTER_CHIPS: { status: ReviewStatus | null; label: string }[] = [
   { status: 'done', label: 'Done' },
 ];
 
-export const QueuePage: FC<Props> = ({ user, reviews, statusFilter = [] }) => {
+export const QueuePage: FC<Props> = ({
+  user,
+  reviews,
+  statusFilter = [],
+  queuedCount = 0,
+}) => {
   const active = new Set(statusFilter);
   const isAll = active.size === 0;
   // Spend across the rows actually shown (the same set the page renders,
@@ -59,6 +66,18 @@ export const QueuePage: FC<Props> = ({ user, reviews, statusFilter = [] }) => {
             </a>
           );
         })}
+        {queuedCount > 0 ? (
+          <form
+            method="post"
+            action="/queue/clear-queued"
+            class="queue-clear-form"
+            onsubmit={`return confirm('Clear all ${queuedCount} queued review${queuedCount === 1 ? '' : 's'}? They are marked skipped and will not run or come back. Running reviews and history are untouched; new pushes to the same PRs can still enqueue fresh reviews.')`}
+          >
+            <button type="submit" class="cta-tertiary cta-tertiary-danger">
+              Clear {queuedCount} queued
+            </button>
+          </form>
+        ) : null}
       </nav>
 
       {reviews.length === 0 ? (
