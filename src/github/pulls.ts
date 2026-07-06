@@ -436,13 +436,16 @@ const MAX_SEARCH_PAGES = 10; // up to 1000 PRs per query — search caps at 1000
 
 /**
  * Build the `q` string for GitHub's search syntax from a set of targets.
- * Always includes `is:pr is:open`. Extra terms appended as-is.
+ * Always includes `is:pr is:open archived:false` — GitHub search matches
+ * archived repos by default, and a read-only repo can't take a review
+ * post, so polling them only manufactures unpostable queue rows. Extra
+ * terms appended as-is.
  */
 function buildSearchQuery(targets: ScopeTarget[], extra: string[] = []): string {
   const terms = targets.map((t) =>
     t.kind === 'org' ? `org:${t.target}` : `repo:${t.target}`,
   );
-  return ['is:pr', 'is:open', ...terms, ...extra].join(' ');
+  return ['is:pr', 'is:open', 'archived:false', ...terms, ...extra].join(' ');
 }
 
 /**
