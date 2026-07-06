@@ -41,6 +41,8 @@ import {
   runReview,
 } from '../review/runner.ts';
 import {
+  clearQueuedReviews,
+  countQueuedReviews,
   enqueueReview,
   getReview,
   getReviewOverride,
@@ -406,13 +408,36 @@ export function buildApp(): Hono {
     const statusFilter: ReviewStatus[] = statusParam
       ? statusParam.split(',').map((s) => s.trim()).filter(isReviewStatus)
       : [];
-    const reviews = await listReviews(user.id, {
-      limit: 100,
-      statusFilter: statusFilter.length > 0 ? statusFilter : undefined,
-    });
+    const [reviews, queuedCount] = await Promise.all([
+      listReviews(user.id, {
+        limit: 100,
+        statusFilter: statusFilter.length > 0 ? statusFilter : undefined,
+      }),
+      countQueuedReviews(user.id),
+    ]);
     return c.html(
-      <QueuePage user={user} reviews={reviews} statusFilter={statusFilter} />,
+      <QueuePage
+        user={user}
+        reviews={reviews}
+        statusFilter={statusFilter}
+        queuedCount={queuedCount}
+      />,
     );
+  });
+
+  // Bulk-clear every queued review (marked skipped, not deleted — see
+  // clearQueuedReviews for why) — the recovery path when a misconfigured
+  // scope floods the queue (e.g. org-wide `open` trigger mode where
+  // `review_requested` was intended). Running rows are left alone: a
+  // worker already owns them. Same-origin POST (CSRF guard applies);
+  // scoped to the signed-in user by clearQueuedReviews itself.
+  app.post('/queue/clear-queued', requireUser, async (c) => {
+    const user = c.get('user');
+    const removed = await clearQueuedReviews(user.id);
+    console.log(
+      `[web] cleared ${removed} queued review(s) for ${user.githubLogin}`,
+    );
+    return c.redirect('/queue');
   });
 
   app.get('/queue/:id', requireUser, async (c) => {

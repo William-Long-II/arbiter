@@ -9,6 +9,9 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { runMigrations, sql } from '../src/db.ts';
 import {
   claimNext,
+  clearQueuedReviews,
+  CLEARED_BY_USER,
+  countQueuedReviews,
   deferReview,
   enqueueReview,
   getReview,
@@ -178,5 +181,49 @@ suite('queue helpers (Postgres integration)', () => {
     );
     expect(manual2).not.toBeNull(); // re-reviews stack
     expect(manual2!.id).not.toBe(manual1!.id);
+  });
+
+  test('clearQueuedReviews skips queued rows, spares others, keeps the dedup guard', async () => {
+    // Rows in play: the re-review test's leftovers plus a fresh queued one.
+    const fresh = await enqueueReview(input({ headSha: 'sha-clear' }));
+    expect(fresh).not.toBeNull();
+    expect(await countQueuedReviews(userId)).toBeGreaterThanOrEqual(1);
+
+    // Claim one row so a `running` row is present and must be spared too.
+    // Claimed before the second user exists, so it's guaranteed ours.
+    const running = await claimNext();
+    expect(running).not.toBeNull();
+
+    // A second user's queued row must survive our clear.
+    const [other] = await sql<{ id: number }[]>`
+      INSERT INTO users (github_id, github_login, github_token)
+      VALUES (${-Date.now() - 1}, ${'itest-user-2'}, ${'itest-token-2'})
+      RETURNING id
+    `;
+    const otherRow = await enqueueReview(
+      input({ userId: other!.id, prNumber: 2, headSha: 'sha-other' }),
+    );
+    expect(otherRow).not.toBeNull();
+
+    try {
+      const cleared = await clearQueuedReviews(userId);
+      expect(cleared).toBeGreaterThanOrEqual(1);
+      expect(await countQueuedReviews(userId)).toBe(0);
+
+      // The fresh row is skipped with the marker text; running spared.
+      const skipped = await getReview(userId, fresh!.id);
+      expect(skipped!.status).toBe('skipped');
+      expect(skipped!.error).toBe(CLEARED_BY_USER);
+      expect((await getReview(userId, running!.id))!.status).toBe('running');
+
+      // The other user's row is untouched.
+      expect(await countQueuedReviews(other!.id)).toBe(1);
+
+      // Cleared-not-deleted keeps enqueue idempotency: the poller can't
+      // silently re-add the same (repo, pr, sha) on the next tick.
+      expect(await enqueueReview(input({ headSha: 'sha-clear' }))).toBeNull();
+    } finally {
+      await sql`DELETE FROM users WHERE id = ${other!.id}`;
+    }
   });
 });

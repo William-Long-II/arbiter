@@ -350,9 +350,11 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
 
 /* Queue page: status filter chips */
 .queue-filter-row {
-  display: flex; gap: 4px; flex-wrap: wrap;
+  display: flex; gap: 4px; flex-wrap: wrap; align-items: center;
   margin-bottom: 12px;
 }
+/* Pushes "Clear N queued" to the far edge of the filter row. */
+.queue-clear-form { margin-left: auto; }
 .queue-filter-chip {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 12px;
