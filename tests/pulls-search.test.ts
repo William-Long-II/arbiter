@@ -4,8 +4,8 @@ import { __internals, type ScopeTarget } from '../src/github/pulls.ts';
 const { buildSearchQuery } = __internals;
 
 describe('buildSearchQuery', () => {
-  test('always starts with is:pr is:open', () => {
-    expect(buildSearchQuery([])).toBe('is:pr is:open');
+  test('always starts with is:pr is:open archived:false', () => {
+    expect(buildSearchQuery([])).toBe('is:pr is:open archived:false');
   });
 
   test('emits org: terms for org targets', () => {
@@ -13,7 +13,9 @@ describe('buildSearchQuery', () => {
       { kind: 'org', target: 'acme' },
       { kind: 'org', target: 'beta' },
     ];
-    expect(buildSearchQuery(targets)).toBe('is:pr is:open org:acme org:beta');
+    expect(buildSearchQuery(targets)).toBe(
+      'is:pr is:open archived:false org:acme org:beta',
+    );
   });
 
   test('emits repo: terms for repo targets', () => {
@@ -22,7 +24,7 @@ describe('buildSearchQuery', () => {
       { kind: 'repo', target: 'beta/gadget' },
     ];
     expect(buildSearchQuery(targets)).toBe(
-      'is:pr is:open repo:acme/widget repo:beta/gadget',
+      'is:pr is:open archived:false repo:acme/widget repo:beta/gadget',
     );
   });
 
@@ -32,14 +34,14 @@ describe('buildSearchQuery', () => {
       { kind: 'repo', target: 'other/thing' },
     ];
     expect(buildSearchQuery(targets)).toBe(
-      'is:pr is:open org:acme repo:other/thing',
+      'is:pr is:open archived:false org:acme repo:other/thing',
     );
   });
 
   test('appends extra terms (e.g. review-requested:@me)', () => {
     const targets: ScopeTarget[] = [{ kind: 'org', target: 'acme' }];
     expect(buildSearchQuery(targets, ['review-requested:@me'])).toBe(
-      'is:pr is:open org:acme review-requested:@me',
+      'is:pr is:open archived:false org:acme review-requested:@me',
     );
   });
 });
