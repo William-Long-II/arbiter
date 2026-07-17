@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config.ts';
 import {
+  AUTO_APPROVE_VERDICT_INSTRUCTION,
   FINDINGS_INSTRUCTION,
   ITEMS_INSTRUCTION,
   PROCESS_GUARD,
@@ -124,7 +125,9 @@ async function buildSystemPrompt(
 ): Promise<string> {
   const base = await loadScrutinyPrompt(input.scrutiny);
   let prompt =
-    `${base}\n\n${FINDINGS_INSTRUCTION}\n\n${ITEMS_INSTRUCTION}\n\n` +
+    `${base}\n\n${FINDINGS_INSTRUCTION}\n\n` +
+    (input.autoApprove ? `${AUTO_APPROVE_VERDICT_INSTRUCTION}\n\n` : '') +
+    `${ITEMS_INSTRUCTION}\n\n` +
     `${CONTEXT_PROMPT[context]}\n\n${INJECTION_GUARD}\n\n${PROCESS_GUARD}`;
   const personality = input.personalityPrompt?.trim();
   if (personality) {
@@ -373,6 +376,7 @@ async function runViaSkillCli(
       skillName,
       effectiveContext,
       input.personalityPrompt,
+      input.autoApprove,
     );
     const userMessage = formatUserMessage(input);
 
@@ -456,6 +460,7 @@ export function buildSkillSystemPrompt(
   skillName: string,
   context: 'isolated' | 'checkout',
   personalityPrompt?: string | null,
+  autoApprove?: boolean,
 ): string {
   const sections = [
     `You will review the pull request in the user message by running the`,
@@ -479,6 +484,7 @@ export function buildSkillSystemPrompt(
     `posted to GitHub) MUST start with arbiter's machine-readable markers:`,
     ``,
     FINDINGS_INSTRUCTION,
+    ...(autoApprove ? [``, AUTO_APPROVE_VERDICT_INSTRUCTION] : []),
     ``,
     ITEMS_INSTRUCTION,
     ``,

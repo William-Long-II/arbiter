@@ -75,6 +75,14 @@ export type Scope = {
   triggerMode: TriggerMode;
   /** What the reviewer subprocess sees. Default 'isolated'. */
   reviewContext: ReviewContext;
+  /**
+   * When a PR already has a completed review, run later reviews against
+   * only the compare-delta since the prior head, with the prior review
+   * supplied as context (big token/latency saving on iterating PRs). On
+   * by default; the worker falls back to a full review whenever the delta
+   * isn't clean (rebase, merge-from-base, compare failure).
+   */
+  incrementalRereview: boolean;
   enabled: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -119,6 +127,7 @@ const SELECT_COLUMNS = sql`
   reviewer_skill     AS "reviewerSkill",
   trigger_mode       AS "triggerMode",
   review_context     AS "reviewContext",
+  incremental_rereview AS "incrementalRereview",
   enabled,
   created_at       AS "createdAt",
   updated_at       AS "updatedAt"
@@ -158,6 +167,7 @@ export type ScopeInput = {
   reviewerSkill: string | null;
   triggerMode: TriggerMode;
   reviewContext: ReviewContext;
+  incrementalRereview: boolean;
   enabled: boolean;
 };
 
@@ -167,13 +177,14 @@ export async function createScope(userId: number, input: ScopeInput): Promise<Sc
       (user_id, target_kind, target, base_branch_pattern, scrutiny,
        exclude_authors, claude_mode, auto_approve, gate_on_blocking,
        footer_template, personality_prompt, humanize, reviewer_skill,
-       trigger_mode, review_context, enabled)
+       trigger_mode, review_context, incremental_rereview, enabled)
     VALUES
       (${userId}, ${input.targetKind}, ${input.target}, ${input.baseBranchPattern},
        ${input.scrutiny}, ${input.excludeAuthors}, ${input.claudeMode},
        ${input.autoApprove}, ${input.gateOnBlocking}, ${input.footerTemplate},
        ${input.personalityPrompt}, ${input.humanize}, ${input.reviewerSkill},
-       ${input.triggerMode}, ${input.reviewContext}, ${input.enabled})
+       ${input.triggerMode}, ${input.reviewContext},
+       ${input.incrementalRereview}, ${input.enabled})
     RETURNING ${SELECT_COLUMNS}
   `;
   if (!row) throw new Error('createScope: no row returned');
@@ -201,6 +212,7 @@ export async function updateScope(
         reviewer_skill = ${input.reviewerSkill},
         trigger_mode = ${input.triggerMode},
         review_context = ${input.reviewContext},
+        incremental_rereview = ${input.incrementalRereview},
         enabled = ${input.enabled},
         updated_at = now()
     WHERE id = ${id} AND user_id = ${userId}
@@ -276,6 +288,8 @@ export function parseScopeForm(
   const autoApprove = form.auto_approve === 'on' || form.auto_approve === 'true';
   const gateOnBlocking =
     form.gate_on_blocking === 'on' || form.gate_on_blocking === 'true';
+  const incrementalRereview =
+    form.incremental_rereview === 'on' || form.incremental_rereview === 'true';
   // Personality is plain text. Trim trailing whitespace, treat empty as null.
   const personalityRaw = (form.personality_prompt ?? '').replace(/\s+$/, '');
   const personalityPrompt = personalityRaw.length > 0 ? personalityRaw : null;
@@ -334,6 +348,7 @@ export function parseScopeForm(
       reviewerSkill,
       triggerMode: triggerMode as TriggerMode,
       reviewContext: reviewContext as ReviewContext,
+      incrementalRereview,
       enabled,
     },
   };

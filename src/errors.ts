@@ -9,10 +9,34 @@
  * A blank `error` makes a failure impossible to diagnose after the fact.
  * This guarantees we always store *something* actionable.
  */
+// An upstream (GitHub) error surfaced as a whole HTML document — e.g. the
+// 5xx "Unicorn!" page — instead of a JSON error. Storing it verbatim puts
+// ~300 KB of markup and base64 images into pending_reviews.error and the
+// logs. Collapse it to one line that keeps the diagnostic value: status
+// (when the error carries one) and the page <title>.
+// Anchored to the start: the message must BE an HTML document (that's how
+// Octokit surfaces an HTML body), not merely mention a tag.
+const HTML_DOC_RE = /^\s*(?:<!doctype\s+html|<html[\s>])/i;
+
+function collapseHtmlErrorPage(msg: string, err: Error): string | null {
+  if (!HTML_DOC_RE.test(msg)) return null;
+  const status = (err as { status?: unknown }).status;
+  const title = msg
+    .match(/<title>\s*([^<]{0,200}?)\s*<\/title>/i)?.[1]
+    ?.replace(/&middot;/g, '·')
+    .replace(/&amp;/g, '&');
+  const parts = [
+    typeof status === 'number' ? `HTTP ${status}` : null,
+    title ? `"${title}"` : null,
+  ].filter(Boolean);
+  return `upstream returned an HTML error page${parts.length ? ` (${parts.join(', ')})` : ''}`;
+}
+
 export function describeError(err: unknown): string {
   if (err instanceof Error) {
-    const msg = err.message?.trim();
+    let msg = err.message?.trim();
     if (msg) {
+      msg = collapseHtmlErrorPage(msg, err) ?? msg;
       // Prefix the class name for typed errors so e.g. a bare
       // "Unprocessable Entity" still tells you it was an HttpError.
       return err.name && err.name !== 'Error' ? `${err.name}: ${msg}` : msg;

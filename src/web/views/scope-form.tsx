@@ -45,6 +45,8 @@ export const ScopeFormPage: FC<Props> = ({
     triggerMode: values?.triggerMode ?? scope?.triggerMode ?? 'open',
     reviewContext:
       values?.reviewContext ?? scope?.reviewContext ?? 'isolated',
+    incrementalRereview:
+      values?.incrementalRereview ?? scope?.incrementalRereview ?? true,
     enabled: values?.enabled ?? scope?.enabled ?? true,
   };
 
@@ -285,9 +287,12 @@ export const ScopeFormPage: FC<Props> = ({
             <span>Auto-approve when no blockers</span>
           </label>
           <p class="form-hint">
-            Post as a GitHub <code class="mono-sm">APPROVE</code> when the reviewer's verdict
-            is <code class="mono-sm">approve</code>. Otherwise (or when the PR is yours, which
-            GitHub blocks anyway) posts as a regular <code class="mono-sm">COMMENT</code>.
+            Resolve every review to a real decision: post as a GitHub{' '}
+            <code class="mono-sm">APPROVE</code> when the reviewer's verdict is{' '}
+            <code class="mono-sm">approve</code>, and as{' '}
+            <code class="mono-sm">REQUEST_CHANGES</code> for any other verdict — no
+            verdict-less comment-only reviews. Your own PRs still post as a regular{' '}
+            <code class="mono-sm">COMMENT</code> (GitHub blocks self-review states).
           </p>
         </fieldset>
 
@@ -308,6 +313,24 @@ export const ScopeFormPage: FC<Props> = ({
             Off ⇒ blocking findings still post, just as a{' '}
             <code class="mono-sm">COMMENT</code>. Your own PRs fall back to{' '}
             <code class="mono-sm">COMMENT</code> (GitHub blocks self-review).
+          </p>
+        </fieldset>
+
+        <fieldset class="form-row">
+          <label class="checkbox">
+            <input
+              type="checkbox"
+              name="incremental_rereview"
+              checked={v.incrementalRereview}
+            />
+            <span>Incremental re-reviews</span>
+          </label>
+          <p class="form-hint">
+            When a PR already has a completed review, review only the changes
+            pushed since (with the prior review as context) instead of the
+            whole diff again — much cheaper and faster on iterating PRs. The
+            verdict still covers the whole PR, and arbiter falls back to a
+            full review when the branch was rebased or merged-into.
           </p>
         </fieldset>
 

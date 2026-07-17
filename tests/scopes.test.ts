@@ -22,6 +22,19 @@ describe('parseScopeForm', () => {
     expect(r.input.excludeAuthors).toEqual([]);
   });
 
+  test('incremental_rereview checkbox maps to the flag (absent = off)', () => {
+    const base = {
+      target_kind: 'repo',
+      target: 'owner/name',
+      scrutiny: 'standard',
+    };
+    const on = parseScopeForm({ ...base, incremental_rereview: 'on' });
+    const off = parseScopeForm(base);
+    if (!on.ok || !off.ok) throw new Error('unreachable');
+    expect(on.input.incrementalRereview).toBe(true);
+    expect(off.input.incrementalRereview).toBe(false);
+  });
+
   test('defaults base_branch_pattern to "*" when blank', () => {
     const r = parseScopeForm({
       target_kind: 'repo',

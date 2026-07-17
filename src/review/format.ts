@@ -44,6 +44,15 @@ export type ReviewInput = {
    * personalityPrompt's voice. No-op unless personalityPrompt is also
    * set. Off by default; doubles latency + cost. */
   humanize?: boolean;
+  /** Scope has auto-approve on. The review resolves to a binary GitHub
+   * decision (approve / request-changes), so the prompt additionally
+   * forbids the `comment` fence verdict. */
+  autoApprove?: boolean;
+  /** Incremental re-review context: when set, `diff` contains ONLY the
+   * changes since this prior review's head commit, and the prompt tells
+   * the model to re-verdict the whole PR with the prior review as its own
+   * earlier assessment. Null/undefined = normal full-diff review. */
+  priorReview?: { headSha: string; verdict: Verdict; body: string } | null;
 };
 
 export type Verdict = 'approve' | 'comment' | 'request-changes';
@@ -198,6 +207,24 @@ export const FINDINGS_INSTRUCTION = [
   '- Counts MUST be consistent with the body and verdict: `request-changes`',
   '  implies blocking >= 1; `approve` implies blocking = 0.',
   'Then continue with the human-readable Markdown review specified above.',
+].join('\n');
+
+/**
+ * Appended to the system prompt only for scopes with auto-approve on.
+ * Those scopes resolve every review to a real GitHub decision (see
+ * pickReviewEvent: non-approve posts as REQUEST_CHANGES), so the model
+ * must never sit on the `comment` fence — a fence verdict would request
+ * changes without saying what must change.
+ */
+export const AUTO_APPROVE_VERDICT_INSTRUCTION = [
+  'BINARY VERDICT — REQUIRED FOR THIS SCOPE.',
+  'This scope resolves every review to an explicit GitHub decision, so the',
+  'verdict marker MUST be `approve` or `request-changes` — NEVER `comment`.',
+  '- If nothing you found must change before merge, verdict `approve` and',
+  '  keep your observations as non-blocking notes.',
+  '- If anything must change before merge, verdict `request-changes`, with',
+  '  blocking >= 1 in the findings counts and the blocking issue(s) stated',
+  '  explicitly in the review body.',
 ].join('\n');
 
 /**
@@ -358,6 +385,36 @@ export function formatUserMessage(input: ReviewInput): string {
     `Author: ${input.prAuthor}`,
     `Scrutiny tier: ${input.scrutiny}`,
   ];
+  if (input.priorReview) {
+    const prior = input.priorReview;
+    const priorFence = pickFence(prior.body);
+    lines.push(
+      ``,
+      `## Incremental re-review`,
+      ``,
+      `You previously reviewed this pull request at commit ` +
+        `${prior.headSha.slice(0, 12)}; your verdict was \`${prior.verdict}\`. ` +
+        `Your previous review was:`,
+      ``,
+      `${priorFence}markdown`,
+      prior.body,
+      priorFence,
+      ``,
+      `The unified diff below contains ONLY the changes pushed since that`,
+      `review — it is NOT the full PR diff. Re-assess the pull request AS A`,
+      `WHOLE:`,
+      `- Check whether the new changes resolve the issues you previously`,
+      `  raised. A prior blocking issue counts as resolved only if these`,
+      `  changes actually fix it — restate any still-unresolved ones briefly`,
+      `  instead of re-deriving them.`,
+      `- Review the new changes themselves for fresh issues.`,
+      `- Do NOT re-litigate previously reviewed code that these changes do`,
+      `  not touch.`,
+      `- Your verdict marker and findings counts MUST reflect the ENTIRE`,
+      `  pull request (unresolved prior findings plus new ones), not just`,
+      `  this delta.`,
+    );
+  }
   if (input.ciSummary && input.ciSummary.trim().length > 0) {
     lines.push(``, input.ciSummary);
   }

@@ -148,6 +148,14 @@ export const QueueDetailPage: FC<Props> = ({
         <MetaRow label="Head SHA">
           <span class="mono-sm">{review.headSha.slice(0, 12)}</span>
         </MetaRow>
+        {review.incremental && review.priorHeadSha ? (
+          <MetaRow label="Coverage">
+            <span class="badge-pill badge-pill-muted">incremental</span>
+            <span class="mono-sm">
+              changes since {review.priorHeadSha.slice(0, 12)}
+            </span>
+          </MetaRow>
+        ) : null}
         <MetaRow label="Scrutiny">
           <span class={`badge-pill scrutiny-${review.scrutiny}`}>{review.scrutiny}</span>
         </MetaRow>

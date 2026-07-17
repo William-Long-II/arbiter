@@ -58,6 +58,33 @@ describe('pickReviewEvent', () => {
     ).toBe('COMMENT');
   });
 
+  test('auto-approve is binary: any non-approve verdict ⇒ REQUEST_CHANGES', () => {
+    expect(
+      pickReviewEvent({ ...base, autoApprove: true, verdict: 'request-changes' }),
+    ).toBe('REQUEST_CHANGES');
+    // Including the `comment` fence — and its cousin, the marker-omitted
+    // default. An auto-approve scope never posts a verdict-less COMMENT.
+    expect(
+      pickReviewEvent({ ...base, autoApprove: true, verdict: 'comment' }),
+    ).toBe('REQUEST_CHANGES');
+    expect(
+      pickReviewEvent({
+        ...base,
+        autoApprove: true,
+        verdict: 'comment',
+        findings: counts({ nit: 2 }),
+      }),
+    ).toBe('REQUEST_CHANGES');
+  });
+
+  test('auto-approve on own PR still falls back to COMMENT for every verdict', () => {
+    for (const verdict of ['approve', 'comment', 'request-changes'] as const) {
+      expect(
+        pickReviewEvent({ ...base, autoApprove: true, verdict, prAuthor: 'me' }),
+      ).toBe('COMMENT');
+    }
+  });
+
   test('gate: blockers + opted-in + not self ⇒ REQUEST_CHANGES', () => {
     expect(
       pickReviewEvent({ ...base, gateOnBlocking: true, verdict: 'request-changes' }),

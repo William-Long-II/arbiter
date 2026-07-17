@@ -152,6 +152,21 @@ export function isTooLargeDiffError(err: unknown): boolean {
 }
 
 /**
+ * GitHub sometimes cannot generate the single-blob diff at all: the
+ * request times out server-side and comes back as the "Unicorn!" HTML
+ * error page with a 5xx status (surfaces as `HttpError: <!DOCTYPE html>…`).
+ * The JSON endpoints for the same PR still work fine — only the diff
+ * render is too expensive — so this is worth the listFiles fallback, not
+ * a doomed retry of the identical request. A genuinely global GitHub 5xx
+ * just fails the fallback call too, which stays transient/retryable.
+ */
+export function isDiffServerError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const status = (err as { status?: unknown }).status;
+  return typeof status === 'number' && status >= 500 && status <= 599;
+}
+
+/**
  * GitHub's `pulls.listFiles` is paginated and capped at 3000 files. A PR
  * that returns the cap almost certainly has more — there's no patch-level
  * data past it, so it's genuinely unreviewable via the API.
@@ -278,6 +293,89 @@ export function assembleLargeDiff(
   return { diff, notice };
 }
 
+/** What GitHub's compare API gives us, reduced to the fields the delta
+ *  decision needs. `commits` carries parent counts so a merge-from-base
+ *  (which pollutes the delta with upstream changes) is detectable. */
+export type CompareResult = {
+  status: 'ahead' | 'behind' | 'diverged' | 'identical';
+  files: ChangedFile[];
+  /** Parent count per commit in the range, in order. */
+  commitParentCounts: number[];
+};
+
+/** GitHub's compare endpoint silently caps `files` at 300 — at the cap the
+ *  list may be truncated, so a delta built from it could miss changes. */
+const COMPARE_FILES_CAP = 300;
+
+export type CompareDelta = {
+  /** Synthetic unified diff of only the compared range. */
+  diff: string;
+  /** Files rendered in full (files without a patch — binaries — are skipped). */
+  filesShown: number;
+};
+
+/**
+ * Decide whether a compare result is a clean, trustworthy delta and build
+ * the diff from it. Pure — unit-tested without the network. Returns null
+ * (caller falls back to a full review) when:
+ *  - status isn't 'ahead' (force-push/rebase ⇒ 'diverged'; 'identical'
+ *    means nothing to review incrementally),
+ *  - any commit in the range is a merge (base-branch merge-ins drag the
+ *    whole upstream diff into the delta),
+ *  - the file list is empty, at GitHub's 300-file cap (possibly
+ *    truncated), or contains only binary/patch-less files.
+ */
+export function assembleCompareDelta(cmp: CompareResult): CompareDelta | null {
+  if (cmp.status !== 'ahead') return null;
+  if (cmp.commitParentCounts.some((n) => n > 1)) return null;
+  if (cmp.files.length === 0 || cmp.files.length >= COMPARE_FILES_CAP) return null;
+  const withPatch = cmp.files.filter((f) => f.patch);
+  if (withPatch.length === 0) return null;
+  return {
+    diff: withPatch.map(renderFileBlock).join('\n'),
+    filesShown: withPatch.length,
+  };
+}
+
+/**
+ * Fetch the compare-delta between a previously reviewed head and the
+ * current one. Best-effort by design: any API failure, or a compare that
+ * isn't a clean fast-forward (see assembleCompareDelta), returns null and
+ * the caller reviews the full PR diff instead — incremental review is an
+ * optimization, never a correctness dependency.
+ */
+export async function fetchCompareDelta(
+  token: string,
+  repoFull: string,
+  baseSha: string,
+  headSha: string,
+): Promise<CompareDelta | null> {
+  const [owner, repo] = repoFull.split('/');
+  if (!owner || !repo) return null;
+  try {
+    const octokit = octokitFor(token);
+    const cmp = await octokit.rest.repos.compareCommitsWithBasehead({
+      owner,
+      repo,
+      basehead: `${baseSha}...${headSha}`,
+    });
+    return assembleCompareDelta({
+      status: cmp.data.status as CompareResult['status'],
+      files: (cmp.data.files ?? []) as ChangedFile[],
+      commitParentCounts: (cmp.data.commits ?? []).map(
+        (c) => c.parents?.length ?? 1,
+      ),
+    });
+  } catch (err) {
+    console.warn(
+      `[pulls] compare ${baseSha.slice(0, 8)}...${headSha.slice(0, 8)} for ` +
+        `${repoFull} failed; falling back to full review: ` +
+        `${err instanceof Error ? err.message.slice(0, 200) : String(err)}`,
+    );
+    return null;
+  }
+}
+
 export type PRDetails = {
   repoFull: string;
   number: number;
@@ -322,12 +420,13 @@ export async function fetchPullRequest(
     diff = diffResp.data as unknown as string;
   } catch (err) {
     // GitHub refuses the single-blob diff over its size limits (>300
-    // files / >20000 lines, `code: too_large`). Don't give up — rebuild
+    // files / >20000 lines, `code: too_large`), and times out generating
+    // expensive diffs (5xx "Unicorn!" HTML page). Don't give up — rebuild
     // a reviewable diff from the paginated file list (its own suggested
     // fallback). assembleLargeDiff throws DiffTooManyFilesError only for
     // the genuine residual (>=3000 files / nothing reviewable), which the
     // worker still marks `skipped`.
-    if (!isTooLargeDiffError(err)) throw err;
+    if (!isTooLargeDiffError(err) && !isDiffServerError(err)) throw err;
     const files = (await octokit.paginate(octokit.rest.pulls.listFiles, {
       owner,
       repo,
