@@ -105,6 +105,20 @@ export const ReReviewPage: FC<Props> = ({ user, review, error }) => {
           </label>
         </fieldset>
 
+        <fieldset class="form-row">
+          <label class="checkbox">
+            <input type="checkbox" name="incremental" checked />
+            <span>Incremental — review only the changes since the last completed review</span>
+          </label>
+          <p class="form-hint">
+            Much cheaper and faster on iterating PRs. The prior review is given
+            to the model as context and the verdict still covers the whole PR.
+            Falls back to a full review automatically when there is no prior
+            completed review, the head is unchanged, or the branch was
+            rebased/merged-into since.
+          </p>
+        </fieldset>
+
         <p class="form-hint">
           Footer template, gate-on-blocking and reviewer skill are carried
           over from the original run unchanged.

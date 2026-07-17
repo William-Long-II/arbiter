@@ -41,6 +41,41 @@ describe('describeError', () => {
     expect(describeError(42)).toBe('Non-error thrown: 42');
   });
 
+  test('collapses an upstream HTML error page to one diagnostic line', () => {
+    // The review-#2734 case: GitHub's diff endpoint timed out and Octokit
+    // threw an HttpError whose message was the entire "Unicorn!" 503 page
+    // (~300 KB of markup + base64 images) — which then landed verbatim in
+    // pending_reviews.error and the logs.
+    class HttpError extends Error {
+      status: number;
+      constructor(m: string, status: number) {
+        super(m);
+        this.name = 'HttpError';
+        this.status = status;
+      }
+    }
+    const page =
+      '<!DOCTYPE html>\n<html>\n<head>\n<title>Unicorn! &middot; GitHub</title>\n' +
+      '<style>#suggestions { color: #ccc; }</style>\n</head>\n<body>\n' +
+      `<img src="data:image/png;base64,${'iVBORw0KGgo'.repeat(1000)}">\n` +
+      '<p>Sorry about that. Please try refreshing.</p>\n</body>\n</html>';
+    const out = describeError(new HttpError(page, 503));
+    expect(out).toBe(
+      'HttpError: upstream returned an HTML error page (HTTP 503, "Unicorn! · GitHub")',
+    );
+  });
+
+  test('collapses an HTML page without status or title', () => {
+    const out = describeError(new Error('<html><body>nope</body></html>'));
+    expect(out).toBe('upstream returned an HTML error page');
+  });
+
+  test('does not touch messages that merely mention HTML', () => {
+    expect(describeError(new Error('expected <html> tag in output'))).toBe(
+      'expected <html> tag in output',
+    );
+  });
+
   test('falls back gracefully for a non-serialisable object', () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;

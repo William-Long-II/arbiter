@@ -21,6 +21,7 @@ function scope(over: Partial<Scope> = {}): Scope {
     reviewerSkill: null,
     triggerMode: 'open',
     reviewContext: 'isolated',
+    incrementalRereview: true,
     enabled: true,
     createdAt: new Date(),
     updatedAt: new Date(),

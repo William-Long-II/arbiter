@@ -46,6 +46,16 @@ export type PendingReview = {
    * by the idempotency index); 'manual' = a user-initiated re-review, which
    * is exempt from that index so it can stack on the same head SHA. */
   triggerSource: 'auto' | 'manual';
+  /** Candidate prior completed review for this PR, snapshotted at enqueue
+   * time when the scope (or the re-review form) opted into incremental
+   * re-review. Null = full review. The worker may still fall back to a
+   * full review — `incremental` records what actually ran. */
+  priorReviewId: number | null;
+  /** Head SHA the prior review ran at (compare base for the delta). */
+  priorHeadSha: string | null;
+  /** True only when the worker actually reviewed the compare-delta
+   * instead of the full PR diff. */
+  incremental: boolean;
   status: ReviewStatus;
   /** Sub-status while status === 'running'; null otherwise. */
   phase: ReviewPhase | null;
@@ -99,6 +109,10 @@ export type EnqueueInput = {
    * (repo, pr, sha) idempotency index — which is partial on 'auto' — never
    * collapses it into an existing row. */
   trigger?: 'auto' | 'manual';
+  /** Prior completed review to attempt an incremental (delta) review
+   * against. Both or neither; see PendingReview.priorReviewId. */
+  priorReviewId?: number | null;
+  priorHeadSha?: string | null;
 };
 
 const SELECT_REVIEW_COLUMNS = sql`
@@ -122,6 +136,9 @@ const SELECT_REVIEW_COLUMNS = sql`
   reviewer_skill AS "reviewerSkill",
   review_context AS "reviewContext",
   trigger_source AS "triggerSource",
+  prior_review_id AS "priorReviewId",
+  prior_head_sha  AS "priorHeadSha",
+  incremental,
   status,
   phase,
   attempt,
@@ -172,7 +189,8 @@ export async function enqueueReview(input: EnqueueInput): Promise<PendingReview 
       user_id, scope_id, repo_full, pr_number, pr_title, pr_author,
       base_branch, head_branch, head_sha, scrutiny, claude_mode,
       auto_approve, gate_on_blocking, footer_template, personality_prompt,
-      humanize, reviewer_skill, review_context, trigger_source, status
+      humanize, reviewer_skill, review_context, trigger_source,
+      prior_review_id, prior_head_sha, status
     ) VALUES (
       ${input.userId},
       ${input.scopeId ?? null},
@@ -193,6 +211,8 @@ export async function enqueueReview(input: EnqueueInput): Promise<PendingReview 
       ${input.reviewerSkill ?? null},
       ${input.reviewContext},
       ${input.trigger ?? 'auto'},
+      ${input.priorReviewId ?? null},
+      ${input.priorHeadSha ?? null},
       'queued'
     )
     ON CONFLICT (repo_full, pr_number, head_sha) WHERE trigger_source = 'auto' DO NOTHING
@@ -603,6 +623,69 @@ export async function getReviewOverride(
     LIMIT 1
   `;
   return rows[0] ?? null;
+}
+
+/**
+ * Latest completed review for a (user, repo, PR) — the incremental
+ * re-review candidate looked up at enqueue time. Only `done` rows
+ * qualify: their body was actually posted, so the "changes since your
+ * previous review" framing is honest. Returns just the linkage fields;
+ * the worker re-reads body/verdict by id at run time (they may be large,
+ * and the row could be pruned between enqueue and claim).
+ */
+export async function findPriorReviewForPR(
+  userId: number,
+  repoFull: string,
+  prNumber: number,
+): Promise<{ id: number; headSha: string } | null> {
+  const rows = await sql<{ id: number; headSha: string }[]>`
+    SELECT id, head_sha AS "headSha"
+    FROM pending_reviews
+    WHERE user_id = ${userId}
+      AND repo_full = ${repoFull}
+      AND pr_number = ${prNumber}
+      AND status = 'done'
+      AND output IS NOT NULL
+      AND verdict IS NOT NULL
+    ORDER BY finished_at DESC NULLS LAST
+    LIMIT 1
+  `;
+  return rows[0] ?? null;
+}
+
+/**
+ * The prior review's content, fetched by the worker when it attempts the
+ * delta path. Unscoped by user on purpose: the id comes off the claimed
+ * job row, which snapshotted it at enqueue time for the same user. Null
+ * if the row vanished (retention) or somehow lost its body — the worker
+ * then falls back to a full review.
+ */
+export async function getPriorReviewContext(
+  id: number,
+): Promise<{ headSha: string; verdict: Verdict; output: string } | null> {
+  const rows = await sql<{ headSha: string; verdict: Verdict | null; output: string | null }[]>`
+    SELECT head_sha AS "headSha", verdict, output
+    FROM pending_reviews
+    WHERE id = ${id} AND status = 'done'
+    LIMIT 1
+  `;
+  const row = rows[0];
+  if (!row || !row.output || !row.verdict) return null;
+  return { headSha: row.headSha, verdict: row.verdict, output: row.output };
+}
+
+/**
+ * Record that the worker actually took the incremental (delta) path for
+ * this run. Separate from the prior_* columns: those mark the candidate;
+ * this marks the outcome (the worker falls back to a full review whenever
+ * the delta isn't clean). Guarded on status='running' like setReviewPhase.
+ */
+export async function markIncremental(id: number): Promise<void> {
+  await sql`
+    UPDATE pending_reviews
+    SET incremental = TRUE
+    WHERE id = ${id} AND status = 'running'
+  `;
 }
 
 /**

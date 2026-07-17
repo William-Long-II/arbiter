@@ -12,6 +12,11 @@ Automated GitHub PR review on your own infrastructure, powered by Claude Code.
   scrutiny tier (`light` / `standard` / `strict`), with optional per-scope
   trigger mode (`open` vs `review_requested`), review context
   (`isolated` vs `checkout`), auto-approve, footer, and personality prompt.
+- **Incremental re-reviews** (on by default, per scope): once a PR has a
+  completed review, later runs review only the changes pushed since — with
+  the prior review as context and a whole-PR verdict — instead of re-reading
+  the entire diff. Falls back to a full review on rebase/force-push or when
+  the branch merged in its base.
 - For every matching PR (skipping your own, configured bots, drafts, and
   auto-merge PRs), arbiter waits out pending CI, runs `claude -p` against the
   diff with the scrutiny prompt, and posts the review back to the PR.

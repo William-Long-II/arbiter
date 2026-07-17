@@ -23,6 +23,38 @@ describe('formatUserMessage', () => {
     expect(msg).toContain('+new');
   });
 
+  test('priorReview renders the incremental section with whole-PR verdict rules', () => {
+    const msg = formatUserMessage({
+      scrutiny: 'standard',
+      diff: '+only the delta',
+      prTitle: 't',
+      prAuthor: 'a',
+      repoFull: 'r/r',
+      priorReview: {
+        headSha: 'abc123def4567890',
+        verdict: 'request-changes',
+        body: 'Previous review body with a `code` span.',
+      },
+    });
+    expect(msg).toContain('## Incremental re-review');
+    expect(msg).toContain('abc123def456'); // 12-char short SHA
+    expect(msg).toContain('`request-changes`');
+    expect(msg).toContain('Previous review body');
+    expect(msg).toContain('ONLY the changes pushed since');
+    expect(msg).toMatch(/ENTIRE\s+pull request/);
+  });
+
+  test('no priorReview ⇒ no incremental section', () => {
+    const msg = formatUserMessage({
+      scrutiny: 'standard',
+      diff: '+x',
+      prTitle: 't',
+      prAuthor: 'a',
+      repoFull: 'r/r',
+    });
+    expect(msg).not.toContain('Incremental re-review');
+  });
+
   test('preserves diff content verbatim (does not collapse whitespace)', () => {
     const diff = 'line1\n  indented\n\nblank line above';
     const msg = formatUserMessage({

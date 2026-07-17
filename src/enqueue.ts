@@ -8,7 +8,11 @@ import { config } from './config.ts';
 import { sql } from './db.ts';
 import { matchScope } from './scope.ts';
 import { listScopes, type Scope } from './db/scopes.ts';
-import { enqueueReview, type PendingReview } from './db/reviews.ts';
+import {
+  enqueueReview,
+  findPriorReviewForPR,
+  type PendingReview,
+} from './db/reviews.ts';
 import type { PRDetails } from './github/pulls.ts';
 
 /** A PR plus the flag for review-requested gating. The poller sets it from
@@ -61,6 +65,13 @@ export async function enqueueForUser(args: {
       ? config.claude.defaultMode
       : matched.claudeMode;
 
+  // Incremental re-review candidate: the PR's latest completed review, if
+  // the scope opted in (default on). Snapshotted here; the worker decides
+  // at run time whether the compare-delta is clean enough to use.
+  const prior = matched.incrementalRereview
+    ? await findPriorReviewForPR(userId, pr.repoFull, pr.number)
+    : null;
+
   const review = await enqueueReview({
     userId,
     scopeId: matched.id,
@@ -80,6 +91,8 @@ export async function enqueueForUser(args: {
     humanize: matched.humanize,
     reviewerSkill: matched.reviewerSkill,
     reviewContext: matched.reviewContext,
+    priorReviewId: prior?.id ?? null,
+    priorHeadSha: prior?.headSha ?? null,
   });
   return { review, matched };
 }

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   assembleLargeDiff,
+  isDiffServerError,
   isTooLargeDiffError,
   type ChangedFile,
   LISTFILES_HARD_CAP,
@@ -114,6 +115,29 @@ describe('isTooLargeDiffError', () => {
     expect(isTooLargeDiffError(null)).toBe(false);
     expect(isTooLargeDiffError(undefined)).toBe(false);
     expect(isTooLargeDiffError('boom')).toBe(false);
+  });
+});
+
+describe('isDiffServerError', () => {
+  test('matches a 5xx from the diff fetch (the "Unicorn!" timeout page)', () => {
+    // Review #2734: GitHub timed out rendering the single-blob diff and
+    // returned its HTML 503 page — retrying the same call 503s forever,
+    // but listFiles for the same PR works, so this must take the
+    // reconstruct fallback.
+    const err = octokitError({
+      status: 503,
+      message: '<!DOCTYPE html>\n<html><head><title>Unicorn! · GitHub</title></head>…',
+      data: undefined,
+    });
+    expect(isDiffServerError(err)).toBe(true);
+    expect(isDiffServerError(octokitError({ status: 500, message: 'ise' }))).toBe(true);
+  });
+
+  test('does NOT match 4xx or non-HTTP errors', () => {
+    expect(isDiffServerError(octokitError({ status: 406, message: 'too large' }))).toBe(false);
+    expect(isDiffServerError(octokitError({ status: 404, message: 'nope' }))).toBe(false);
+    expect(isDiffServerError(new Error('socket hang up'))).toBe(false);
+    expect(isDiffServerError(null)).toBe(false);
   });
 });
 

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { CONTEXT_PROMPT } from '../src/review/runner.ts';
+import { buildSkillSystemPrompt, CONTEXT_PROMPT } from '../src/review/runner.ts';
+import { AUTO_APPROVE_VERDICT_INSTRUCTION } from '../src/review/format.ts';
 
 // The 'isolated' wording is the actual fix for the user-reported
 // "the working directory contains an unrelated project" caveats: the
@@ -26,5 +27,21 @@ describe('CONTEXT_PROMPT', () => {
     // format — the context note must not redefine it.
     expect(CONTEXT_PROMPT.isolated).not.toMatch(/arbiter:verdict/i);
     expect(CONTEXT_PROMPT.checkout).not.toMatch(/arbiter:verdict/i);
+  });
+});
+
+describe('auto-approve binary-verdict instruction', () => {
+  test('forbids the comment fence and demands one of the two real verdicts', () => {
+    const p = AUTO_APPROVE_VERDICT_INSTRUCTION;
+    expect(p).toMatch(/NEVER `comment`/);
+    expect(p).toContain('`approve` or `request-changes`');
+    expect(p).toMatch(/blocking >= 1/);
+  });
+
+  test('skill prompt includes it only for auto-approve scopes', () => {
+    const withIt = buildSkillSystemPrompt('some-skill', 'isolated', null, true);
+    const withoutIt = buildSkillSystemPrompt('some-skill', 'isolated', null, false);
+    expect(withIt).toContain(AUTO_APPROVE_VERDICT_INSTRUCTION);
+    expect(withoutIt).not.toContain('BINARY VERDICT');
   });
 });

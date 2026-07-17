@@ -3,8 +3,10 @@ import { sql } from './db.ts';
 import {
   claimNext,
   deferReview,
+  getPriorReviewContext,
   markDone,
   markFailed,
+  markIncremental,
   markSkipped,
   markSkippedPendingPost,
   reapStuckReviews,
@@ -18,6 +20,7 @@ import { describeError } from './errors.ts';
 import { stampReviewBody } from './review/footer.ts';
 import {
   DiffTooManyFilesError,
+  fetchCompareDelta,
   fetchPullRequest,
   isLockedConversationError,
   postPullRequestReview,
@@ -27,6 +30,7 @@ import {
   DiffTooLargeError,
   ReviewTimeoutError,
   runReview,
+  type ReviewInput,
 } from './review/runner.ts';
 import { isTransientError, MAX_ATTEMPTS, retryDelaySeconds } from './retry.ts';
 import { pickReviewEvent, selectInlineFindings, statusForReview } from './review/gate.ts';
@@ -199,12 +203,63 @@ async function processJob(job: PendingReview): Promise<void> {
     await setReviewPhase(job.id, 'reviewing');
     const ciSummary = formatChecksSummary(checks);
 
+    // Incremental re-review: when enqueue snapshotted a prior completed
+    // review and the head has since advanced, try to review only the
+    // compare-delta with the prior review as context. Every guard falls
+    // back to the full diff — rebase/force-push, merge-from-base, compare
+    // failure, pruned prior row, or a "delta" no smaller than the full
+    // diff. `incremental` is stamped on the row only when the delta path
+    // actually runs.
+    let effectiveDiff = diff;
+    let effectiveDiffNotice = diffNotice;
+    let priorReview: ReviewInput['priorReview'] = null;
+    if (
+      job.priorReviewId != null &&
+      job.priorHeadSha &&
+      job.priorHeadSha !== pr.headSha
+    ) {
+      const prior = await getPriorReviewContext(job.priorReviewId);
+      const delta = prior
+        ? await fetchCompareDelta(
+            userRow.token,
+            job.repoFull,
+            job.priorHeadSha,
+            pr.headSha,
+          )
+        : null;
+      if (
+        prior &&
+        delta &&
+        Buffer.byteLength(delta.diff, 'utf8') < Buffer.byteLength(diff, 'utf8')
+      ) {
+        effectiveDiff = delta.diff;
+        // The full-diff coverage notice doesn't describe the delta.
+        effectiveDiffNotice = null;
+        priorReview = {
+          headSha: prior.headSha,
+          verdict: prior.verdict,
+          body: prior.output,
+        };
+        await markIncremental(job.id);
+        console.log(
+          `[worker] #${job.id} incremental re-review: ${delta.filesShown} ` +
+            `file(s) changed since ${job.priorHeadSha.slice(0, 8)}`,
+        );
+      } else {
+        console.log(
+          `[worker] #${job.id} incremental candidate declined ` +
+            `(${!prior ? 'prior review gone' : !delta ? 'unclean compare (rebase/merge/cap)' : 'delta not smaller than full diff'}); ` +
+            `running full review`,
+        );
+      }
+    }
+
     // Changed-file signals: escalate scrutiny for sensitive paths and note
     // a missing-tests gap. Advisory — escalation only ever raises rigor by
     // one tier; the note is just guidance. Effective tier (not the scope's
     // snapshot) drives both the prompt and the footer so the posted review
     // honestly reflects what ran.
-    const changedPaths = changedFilePaths(diff);
+    const changedPaths = changedFilePaths(effectiveDiff);
     const escalation = escalateScrutiny(job.scrutiny, changedPaths);
     const effectiveScrutiny = escalation ? escalation.scrutiny : job.scrutiny;
     const signalsNote = buildSignalsNote(escalation, testGapNote(changedPaths));
@@ -222,7 +277,7 @@ async function processJob(job: PendingReview): Promise<void> {
     const injection = scanForInjection([
       { label: 'PR title', text: pr.title },
       { label: 'PR author', text: pr.author },
-      { label: 'diff', text: diff },
+      { label: 'diff', text: effectiveDiff },
     ]);
     const injectionNote = buildInjectionNote(injection);
     if (injectionNote) {
@@ -235,15 +290,17 @@ async function processJob(job: PendingReview): Promise<void> {
     const result = await runReview(
       {
         scrutiny: effectiveScrutiny,
-        diff,
+        diff: effectiveDiff,
         prTitle: pr.title,
         prAuthor: pr.author,
         repoFull: pr.repoFull,
         personalityPrompt: job.personalityPrompt,
         humanize: job.humanize,
         reviewerSkill: job.reviewerSkill,
+        autoApprove: job.autoApprove,
+        priorReview,
         ciSummary,
-        diffNotice,
+        diffNotice: effectiveDiffNotice,
         signalsNote,
         injectionNote,
         reviewContext: job.reviewContext,
@@ -282,7 +339,7 @@ async function processJob(job: PendingReview): Promise<void> {
     );
     const { comments: inlineComments, dropped } = selectReviewComments(
       inlineEligible,
-      commentableLines(diff),
+      commentableLines(effectiveDiff),
     );
     if (inlineComments.length > 0 || dropped > 0 || suppressed > 0) {
       console.log(

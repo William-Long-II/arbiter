@@ -19,11 +19,16 @@ export function hasBlocking(
 
 /**
  * Decide the GitHub review event.
- * - APPROVE: scope opted into auto-approve, verdict is `approve`, not own PR.
- * - REQUEST_CHANGES: scope opted into gate-on-blocking, there are blockers,
- *   not own PR (GitHub forbids reviewing your own PR with a state).
- * - COMMENT otherwise — including every scope that didn't opt in, which is
- *   the unchanged default.
+ * - Auto-approve is a commitment to a BINARY outcome: the scope asked
+ *   arbiter to actually resolve the review, so a non-`approve` verdict —
+ *   including the `comment` fallback when the model omits the marker —
+ *   posts as REQUEST_CHANGES. A verdict-less drive-by COMMENT on an
+ *   auto-approve scope reads as "approved-ish" while approving nothing.
+ * - REQUEST_CHANGES (without auto-approve): scope opted into
+ *   gate-on-blocking and there are blockers.
+ * - COMMENT otherwise — every scope that didn't opt in (the unchanged,
+ *   deliberately non-aggressive default), and always on your own PR
+ *   (GitHub forbids reviewing your own PR with a state).
  */
 export function pickReviewEvent(args: {
   autoApprove: boolean;
@@ -35,8 +40,8 @@ export function pickReviewEvent(args: {
 }): ReviewEventChoice {
   const isSelf =
     args.prAuthor.toLowerCase() === args.reviewerLogin.toLowerCase();
-  if (args.autoApprove && args.verdict === 'approve' && !isSelf) {
-    return 'APPROVE';
+  if (args.autoApprove && !isSelf) {
+    return args.verdict === 'approve' ? 'APPROVE' : 'REQUEST_CHANGES';
   }
   if (
     args.gateOnBlocking &&

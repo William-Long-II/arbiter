@@ -44,6 +44,7 @@ import {
   clearQueuedReviews,
   countQueuedReviews,
   enqueueReview,
+  findPriorReviewForPR,
   getReview,
   getReviewOverride,
   isReviewStatus,
@@ -655,6 +656,7 @@ export function buildApp(): Hono {
         : source.claudeMode;
     const autoApprove = form.auto_approve === '1' || form.auto_approve === 'on';
     const humanize = form.humanize === '1' || form.humanize === 'on';
+    const incremental = form.incremental === '1' || form.incremental === 'on';
     const personalityPrompt = form.personality_prompt?.trim()
       ? form.personality_prompt.trim()
       : null;
@@ -669,6 +671,12 @@ export function buildApp(): Hono {
         source.repoFull,
         source.prNumber,
       );
+      // Incremental candidate: the PR's latest completed review (often the
+      // source row itself). Same-SHA re-runs and unclean compares fall
+      // back to a full review in the worker.
+      const prior = incremental
+        ? await findPriorReviewForPR(user.id, source.repoFull, source.prNumber)
+        : null;
       const row = await enqueueReview({
         userId: user.id,
         scopeId: source.scopeId,
@@ -692,6 +700,8 @@ export function buildApp(): Hono {
         // The whole point: a manual row is exempt from the (repo, pr, sha)
         // idempotency index, so re-running on an unchanged HEAD still works.
         trigger: 'manual',
+        priorReviewId: prior?.id ?? null,
+        priorHeadSha: prior?.headSha ?? null,
       });
       if (!row) {
         // Manual rows skip the idempotency index, so a null here means an
