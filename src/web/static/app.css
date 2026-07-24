@@ -426,6 +426,33 @@ code, .mono { font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo, monos
 .queue-row-time { color: var(--ink-subtle); font-size: 12px; white-space: nowrap; }
 .queue-row-link { padding: 4px 10px; height: auto; justify-self: end; }
 
+/* Audits (Time Machine retro-audit) */
+.audit-summary-card { margin-bottom: 16px; }
+.audit-headline { font-size: 15px; color: var(--ink); line-height: 1.5; }
+.audit-headline strong { color: var(--ink); font-weight: 600; }
+.audit-list-header { grid-template-columns: minmax(0, 1fr) 110px minmax(0, 260px) 96px; }
+.audit-runs-header { grid-template-columns: minmax(0, 1fr) 200px 150px 110px; }
+.audit-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px minmax(0, 260px) 96px;
+  gap: 16px; align-items: center; padding: 12px 16px;
+}
+.audit-run-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 200px 150px 110px;
+  gap: 16px; align-items: center; padding: 12px 16px;
+}
+.audit-row + .audit-row,
+.audit-run-row + .audit-run-row { border-top: 1px solid var(--surface-2); }
+.audit-row:hover, .audit-run-row:hover { background: var(--surface-2); }
+.audit-row-author { font-size: 12px; margin-left: 2px; }
+.audit-findings { display: flex; flex-wrap: wrap; gap: 6px; }
+.audit-sev { font-size: 11px; }
+.audit-sev-blocking { color: #c64545; }
+.audit-sev-major { color: #d98324; }
+.audit-sev-minor { color: var(--ink-muted); }
+.audit-sev-nit { color: var(--ink-subtle); }
+
 /* Queue detail */
 .queue-detail-title { display: flex; align-items: baseline; gap: 8px; }
 .queue-detail-prnum { color: var(--ink-subtle); font-size: 18px; font-weight: 500; }

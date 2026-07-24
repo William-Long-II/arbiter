@@ -75,11 +75,14 @@ export const QueueDetailPage: FC<Props> = ({
     review.prAuthor.toLowerCase() === user.githubLogin.toLowerCase();
   // The button only makes sense for terminal, non-APPROVE rows on a PR
   // the current user can actually approve on GitHub.
+  // Report-only rows (Time Machine retro-audit) never posted to GitHub, so
+  // none of the post-related actions apply — the server rejects them anyway.
   const canApproveAnyway =
     review.status === 'done' &&
     review.postedEvent !== 'APPROVE' &&
     !isSelfAuthor &&
-    !override;
+    !override &&
+    !review.reportOnly;
   // A review skipped because the PR conversation was locked: the body was
   // generated and preserved (output set) so it can still be posted once
   // the user unlocks the PR. Structural skips have output === null.
@@ -87,7 +90,8 @@ export const QueueDetailPage: FC<Props> = ({
     review.status === 'skipped' &&
     !!review.output &&
     !!review.verdict &&
-    !!review.postedEvent;
+    !!review.postedEvent &&
+    !review.reportOnly;
   return (
     <Layout title={`#${review.prNumber} ${review.prTitle}`} user={user} active="queue">
       <header class="page-header page-header-with-action">
@@ -101,9 +105,13 @@ export const QueueDetailPage: FC<Props> = ({
         <div class="page-header-actions">
           {/* Re-review re-runs against the PR's current head; only meaningful
               once this run has reached a terminal state. */}
-          {review.status === 'done' ||
-          review.status === 'failed' ||
-          review.status === 'skipped' ? (
+          {review.reportOnly && review.auditRunId != null ? (
+            <a class="cta-secondary" href={`/audits/${review.auditRunId}`}>
+              ← Back to audit
+            </a>
+          ) : review.status === 'done' ||
+            review.status === 'failed' ||
+            review.status === 'skipped' ? (
             <a class="cta-secondary" href={`/queue/${review.id}/re-review`}>
               ↻ Re-review
             </a>
@@ -137,6 +145,13 @@ export const QueueDetailPage: FC<Props> = ({
             {detailProgress(review)}
           </span>
         </MetaRow>
+        {review.reportOnly ? (
+          <MetaRow label="Report-only">
+            <span class="badge-pill badge-pill-muted">
+              retro-audit · not posted to GitHub
+            </span>
+          </MetaRow>
+        ) : null}
         <MetaRow label="Author">
           <span class="mono-sm">{review.prAuthor}</span>
         </MetaRow>
@@ -192,7 +207,7 @@ export const QueueDetailPage: FC<Props> = ({
           </MetaRow>
         ) : null}
         {review.postedEvent ? (
-          <MetaRow label="Posted as">
+          <MetaRow label={review.reportOnly ? 'Would post as' : 'Posted as'}>
             <span class="mono-sm">{review.postedEvent}</span>
             {override ? (
               <span class="badge-pill verdict-approve queue-override-tag">

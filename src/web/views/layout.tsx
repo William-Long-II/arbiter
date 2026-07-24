@@ -5,7 +5,7 @@ import { getPollerStatus } from '../../github/poller.ts';
 type Props = {
   title: string;
   user: User | null;
-  active?: 'queue' | 'scopes' | 'repos' | 'settings';
+  active?: 'queue' | 'audits' | 'scopes' | 'repos' | 'settings';
 };
 
 export const Layout: FC<PropsWithChildren<Props>> = ({
@@ -83,6 +83,7 @@ export const Layout: FC<PropsWithChildren<Props>> = ({
           <div class="app-body">
             <aside class="side-nav">
               <SideNavItem href="/queue" label="Queue" active={active === 'queue'} />
+              <SideNavItem href="/audits" label="Audits" active={active === 'audits'} />
               <SideNavItem href="/scopes" label="Scopes" active={active === 'scopes'} />
               <SideNavItem href="/repos" label="Repos" active={active === 'repos'} />
               <SideNavItem href="/settings" label="Settings" active={active === 'settings'} />
