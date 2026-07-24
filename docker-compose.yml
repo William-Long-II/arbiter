@@ -3,6 +3,10 @@ name: arbiter
 services:
   db:
     image: postgres:16-alpine
+    # Survive host reboots / dockerd restarts. Without this, a VM reboot
+    # (e.g. unattended-upgrades) leaves the stack down until someone runs
+    # `compose up` by hand — which is exactly what happened on 2026-07-20.
+    restart: unless-stopped
     environment:
       POSTGRES_USER: arbiter
       POSTGRES_PASSWORD: arbiter
@@ -24,6 +28,9 @@ services:
 
   app:
     build: .
+    # Same reasoning as the db service: come back up automatically after a
+    # host reboot or docker daemon restart instead of staying dead.
+    restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
