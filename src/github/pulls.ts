@@ -475,6 +475,60 @@ export async function listOpenPullsForRepo(
   );
 }
 
+/**
+ * List the most recently merged PRs in a repo, newest first — the input to
+ * a Time Machine retro-audit (db/audits.ts). GitHub's pulls.list has no
+ * "merged" state, so we page over `state: 'closed'` (merged + closed-
+ * unmerged, interleaved) and keep only the ones with a non-null merged_at
+ * until we have `limit` of them or run out. Capped at MERGED_SCAN_PAGES
+ * pages so a repo with a long tail of closed-unmerged PRs can't make this
+ * paginate forever.
+ *
+ * The mapped headSha is the PR branch's head commit; GitHub keeps
+ * refs/pull/N/head after merge, so both the diff endpoint and a
+ * checkout-context clone still resolve it downstream.
+ */
+export async function listRecentMergedPulls(
+  token: string,
+  repoFull: string,
+  limit: number,
+): Promise<PRDetails[]> {
+  const [owner, repo] = repoFull.split('/');
+  if (!owner || !repo) throw new Error(`Invalid repoFull: ${repoFull}`);
+  const octokit = octokitFor(token);
+
+  const MERGED_SCAN_PAGES = 10; // ≤1000 closed PRs scanned; ample for last-N
+  const out: PRDetails[] = [];
+  for (let page = 1; page <= MERGED_SCAN_PAGES && out.length < limit; page++) {
+    const resp = await octokit.rest.pulls.list({
+      owner,
+      repo,
+      state: 'closed',
+      sort: 'updated',
+      direction: 'desc',
+      per_page: 100,
+      page,
+    });
+    if (resp.data.length === 0) break;
+    for (const p of resp.data) {
+      if (!p.merged_at) continue; // closed without merging — skip
+      out.push({
+        repoFull,
+        number: p.number,
+        title: p.title,
+        author: p.user?.login ?? 'unknown',
+        baseBranch: p.base.ref,
+        headBranch: p.head.ref,
+        headSha: p.head.sha,
+        draft: p.draft ?? false,
+        autoMerge: false, // already merged; the poller's auto-merge skip is moot
+      });
+      if (out.length >= limit) break;
+    }
+  }
+  return out;
+}
+
 export type ScopeTarget = {
   kind: 'org' | 'repo';
   /** "owner" for org targets, "owner/name" for repo targets. */

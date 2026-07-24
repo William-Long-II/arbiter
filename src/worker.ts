@@ -186,7 +186,11 @@ async function processJob(job: PendingReview): Promise<void> {
     // full picture than land "CI was still running, FYI" reviews. After
     // MAX_DEFERS attempts (~20 min total) we proceed anyway so a stuck or
     // hours-long pipeline doesn't starve the review forever.
+    // A report-only retro-audit reviews already-merged PRs — there is no
+    // live CI to wait on, so never defer (the merge commit's checks, if any,
+    // long since settled). Skipping keeps a 50-PR audit from stalling.
     if (
+      !job.reportOnly &&
       checks.hasPending &&
       !checks.anyFailing &&
       job.deferCount < MAX_DEFERS
@@ -327,6 +331,32 @@ async function processJob(job: PendingReview): Promise<void> {
       verdict: result.verdict,
       postedEvent: event,
     });
+
+    // Report-only retro-audit (Time Machine): the review is generated and
+    // persisted exactly like a real one — body, would-be event, verdict,
+    // cost, findings all stored for the /audits report — but we post
+    // NOTHING to GitHub. No inline threads, no PR review, no commit status,
+    // no stale-thread bookkeeping. This is the whole safety story: even a
+    // noisy first audit of a stranger's history can't comment on, block, or
+    // 422 against a merged PR. Everything below this guard is GitHub I/O.
+    if (job.reportOnly) {
+      await markDone(
+        job.id,
+        stamped,
+        result.verdict,
+        event,
+        result.costUsd ?? null,
+        result.findings ?? null,
+        result.prompts ?? null,
+      );
+      console.log(
+        `[worker] done (report-only) #${job.id} ${job.repoFull}#${job.prNumber} ` +
+          `(verdict=${result.verdict}, would-be event=${event}` +
+          `${result.costUsd != null ? `, cost=$${result.costUsd}` : ''})`,
+      );
+      return;
+    }
+
     // Inline comments: on APPROVE, minor/nit findings stay in the summary
     // body — each inline comment opens a conversation, and repos requiring
     // thread resolution would gate the merge on nits the reviewer already

@@ -49,12 +49,16 @@ import {
   getReviewOverride,
   isReviewStatus,
   listReviews,
+  listReviewsForAuditRun,
   listReviewsForPR,
   markDone,
   recordApprovalOverride,
   retryFailedReview,
   type ReviewStatus,
 } from '../db/reviews.ts';
+import { getAuditRun, listAuditRuns } from '../db/audits.ts';
+import { enqueueAudit } from '../audit.ts';
+import { rankAuditReviews, summarizeAudit } from '../review/audit-rank.ts';
 import { describeError } from '../errors.ts';
 import { postPullRequestReview } from '../github/pulls.ts';
 import {
@@ -64,6 +68,9 @@ import {
 import { QueuePage } from './views/queue-list.tsx';
 import { QueueDetailPage } from './views/queue-detail.tsx';
 import { ReReviewPage } from './views/re-review.tsx';
+import { AuditsListPage } from './views/audits-list.tsx';
+import { AuditNewPage } from './views/audit-new.tsx';
+import { AuditReportPage } from './views/audit-report.tsx';
 import { RepoPrsPage } from './views/repo-prs.tsx';
 import { SettingsPage, type ServerConfigSnapshot } from './views/settings.tsx';
 import { landingPage } from './views/landing.ts';
@@ -473,6 +480,12 @@ export function buildApp(): Hono {
     if (Number.isNaN(id)) return c.notFound();
     const review = await getReview(user.id, id);
     if (!review) return c.notFound();
+    if (review.reportOnly) {
+      return c.text(
+        'This is a report-only retro-audit review — it never posts to GitHub.',
+        409,
+      );
+    }
 
     // Only allow overriding a completed review that wasn't already approved.
     // Running/queued rows aren't terminal yet, and APPROVE-on-APPROVE is
@@ -553,6 +566,12 @@ export function buildApp(): Hono {
     if (Number.isNaN(id)) return c.notFound();
     const review = await getReview(user.id, id);
     if (!review) return c.notFound();
+    if (review.reportOnly) {
+      return c.text(
+        'This is a report-only retro-audit review — it never posts to GitHub.',
+        409,
+      );
+    }
 
     // Eligible only for a skipped row whose body was preserved. Structural
     // skips (diff too large) have output === null and never qualify.
@@ -642,6 +661,14 @@ export function buildApp(): Hono {
     if (Number.isNaN(id)) return c.notFound();
     const source = await getReview(user.id, id);
     if (!source) return c.notFound();
+    if (source.reportOnly) {
+      // Re-reviewing from a report-only row would enqueue a NORMAL (posting)
+      // review against an already-merged PR. Re-run the audit instead.
+      return c.text(
+        'This is a report-only retro-audit review — re-run the audit from /audits.',
+        409,
+      );
+    }
 
     const form = await readFormStrings(c);
     // Each setting falls back to the source review's value, so a bare submit
@@ -715,6 +742,96 @@ export function buildApp(): Hono {
       const message = err instanceof Error ? err.message : String(err);
       return c.redirect(`${backTo}?error=${encodeURIComponent(message)}`);
     }
+  });
+
+  // Time Machine — retro-audit of already-merged PRs. GET /audits lists past
+  // runs; /audits/new is the start form; POST /audits fans out one
+  // report-only review per merged PR; /audits/:id renders the report. All
+  // report-only, so nothing here ever touches a GitHub PR.
+  app.get('/audits', requireUser, async (c) => {
+    const user = c.get('user');
+    const runs = await listAuditRuns(user.id);
+    return c.html(<AuditsListPage user={user} runs={runs} />);
+  });
+
+  app.get('/audits/new', requireUser, async (c) => {
+    const user = c.get('user');
+    let repos: string[] = [];
+    try {
+      const { repos: all } = await listAccessibleReposCached(
+        user.id,
+        user.githubToken,
+      );
+      repos = excludeArchived(all).map((r) => r.fullName);
+    } catch {
+      // A repo-list hiccup shouldn't block the form — the field accepts any
+      // owner/name the user types; the datalist is only a convenience.
+    }
+    return c.html(
+      <AuditNewPage
+        user={user}
+        repos={repos}
+        repoFull={c.req.query('repo') ?? undefined}
+        error={c.req.query('error')}
+      />,
+    );
+  });
+
+  app.post('/audits', requireUser, async (c) => {
+    const user = c.get('user');
+    const form = await readFormStrings(c);
+    const repoFull = (form.repo_full ?? '').trim();
+    // owner/name shape check keeps a typo from becoming a doomed GitHub call.
+    if (!/^[^/\s]+\/[^/\s]+$/.test(repoFull)) {
+      return c.redirect(
+        `/audits/new?error=${encodeURIComponent('Enter a repository as owner/name.')}`,
+      );
+    }
+    const scrutiny = isScrutiny(form.scrutiny) ? form.scrutiny : 'standard';
+    const reviewContext = isReviewContext(form.review_context)
+      ? form.review_context
+      : 'isolated';
+    const parsedCount = parseInt(form.count ?? '', 10);
+    // Clamp: at least 1, cap at 200 so one click can't enqueue an unbounded
+    // batch (listRecentMergedPulls scans ≤1000 closed PRs regardless).
+    const count = Number.isNaN(parsedCount)
+      ? 50
+      : Math.min(200, Math.max(1, parsedCount));
+
+    const backTo = `/audits/new?repo=${encodeURIComponent(repoFull)}`;
+    try {
+      const { run, enqueued } = await enqueueAudit({
+        userId: user.id,
+        githubToken: user.githubToken,
+        repoFull,
+        limit: count,
+        scrutiny,
+        reviewContext,
+      });
+      if (enqueued === 0) {
+        return c.redirect(
+          `${backTo}&error=${encodeURIComponent(`No merged PRs found in ${repoFull} to audit.`)}`,
+        );
+      }
+      return c.redirect(`/audits/${run.id}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.redirect(`${backTo}&error=${encodeURIComponent(message)}`);
+    }
+  });
+
+  app.get('/audits/:id', requireUser, async (c) => {
+    const user = c.get('user');
+    const id = parseInt(c.req.param('id'), 10);
+    if (Number.isNaN(id)) return c.notFound();
+    const run = await getAuditRun(user.id, id);
+    if (!run) return c.notFound();
+    const rows = await listReviewsForAuditRun(user.id, id);
+    const ranked = rankAuditReviews(rows);
+    const summary = summarizeAudit(rows);
+    return c.html(
+      <AuditReportPage user={user} run={run} ranked={ranked} summary={summary} />,
+    );
   });
 
   // SSE stream of review state changes for the current user. Powered by

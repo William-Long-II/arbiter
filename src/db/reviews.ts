@@ -56,6 +56,12 @@ export type PendingReview = {
   /** True only when the worker actually reviewed the compare-delta
    * instead of the full PR diff. */
   incremental: boolean;
+  /** Report-only (Time Machine retro-audit): the worker generates and
+   * persists the review but posts NOTHING to GitHub. See migration 019. */
+  reportOnly: boolean;
+  /** The audit run this report-only row belongs to, if any. Null for every
+   * normal (posted) review. See db/audits.ts. */
+  auditRunId: number | null;
   status: ReviewStatus;
   /** Sub-status while status === 'running'; null otherwise. */
   phase: ReviewPhase | null;
@@ -113,6 +119,11 @@ export type EnqueueInput = {
    * against. Both or neither; see PendingReview.priorReviewId. */
   priorReviewId?: number | null;
   priorHeadSha?: string | null;
+  /** Report-only retro-audit row: generate + persist, post nothing to
+   * GitHub. Defaults to false. See db/audits.ts + migration 019. */
+  reportOnly?: boolean;
+  /** The audit run this row belongs to. Defaults to null. */
+  auditRunId?: number | null;
 };
 
 const SELECT_REVIEW_COLUMNS = sql`
@@ -139,6 +150,8 @@ const SELECT_REVIEW_COLUMNS = sql`
   prior_review_id AS "priorReviewId",
   prior_head_sha  AS "priorHeadSha",
   incremental,
+  report_only  AS "reportOnly",
+  audit_run_id AS "auditRunId",
   status,
   phase,
   attempt,
@@ -190,7 +203,7 @@ export async function enqueueReview(input: EnqueueInput): Promise<PendingReview 
       base_branch, head_branch, head_sha, scrutiny, claude_mode,
       auto_approve, gate_on_blocking, footer_template, personality_prompt,
       humanize, reviewer_skill, review_context, trigger_source,
-      prior_review_id, prior_head_sha, status
+      prior_review_id, prior_head_sha, report_only, audit_run_id, status
     ) VALUES (
       ${input.userId},
       ${input.scopeId ?? null},
@@ -213,6 +226,8 @@ export async function enqueueReview(input: EnqueueInput): Promise<PendingReview 
       ${input.trigger ?? 'auto'},
       ${input.priorReviewId ?? null},
       ${input.priorHeadSha ?? null},
+      ${input.reportOnly ?? false},
+      ${input.auditRunId ?? null},
       'queued'
     )
     ON CONFLICT (repo_full, pr_number, head_sha) WHERE trigger_source = 'auto' DO NOTHING
@@ -377,6 +392,7 @@ export async function clearQueuedReviews(userId: number): Promise<number> {
         finished_at = now(),
         error = ${CLEARED_BY_USER}
     WHERE user_id = ${userId} AND status = 'queued'
+      AND report_only = FALSE
     RETURNING id
   `;
   return rows.length;
@@ -388,6 +404,7 @@ export async function countQueuedReviews(userId: number): Promise<number> {
     SELECT count(*)::int AS count
     FROM pending_reviews
     WHERE user_id = ${userId} AND status = 'queued'
+      AND report_only = FALSE
   `;
   return rows[0]?.count ?? 0;
 }
@@ -531,11 +548,14 @@ export async function listReviews(
 ): Promise<PendingReview[]> {
   const limit = opts.limit ?? 50;
   const statuses = opts.statusFilter;
+  // Report-only rows belong to an audit run and are surfaced under /audits,
+  // not the live queue — otherwise a 50-PR audit would swamp the queue view.
   if (statuses && statuses.length > 0) {
     return sql<PendingReview[]>`
       SELECT ${SELECT_REVIEW_COLUMNS}
       FROM pending_reviews
       WHERE user_id = ${userId} AND status = ANY(${statuses})
+        AND report_only = FALSE
       ORDER BY created_at DESC
       LIMIT ${limit}
     `;
@@ -544,6 +564,7 @@ export async function listReviews(
     SELECT ${SELECT_REVIEW_COLUMNS}
     FROM pending_reviews
     WHERE user_id = ${userId}
+      AND report_only = FALSE
     ORDER BY created_at DESC
     LIMIT ${limit}
   `;
@@ -565,6 +586,21 @@ export async function getReview(userId: number, id: number): Promise<PendingRevi
     LIMIT 1
   `;
   return rows[0] ?? null;
+}
+
+/** Every report-only row belonging to one audit run, for this user. The
+ *  report page ranks them in JS (see review/audit-rank.ts); an audit is
+ *  bounded by its requested_count so fetching the whole set is cheap. */
+export async function listReviewsForAuditRun(
+  userId: number,
+  auditRunId: number,
+): Promise<PendingReview[]> {
+  return sql<PendingReview[]>`
+    SELECT ${SELECT_REVIEW_COLUMNS}
+    FROM pending_reviews
+    WHERE user_id = ${userId} AND audit_run_id = ${auditRunId}
+    ORDER BY created_at
+  `;
 }
 
 /**
