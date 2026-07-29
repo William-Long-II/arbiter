@@ -6,6 +6,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config.ts';
 import {
   AUTO_APPROVE_VERDICT_INSTRUCTION,
+  EVIDENCE_GUARD,
   FINDINGS_INSTRUCTION,
   ITEMS_INSTRUCTION,
   PROCESS_GUARD,
@@ -100,7 +101,13 @@ export const CONTEXT_PROMPT: Record<'isolated' | 'checkout', string> = {
     'there. Do NOT add caveats about being unable to verify cross-module ' +
     'references, missing files, or the working directory containing an ' +
     'unrelated project. Review strictly what the diff shows, with the ' +
-    'confidence the diff supports.',
+    'confidence the diff supports.\n\n' +
+    'Because you have only the diff, the code you can see stops at the ' +
+    'edge of each hunk. Anything else in those files — the rest of a ' +
+    'function, a call site below the last context line, a helper defined ' +
+    'elsewhere — you have NOT seen and may not describe. You may reason ' +
+    'about it as a possibility and say so ("if X is still …"), never as a ' +
+    'fact, and it may never carry a blocking finding on its own.',
   checkout:
     '## Review context\n\n' +
     "The pull request's repository is checked out at its head commit in " +
@@ -108,7 +115,11 @@ export const CONTEXT_PROMPT: Record<'isolated' | 'checkout', string> = {
     'cross-module references, confirm symbols exist, and understand ' +
     'surrounding code. Keep the review focused on the changes in the ' +
     'provided diff; use the checkout to verify and add precision, not to ' +
-    'review unrelated code.',
+    'review unrelated code.\n\n' +
+    'You therefore have no excuse for guessing: if a finding depends on ' +
+    'code outside the shown hunks — a call site, a caller, a default — ' +
+    'OPEN THE FILE and confirm it before raising it. Never ask the author ' +
+    'to confirm something the checkout would have told you.',
 };
 
 /**
@@ -125,7 +136,7 @@ async function buildSystemPrompt(
 ): Promise<string> {
   const base = await loadScrutinyPrompt(input.scrutiny);
   let prompt =
-    `${base}\n\n${FINDINGS_INSTRUCTION}\n\n` +
+    `${base}\n\n${EVIDENCE_GUARD}\n\n${FINDINGS_INSTRUCTION}\n\n` +
     (input.autoApprove ? `${AUTO_APPROVE_VERDICT_INSTRUCTION}\n\n` : '') +
     `${ITEMS_INSTRUCTION}\n\n` +
     `${CONTEXT_PROMPT[context]}\n\n${INJECTION_GUARD}\n\n${PROCESS_GUARD}`;
@@ -487,6 +498,8 @@ export function buildSkillSystemPrompt(
     ...(autoApprove ? [``, AUTO_APPROVE_VERDICT_INSTRUCTION] : []),
     ``,
     ITEMS_INSTRUCTION,
+    ``,
+    EVIDENCE_GUARD,
     ``,
     INJECTION_GUARD,
     ``,

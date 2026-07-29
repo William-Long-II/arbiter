@@ -11,6 +11,7 @@ import {
   claimNext,
   clearQueuedReviews,
   CLEARED_BY_USER,
+  countCommentTriggeredAtHead,
   countQueuedReviews,
   deferReview,
   enqueueReview,
@@ -181,6 +182,34 @@ suite('queue helpers (Postgres integration)', () => {
     );
     expect(manual2).not.toBeNull(); // re-reviews stack
     expect(manual2!.id).not.toBe(manual1!.id);
+  });
+
+  test('comment-triggered rows stack on an unchanged head, and are counted', async () => {
+    // The deadlock this exists for: a blocking review the author can only
+    // answer in prose. The head does NOT move, so unlike every auto row
+    // these must insert on a SHA that already has a review — otherwise the
+    // reply is unreadable and the block is permanent.
+    const auto = await enqueueReview(input({ headSha: 'sha-reply' }));
+    expect(auto).not.toBeNull();
+    expect(await countCommentTriggeredAtHead(userId, REPO, 1, 'sha-reply')).toBe(0);
+
+    const first = await enqueueReview(
+      input({ headSha: 'sha-reply', trigger: 'comment' }),
+    );
+    expect(first).not.toBeNull();
+    expect(first!.triggerSource).toBe('comment');
+
+    const second = await enqueueReview(
+      input({ headSha: 'sha-reply', trigger: 'comment' }),
+    );
+    expect(second).not.toBeNull();
+    expect(second!.id).not.toBe(first!.id);
+
+    // The count is what bounds the loop — it must see both, and must not
+    // count the auto row alongside them.
+    expect(await countCommentTriggeredAtHead(userId, REPO, 1, 'sha-reply')).toBe(2);
+    // Scoped to the head SHA: a different commit starts a fresh budget.
+    expect(await countCommentTriggeredAtHead(userId, REPO, 1, 'sha-other')).toBe(0);
   });
 
   test('clearQueuedReviews skips queued rows, spares others, keeps the dedup guard', async () => {

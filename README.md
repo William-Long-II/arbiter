@@ -143,7 +143,7 @@ a missed delivery still gets picked up within the poll interval.
    - Payload URL: `$PUBLIC_URL/api/webhooks/github`
    - Content type: `application/json`
    - Secret: the same `GITHUB_WEBHOOK_SECRET`
-   - Events: **Pull requests** only.
+   - Events: **Pull requests** and **Issue comments**.
 
 Deliveries are authenticated by GitHub's `X-Hub-Signature-256` HMAC (not
 the session), so the endpoint is exempt from the same-origin guard.
@@ -153,6 +153,31 @@ trigger mode fire instantly when the request names the user directly
 (the payload's `requested_reviewers` list). Requests routed via a
 **team** still land on the poll cadence — team membership isn't in the
 payload, so resolving it takes the poller's GraphQL search.
+
+### Answering a blocking review
+
+**Issue comments** enables one extra path: when a review ends in
+`request-changes`, the PR author can reply in a comment and arbiter
+re-reads the PR with that reply as context. Without it a blocking review
+is only clearable by pushing a commit — which is a problem when the
+finding was a question, or simply wrong, and the answer is prose rather
+than code.
+
+Deliberately narrow, so a busy PR thread doesn't spawn reviews:
+
+- only the **PR author's** comments count, and never a bot's
+- only when their **latest** review is `request-changes` (a later
+  `approve` means nothing is blocked)
+- only while that review's **head SHA is still current** — if the head
+  moved, `synchronize` already re-reviewed
+- at most **3 per commit**, after which the humans should just talk
+
+The re-review sees the full PR diff, the review being answered, and the
+reply. It is told to withdraw a finding the reply disproves, and not to
+go hunting for a replacement blocker to justify the earlier verdict.
+
+Leave the event unsubscribed and nothing changes: the trigger simply
+never fires.
 
 ## Metrics (optional)
 

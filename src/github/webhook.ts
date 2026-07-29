@@ -157,3 +157,76 @@ export function parsePullRequestEvent(
     },
   };
 }
+
+type GhIssueCommentPayload = {
+  action?: unknown;
+  repository?: { full_name?: unknown };
+  issue?: {
+    number?: unknown;
+    pull_request?: unknown;
+    user?: { login?: unknown };
+    state?: unknown;
+  };
+  comment?: {
+    body?: unknown;
+    user?: { login?: unknown; type?: unknown };
+  };
+};
+
+export type ParsedIssueCommentEvent = {
+  repoFull: string;
+  prNumber: number;
+  /** Login of the commenter, as delivered (not lowercased). */
+  commenter: string;
+  /** Login of the PR author, as delivered. */
+  prAuthor: string;
+  body: string;
+};
+
+/**
+ * Normalize an `issue_comment` delivery into the fields the re-review gate
+ * needs, or null when it isn't a PR-author reply worth acting on.
+ *
+ * This is the escape hatch from a deadlock: a review that blocks on a
+ * question the author can answer in prose but cannot "fix" in code. Because
+ * only a push re-ran arbiter, answering it did nothing at all. So the bar
+ * here is deliberately narrow — the comment must be newly created (not
+ * edited), on a pull request rather than a plain issue, on an open PR, and
+ * written by the PR's own author. Everyone else's comments, and arbiter's
+ * own, are ignored: a bot replying to a bot is how you build a loop.
+ */
+export function parseIssueCommentEvent(
+  eventName: string | null | undefined,
+  payload: unknown,
+): ParsedIssueCommentEvent | null {
+  if (eventName !== 'issue_comment') return null;
+  if (typeof payload !== 'object' || payload === null) return null;
+  const p = payload as GhIssueCommentPayload;
+
+  // `edited`/`deleted` deliberately excluded: re-running on an edit lets a
+  // single comment trigger unbounded reviews.
+  if (p.action !== 'created') return null;
+
+  // `issue.pull_request` is present only when the issue IS a PR.
+  if (p.issue?.pull_request == null) return null;
+  if (p.issue?.state !== 'open') return null;
+
+  const repoFull = asString(p.repository?.full_name);
+  const prNumber = typeof p.issue?.number === 'number' ? p.issue.number : NaN;
+  const commenter = asString(p.comment?.user?.login);
+  const prAuthor = asString(p.issue?.user?.login);
+  const body = typeof p.comment?.body === 'string' ? p.comment.body : '';
+  if (!repoFull || !commenter || !prAuthor) return null;
+  if (!Number.isInteger(prNumber) || prNumber <= 0) return null;
+  if (body.trim().length === 0) return null;
+
+  // Only the author's own reply counts. A third party arguing with the
+  // review isn't the one who has to unblock it, and this keeps the trigger
+  // off PR comment threads generally.
+  if (commenter.toLowerCase() !== prAuthor.toLowerCase()) return null;
+
+  // Belt-and-braces against bot loops even if a bot authored the PR.
+  if (p.comment?.user?.type === 'Bot') return null;
+
+  return { repoFull, prNumber, commenter, prAuthor, body };
+}

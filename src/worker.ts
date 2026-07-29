@@ -23,6 +23,7 @@ import {
   fetchCompareDelta,
   fetchPullRequest,
   isLockedConversationError,
+  listAuthorRepliesSince,
   postPullRequestReview,
 } from './github/pulls.ts';
 import { fetchChecksSummary, formatChecksSummary } from './github/checks.ts';
@@ -217,7 +218,43 @@ async function processJob(job: PendingReview): Promise<void> {
     let effectiveDiff = diff;
     let effectiveDiffNotice = diffNotice;
     let priorReview: ReviewInput['priorReview'] = null;
-    if (
+    let authorReplies: ReviewInput['authorReplies'] = null;
+    if (job.triggerSource === 'comment' && job.priorReviewId != null) {
+      // Comment-triggered: the author answered a blocking review in prose
+      // instead of pushing. The head is unchanged, so there is no delta to
+      // review — the FULL diff goes back in with the prior review and the
+      // reply, and the model re-decides whether the finding was ever real.
+      // Without the reply text this pass would just re-run the same review
+      // on the same code and reach the same conclusion, so a missing prior
+      // row means there is nothing to answer: fall through to a plain
+      // review rather than pretending.
+      const prior = await getPriorReviewContext(job.priorReviewId);
+      if (prior) {
+        priorReview = {
+          headSha: prior.headSha,
+          verdict: prior.verdict,
+          body: prior.output,
+          deltaOnly: false,
+        };
+        authorReplies = await listAuthorRepliesSince(
+          userRow.token,
+          job.repoFull,
+          job.prNumber,
+          pr.author,
+          prior.finishedAt,
+        );
+        console.log(
+          `[worker] #${job.id} comment-triggered re-review: ` +
+            `${authorReplies.length} author reply(ies) since prior review ` +
+            `${job.priorReviewId}`,
+        );
+      } else {
+        console.log(
+          `[worker] #${job.id} comment-triggered re-review declined ` +
+            `(prior review gone); running full review`,
+        );
+      }
+    } else if (
       job.priorReviewId != null &&
       job.priorHeadSha &&
       job.priorHeadSha !== pr.headSha
@@ -243,6 +280,7 @@ async function processJob(job: PendingReview): Promise<void> {
           headSha: prior.headSha,
           verdict: prior.verdict,
           body: prior.output,
+          deltaOnly: true,
         };
         await markIncremental(job.id);
         console.log(
@@ -282,6 +320,13 @@ async function processJob(job: PendingReview): Promise<void> {
       { label: 'PR title', text: pr.title },
       { label: 'PR author', text: pr.author },
       { label: 'diff', text: effectiveDiff },
+      // Author replies are untrusted in the same way the diff is, and more
+      // pointedly so: this text is addressed to the reviewer and its whole
+      // purpose is to change a verdict.
+      ...(authorReplies ?? []).map((r, i) => ({
+        label: `author reply ${i + 1}`,
+        text: r.body,
+      })),
     ]);
     const injectionNote = buildInjectionNote(injection);
     if (injectionNote) {
@@ -303,6 +348,7 @@ async function processJob(job: PendingReview): Promise<void> {
         reviewerSkill: job.reviewerSkill,
         autoApprove: job.autoApprove,
         priorReview,
+        authorReplies,
         ciSummary,
         diffNotice: effectiveDiffNotice,
         signalsNote,

@@ -5,8 +5,15 @@ import { serveStatic } from 'hono/bun';
 import { streamSSE } from 'hono/streaming';
 import { subscribe } from '../events.ts';
 import { mountGithubOAuth } from '../github/oauth.ts';
-import { parsePullRequestEvent, verifyGithubSignature } from '../github/webhook.ts';
-import { enqueueAcrossUsers } from '../enqueue.ts';
+import {
+  parseIssueCommentEvent,
+  parsePullRequestEvent,
+  verifyGithubSignature,
+} from '../github/webhook.ts';
+import {
+  enqueueAcrossUsers,
+  enqueueCommentReplyAcrossUsers,
+} from '../enqueue.ts';
 import { collectMetrics, renderPrometheus } from '../metrics.ts';
 import { sql } from '../db.ts';
 import { currentUser, requireUser } from './auth.ts';
@@ -1054,6 +1061,19 @@ export function buildApp(): Hono {
       payload = JSON.parse(raw);
     } catch {
       return c.json({ error: 'Body is not JSON' }, 400);
+    }
+
+    // A PR author replying under a blocking review re-runs it. Checked
+    // before the pull_request path since the two are disjoint event types.
+    const comment = parseIssueCommentEvent(eventName, payload);
+    if (comment) {
+      try {
+        const enqueued = await enqueueCommentReplyAcrossUsers(comment);
+        return c.json({ ok: true, action: 'comment-reply', enqueued }, 202);
+      } catch (err) {
+        console.error('[webhook] comment dispatch error:', err);
+        return c.json({ error: 'Internal error handling webhook' }, 500);
+      }
     }
 
     const parsed = parsePullRequestEvent(eventName, payload);

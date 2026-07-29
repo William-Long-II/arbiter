@@ -509,6 +509,11 @@ const SiblingRow: FC<{ review: PendingReview }> = ({ review }) => {
         {review.triggerSource === 'manual' ? (
           <span class="badge-pill badge-pill-muted">re-review</span>
         ) : null}
+        {/* Distinct from a manual re-run: same commit, triggered by the
+            author answering the review rather than changing the code. */}
+        {review.triggerSource === 'comment' ? (
+          <span class="badge-pill badge-pill-muted">author reply</span>
+        ) : null}
         {review.verdict ? (
           <span class={`badge-pill verdict-${review.verdict}`}>{review.verdict}</span>
         ) : null}
