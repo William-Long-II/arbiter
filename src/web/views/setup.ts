@@ -182,9 +182,11 @@ export function setupWizardPage(opts: {
         <p class="hint">
           Any random string. Add a webhook on the repos/orgs you review —
           payload URL <code>${esc(webhookUrl)}</code>, content type
-          <code>application/json</code>, event “Pull requests” — with this
-          same secret for near-instant reviews. Leave blank to rely on
-          polling only.
+          <code>application/json</code>, events “Pull requests” and
+          “Issue comments” — with this same secret for near-instant
+          reviews. Issue comments additionally let a PR author clear a
+          blocking review by replying to it, instead of having to push a
+          commit. Leave blank to rely on polling only.
         </p>
         <label for="github_webhook_secret">Secret</label>
         <input type="password" id="github_webhook_secret" name="github_webhook_secret"

@@ -6,6 +6,10 @@ import type { ReviewEvent } from '../events.ts';
 export type { ReviewPrompt } from '../review/format.ts';
 
 export type ReviewStatus = 'queued' | 'running' | 'done' | 'failed' | 'skipped';
+/** How a queued row came to exist. Mirrors the CHECK constraint in
+ *  migrations 016 + 020. Only 'auto' is covered by the (repo, pr, sha)
+ *  idempotency index, so the other two can stack on an unchanged head. */
+export type TriggerSource = 'auto' | 'manual' | 'comment';
 /** Sub-status of a `running` review. NULL in every other status. */
 export type ReviewPhase = 'preparing' | 'reviewing' | 'posting';
 export type PostedEvent = 'APPROVE' | 'COMMENT' | 'REQUEST_CHANGES';
@@ -44,8 +48,10 @@ export type PendingReview = {
   reviewContext: ReviewContext;
   /** How this row was created. 'auto' = poller/webhook ingestion (covered
    * by the idempotency index); 'manual' = a user-initiated re-review, which
-   * is exempt from that index so it can stack on the same head SHA. */
-  triggerSource: 'auto' | 'manual';
+   * is exempt from that index so it can stack on the same head SHA;
+   * 'comment' = the PR author replied under a blocking review, so the
+   * argument changed even though the code did not (migration 020). */
+  triggerSource: TriggerSource;
   /** Candidate prior completed review for this PR, snapshotted at enqueue
    * time when the scope (or the re-review form) opted into incremental
    * re-review. Null = full review. The worker may still fall back to a
@@ -111,10 +117,11 @@ export type EnqueueInput = {
   humanize: boolean;
   reviewerSkill: string | null;
   reviewContext: ReviewContext;
-  /** Defaults to 'auto'. Set 'manual' for a user-initiated re-review so the
-   * (repo, pr, sha) idempotency index — which is partial on 'auto' — never
-   * collapses it into an existing row. */
-  trigger?: 'auto' | 'manual';
+  /** Defaults to 'auto'. Set 'manual' (user-initiated re-review) or
+   * 'comment' (author replied under a blocking review) so the (repo, pr,
+   * sha) idempotency index — which is partial on 'auto' — never collapses
+   * it into an existing row. */
+  trigger?: TriggerSource;
   /** Prior completed review to attempt an incremental (delta) review
    * against. Both or neither; see PendingReview.priorReviewId. */
   priorReviewId?: number | null;
@@ -690,24 +697,108 @@ export async function findPriorReviewForPR(
 }
 
 /**
+ * The review a PR-author comment might be answering: this user's LATEST
+ * completed review of the PR, with its verdict. The caller acts only when
+ * that verdict is `request-changes` — checking the latest rather than
+ * querying for the latest *blocking* one matters, because a later `approve`
+ * means nothing is blocked and the old blocker must not be resurrected.
+ *
+ * Deliberately NOT filtered by head SHA in SQL. The caller compares the SHA
+ * itself, since obtaining it costs a GitHub round-trip (the `issue_comment`
+ * payload carries no head SHA) and this query is the cheap way to skip the
+ * users with nothing to clear. `finishedAt` bounds which comments count as
+ * a reply — anything posted before the review isn't answering it.
+ */
+export async function findLatestReviewForPR(
+  userId: number,
+  repoFull: string,
+  prNumber: number,
+): Promise<{
+  id: number;
+  headSha: string;
+  verdict: Verdict;
+  finishedAt: Date | null;
+} | null> {
+  const rows = await sql<
+    { id: number; headSha: string; verdict: Verdict; finishedAt: Date | null }[]
+  >`
+    SELECT id, head_sha AS "headSha", verdict, finished_at AS "finishedAt"
+    FROM pending_reviews
+    WHERE user_id = ${userId}
+      AND repo_full = ${repoFull}
+      AND pr_number = ${prNumber}
+      AND status = 'done'
+      AND output IS NOT NULL
+      AND verdict IS NOT NULL
+      AND report_only = FALSE
+    ORDER BY finished_at DESC NULLS LAST
+    LIMIT 1
+  `;
+  return rows[0] ?? null;
+}
+
+/**
+ * How many comment-triggered rows already exist for this (user, repo, PR,
+ * head SHA) — the loop bound. Without it a talkative author (or two agents
+ * arguing) could re-run the reviewer indefinitely on one commit, since
+ * these rows are exempt from the idempotency index by design. Counts every
+ * status: a queued or running row is a re-review already in flight, and a
+ * failed one still consumed an attempt.
+ */
+export async function countCommentTriggeredAtHead(
+  userId: number,
+  repoFull: string,
+  prNumber: number,
+  headSha: string,
+): Promise<number> {
+  const rows = await sql<{ n: string }[]>`
+    SELECT COUNT(*)::text AS n
+    FROM pending_reviews
+    WHERE user_id = ${userId}
+      AND repo_full = ${repoFull}
+      AND pr_number = ${prNumber}
+      AND head_sha = ${headSha}
+      AND trigger_source = 'comment'
+  `;
+  return Number(rows[0]?.n ?? 0);
+}
+
+/**
  * The prior review's content, fetched by the worker when it attempts the
  * delta path. Unscoped by user on purpose: the id comes off the claimed
  * job row, which snapshotted it at enqueue time for the same user. Null
  * if the row vanished (retention) or somehow lost its body — the worker
  * then falls back to a full review.
  */
-export async function getPriorReviewContext(
-  id: number,
-): Promise<{ headSha: string; verdict: Verdict; output: string } | null> {
-  const rows = await sql<{ headSha: string; verdict: Verdict | null; output: string | null }[]>`
-    SELECT head_sha AS "headSha", verdict, output
+export async function getPriorReviewContext(id: number): Promise<{
+  headSha: string;
+  verdict: Verdict;
+  output: string;
+  /** When the prior review finished — the lower bound for "comments that
+   *  are replying to it" on the comment-triggered path. */
+  finishedAt: Date | null;
+} | null> {
+  const rows = await sql<
+    {
+      headSha: string;
+      verdict: Verdict | null;
+      output: string | null;
+      finishedAt: Date | null;
+    }[]
+  >`
+    SELECT head_sha AS "headSha", verdict, output, finished_at AS "finishedAt"
     FROM pending_reviews
     WHERE id = ${id} AND status = 'done'
     LIMIT 1
   `;
   const row = rows[0];
   if (!row || !row.output || !row.verdict) return null;
-  return { headSha: row.headSha, verdict: row.verdict, output: row.output };
+  return {
+    headSha: row.headSha,
+    verdict: row.verdict,
+    output: row.output,
+    finishedAt: row.finishedAt,
+  };
 }
 
 /**

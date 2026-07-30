@@ -34,6 +34,7 @@ describe('formatUserMessage', () => {
         headSha: 'abc123def4567890',
         verdict: 'request-changes',
         body: 'Previous review body with a `code` span.',
+        deltaOnly: true,
       },
     });
     expect(msg).toContain('## Incremental re-review');
@@ -42,6 +43,69 @@ describe('formatUserMessage', () => {
     expect(msg).toContain('Previous review body');
     expect(msg).toContain('ONLY the changes pushed since');
     expect(msg).toMatch(/ENTIRE\s+pull request/);
+  });
+
+  test('priorReview never licenses restating a finding unverified', () => {
+    const msg = formatUserMessage({
+      scrutiny: 'standard',
+      diff: '+only the delta',
+      prTitle: 't',
+      prAuthor: 'a',
+      repoFull: 'r/r',
+      priorReview: {
+        headSha: 'abc123def4567890',
+        verdict: 'request-changes',
+        body: 'prior',
+        deltaOnly: true,
+      },
+    });
+    // The bug this replaced: "restate ... instead of re-deriving them",
+    // which let a wrong prior nit harden into a blocker across rounds.
+    expect(msg).not.toContain('instead of re-deriving');
+    expect(msg).toContain('It is NOT verified');
+    expect(msg).toMatch(/NEVER promote a prior non-blocking note/);
+  });
+
+  test('comment-triggered re-review says full diff, not delta', () => {
+    const msg = formatUserMessage({
+      scrutiny: 'standard',
+      diff: '+the whole PR',
+      prTitle: 't',
+      prAuthor: 'a',
+      repoFull: 'r/r',
+      priorReview: {
+        headSha: 'abc123def4567890',
+        verdict: 'request-changes',
+        body: 'prior review body',
+        deltaOnly: false,
+      },
+      authorReplies: [{ author: 'someone', body: 'Line 485 already reads X.' }],
+    });
+    expect(msg).toContain('## Re-review');
+    expect(msg).not.toContain('## Incremental re-review');
+    // Claiming a delta when the full diff was sent would make the model
+    // think unshown code changed.
+    expect(msg).not.toContain('ONLY the changes pushed since');
+    expect(msg).toContain('FULL pull request diff');
+    expect(msg).toContain("## Author's reply");
+    expect(msg).toContain('**@someone wrote:**');
+    expect(msg).toContain('Line 485 already reads X.');
+    expect(msg).toMatch(/withdraw that\s+finding/);
+    expect(msg).toMatch(/Do NOT hunt for a replacement blocker/);
+  });
+
+  test('author replies are omitted when absent or blank', () => {
+    const base = {
+      scrutiny: 'standard' as const,
+      diff: '+x',
+      prTitle: 't',
+      prAuthor: 'a',
+      repoFull: 'r/r',
+    };
+    expect(formatUserMessage(base)).not.toContain("Author's reply");
+    expect(
+      formatUserMessage({ ...base, authorReplies: [{ author: 'a', body: '  ' }] }),
+    ).not.toContain("Author's reply");
   });
 
   test('no priorReview ⇒ no incremental section', () => {

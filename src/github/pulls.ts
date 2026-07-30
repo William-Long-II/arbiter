@@ -456,6 +456,60 @@ export async function fetchPullRequest(
   };
 }
 
+/** Cap on author replies handed to a comment-triggered re-review. A reply
+ *  thread this long is a conversation, not an answer, and the tail is the
+ *  part that matters — so we keep the LAST N. */
+const MAX_AUTHOR_REPLIES = 10;
+
+/**
+ * The PR author's own issue comments posted after `since` — the replies a
+ * comment-triggered re-review is meant to read. Oldest first.
+ *
+ * Scoped hard on purpose: only the author's comments (they own the
+ * response), only after the review being answered (earlier comments aren't
+ * replies to it), and never arbiter's own output, which is what a review
+ * re-reading its own posted review would otherwise amount to. Returns []
+ * rather than throwing — a re-review with the diff but no reply text is
+ * degraded, not broken, and the guards still stop it inventing a blocker.
+ */
+export async function listAuthorRepliesSince(
+  token: string,
+  repoFull: string,
+  pullNumber: number,
+  author: string,
+  since: Date | null,
+): Promise<{ author: string; body: string }[]> {
+  const [owner, repo] = repoFull.split('/');
+  if (!owner || !repo) return [];
+  const wanted = author.toLowerCase();
+  try {
+    const octokit = octokitFor(token);
+    const all = await octokit.paginate(octokit.rest.issues.listComments, {
+      owner,
+      repo,
+      issue_number: pullNumber,
+      per_page: 100,
+      ...(since ? { since: since.toISOString() } : {}),
+    });
+    const replies = all
+      .filter((c) => (c.user?.login ?? '').toLowerCase() === wanted)
+      .filter((c) => c.user?.type !== 'Bot')
+      .filter((c) => typeof c.body === 'string' && c.body.trim().length > 0)
+      // `since` is server-side but inclusive to the second; drop anything
+      // at or before the review itself so a comment posted in the same
+      // second as the review isn't mistaken for a reply to it.
+      .filter((c) => !since || new Date(c.created_at).getTime() > since.getTime())
+      .map((c) => ({ author: c.user?.login ?? author, body: c.body as string }));
+    return replies.slice(-MAX_AUTHOR_REPLIES);
+  } catch (err) {
+    console.error(
+      `[pulls] failed to list author replies for ${repoFull}#${pullNumber}:`,
+      err,
+    );
+    return [];
+  }
+}
+
 /**
  * List open PRs in a single repo. Used by the manual `/repos/owner/name/prs`
  * debugging page. Thin wrapper over listOpenPullsForScopes — same underlying
