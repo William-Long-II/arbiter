@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  detectVerdictContradiction,
   FINDINGS_INSTRUCTION,
   parseFindings,
   parseVerdict,
   topSeverity,
+  type FindingCounts,
 } from '../src/review/format.ts';
 
 describe('parseFindings', () => {
@@ -80,4 +82,89 @@ describe('topSeverity', () => {
 test('FINDINGS_INSTRUCTION advertises the exact marker key', () => {
   expect(FINDINGS_INSTRUCTION).toContain('arbiter:findings=');
   expect(FINDINGS_INSTRUCTION.length).toBeGreaterThan(0);
+});
+
+// PR 3073 in the wild: a review whose first line read "Approve, but there's
+// one thing I want confirmed before this merges." — posted as a hard block
+// with 9 green checks, over a question about callers in other repos that
+// the reviewer could not see. The verdict markers are stripped before
+// posting, so the author read an approval attached to a blocked merge.
+describe('detectVerdictContradiction', () => {
+  const counts = (blocking: number): FindingCounts => ({
+    blocking,
+    major: 0,
+    minor: 0,
+    nit: 0,
+  });
+
+  test('flags request-changes that names nothing to fix', () => {
+    const r = detectVerdictContradiction({
+      verdict: 'request-changes',
+      findings: counts(0),
+      body: 'Found a problem.',
+    });
+    expect(r?.kind).toBe('counts');
+    expect(r?.detail).toMatch(/blocking=0/);
+  });
+
+  test('flags request-changes whose prose opens by approving', () => {
+    for (const opening of [
+      "Approve, but there's one thing I want confirmed before this merges.",
+      'LGTM — one question first.',
+      'Looks good to me, though I want to check something.',
+      '## Approved',
+      '**Approve** with one caveat.',
+    ]) {
+      const r = detectVerdictContradiction({
+        verdict: 'request-changes',
+        findings: counts(1),
+        body: `${opening}\n\nrest of the review`,
+      });
+      expect(r?.kind).toBe('prose');
+    }
+  });
+
+  test('a genuine blocking review is not flagged', () => {
+    expect(
+      detectVerdictContradiction({
+        verdict: 'request-changes',
+        findings: counts(2),
+        body: 'This leaks a connection on the error path.',
+      }),
+    ).toBeNull();
+  });
+
+  test('approve and comment verdicts are never flagged', () => {
+    for (const verdict of ['approve', 'comment'] as const) {
+      expect(
+        detectVerdictContradiction({
+          verdict,
+          findings: counts(0),
+          body: 'Approve — nice work.',
+        }),
+      ).toBeNull();
+    }
+  });
+
+  test('does not fire on approval words later in the body', () => {
+    expect(
+      detectVerdictContradiction({
+        verdict: 'request-changes',
+        findings: counts(1),
+        body:
+          'This drops a transaction rollback.\n\n' +
+          'I would approve it otherwise, and the tests look good to me.',
+      }),
+    ).toBeNull();
+  });
+
+  test('missing findings still allows the prose check to run', () => {
+    expect(
+      detectVerdictContradiction({
+        verdict: 'request-changes',
+        findings: null,
+        body: 'Approve, but one question.',
+      })?.kind,
+    ).toBe('prose');
+  });
 });
