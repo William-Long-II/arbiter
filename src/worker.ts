@@ -35,6 +35,7 @@ import {
 } from './review/runner.ts';
 import { isTransientError, MAX_ATTEMPTS, retryDelaySeconds } from './retry.ts';
 import { pickReviewEvent, selectInlineFindings, statusForReview } from './review/gate.ts';
+import { detectVerdictContradiction } from './review/format.ts';
 import { postCommitStatus } from './github/status.ts';
 import { resolveStaleThreads, snapshotStaleThreads } from './github/threads.ts';
 import { commentableLines, selectReviewComments } from './review/diffmap.ts';
@@ -362,6 +363,21 @@ async function processJob(job: PendingReview): Promise<void> {
       },
       job.claudeMode,
     );
+
+    // A review that blocks while its own output says nothing must change.
+    // Reported, not corrected: the verdict still stands, but a stalled PR
+    // now leaves a trail instead of just sitting there.
+    const contradiction = detectVerdictContradiction({
+      verdict: result.verdict,
+      findings: result.findings,
+      body: result.body,
+    });
+    if (contradiction) {
+      console.warn(
+        `[worker] #${job.id} ${job.repoFull}#${job.prNumber} ` +
+          `CONTRADICTORY VERDICT (${contradiction.kind}): ${contradiction.detail}`,
+      );
+    }
 
     const event = pickReviewEvent({
       autoApprove: job.autoApprove,

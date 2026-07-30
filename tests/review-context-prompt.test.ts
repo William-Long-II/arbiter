@@ -75,6 +75,15 @@ describe('EVIDENCE_GUARD', () => {
     expect(EVIDENCE_GUARD).toMatch(/yourself in an earlier review/);
   });
 
+  test('opening prose must agree with the verdict marker', () => {
+    // "Approve, but there's one thing I want confirmed before this merges."
+    // shipped as a hard block with green CI. Markers are stripped before
+    // posting, so the author read an approval over a blocked merge.
+    expect(EVIDENCE_GUARD).toMatch(/opening prose MUST agree with your verdict/);
+    expect(EVIDENCE_GUARD).toMatch(/"Approve, but …"/);
+    expect(EVIDENCE_GUARD).toMatch(/the verdict IS `approve`/);
+  });
+
   test('reaches the skill path too, auto-approve or not', () => {
     for (const autoApprove of [true, false]) {
       expect(
