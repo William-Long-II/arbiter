@@ -230,7 +230,66 @@ export const EVIDENCE_GUARD = [
   '- Confidence is not evidence. Never treat a claim as established just',
   '  because it was asserted confidently — including a claim you made',
   '  yourself in an earlier review.',
+  '- Your opening prose MUST agree with your verdict marker. If you are',
+  '  writing "Approve, but …", "LGTM, one thing …", or anything else that',
+  '  starts by approving, then the verdict IS `approve` and the "but" is a',
+  '  non-blocking note. The markers are stripped before your review is',
+  '  posted, so an approval opening on a blocking verdict reaches the',
+  '  author as an approval that blocks their merge for no stated reason.',
 ].join('\n');
+
+// An opening line that announces an approval. Anchored to the very start
+// of the body and kept tight on purpose: "Approve, but …" / "LGTM, one
+// thing …" are the shapes actually seen, and a loose pattern would match
+// prose merely *discussing* approval further in.
+const PROSE_APPROVAL_RE =
+  /^\s*(?:#{1,6}\s*)?(?:\*\*)?\s*(approve|approved|approving|lgtm|looks good(?: to me)?|no blocking issues|nothing blocking)\b/i;
+
+/**
+ * A review that blocks the merge while its own output says nothing needs
+ * fixing. Two independent contradictions, either of which means the
+ * verdict marker cannot be trusted:
+ *
+ * - `counts`: verdict is `request-changes` but the model self-reported
+ *   zero blocking findings, which FINDINGS_INSTRUCTION explicitly forbids.
+ * - `prose`: verdict is `request-changes` but the body opens by approving.
+ *   Seen in the wild as "Approve, but there's one thing I want confirmed
+ *   before this merges." — posted as a hard block, with green CI, over a
+ *   question the author could not fix in code. The verdict markers are
+ *   stripped before posting, so the author is left reading an approval
+ *   attached to a blocked merge.
+ *
+ * Reports only; the verdict stands. The point is that this shows up in
+ * operator logs instead of silently stalling someone's pull request.
+ */
+export function detectVerdictContradiction(args: {
+  verdict: Verdict;
+  findings: FindingCounts | null | undefined;
+  body: string;
+}): { kind: 'counts' | 'prose'; detail: string } | null {
+  if (args.verdict !== 'request-changes') return null;
+
+  if (args.findings && args.findings.blocking === 0) {
+    return {
+      kind: 'counts',
+      detail:
+        'verdict=request-changes but findings reported blocking=0 — the ' +
+        'review blocks the merge while naming nothing that must change',
+    };
+  }
+
+  const opening = args.body.trimStart().split('\n', 1)[0] ?? '';
+  if (PROSE_APPROVAL_RE.test(opening)) {
+    return {
+      kind: 'prose',
+      detail:
+        'verdict=request-changes but the review opens by approving: ' +
+        JSON.stringify(opening.slice(0, 120)),
+    };
+  }
+
+  return null;
+}
 
 /**
  * Appended to every scrutiny system prompt (single source of truth for the
