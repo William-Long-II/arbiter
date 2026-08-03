@@ -134,7 +134,7 @@ describe('detectVerdictContradiction', () => {
     ).toBeNull();
   });
 
-  test('approve and comment verdicts are never flagged', () => {
+  test('clean approve and comment verdicts are never flagged', () => {
     for (const verdict of ['approve', 'comment'] as const) {
       expect(
         detectVerdictContradiction({
@@ -144,6 +144,33 @@ describe('detectVerdictContradiction', () => {
         }),
       ).toBeNull();
     }
+  });
+
+  // The inverse, and the one that actually blocked PR 3206: the review
+  // said "Approve. Good to merge." and called its remaining items "not
+  // being promoted or resolved, just carried forward" — then blocked on
+  // exactly those, because hasBlocking() ORs the counts with the verdict.
+  test('flags an approve whose stale counts will override it', () => {
+    const r = detectVerdictContradiction({
+      verdict: 'approve',
+      findings: counts(3),
+      body: 'Approve. Good to merge.',
+    });
+    expect(r?.kind).toBe('counts-override');
+    expect(r?.detail).toMatch(/blocking=3/);
+    expect(r?.detail).toMatch(/override the approval/);
+  });
+
+  test('a comment verdict with blocking counts is not the override case', () => {
+    // `comment` does not claim the PR is mergeable, so counts outranking
+    // it is not a self-contradiction — only `approve` is.
+    expect(
+      detectVerdictContradiction({
+        verdict: 'comment',
+        findings: counts(2),
+        body: 'Some concerns.',
+      }),
+    ).toBeNull();
   });
 
   test('does not fire on approval words later in the body', () => {

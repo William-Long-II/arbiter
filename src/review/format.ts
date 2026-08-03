@@ -258,6 +258,9 @@ const PROSE_APPROVAL_RE =
  *   question the author could not fix in code. The verdict markers are
  *   stripped before posting, so the author is left reading an approval
  *   attached to a blocked merge.
+ * - `counts-override`: verdict is `approve` but blocking > 0, which
+ *   hasBlocking() turns into a REQUEST_CHANGES on a gate-on-blocking
+ *   scope. The approval is overruled by its own stale counts.
  *
  * Reports only; the verdict stands. The point is that this shows up in
  * operator logs instead of silently stalling someone's pull request.
@@ -266,7 +269,25 @@ export function detectVerdictContradiction(args: {
   verdict: Verdict;
   findings: FindingCounts | null | undefined;
   body: string;
-}): { kind: 'counts' | 'prose'; detail: string } | null {
+}): { kind: 'counts' | 'prose' | 'counts-override'; detail: string } | null {
+  // The inverse case, and the nastier one: the model APPROVED but left a
+  // non-zero blocking count (FINDINGS_INSTRUCTION: "`approve` implies
+  // blocking = 0"). hasBlocking() ORs the two signals, so on a
+  // gate-on-blocking scope those stale counts silently outrank the
+  // approval and post REQUEST_CHANGES. Seen on a review that opened
+  // "Approve. Good to merge." and said of its remaining items "they're
+  // not being promoted or resolved, just carried forward" — then blocked
+  // the merge on exactly those.
+  if (args.verdict === 'approve' && (args.findings?.blocking ?? 0) > 0) {
+    return {
+      kind: 'counts-override',
+      detail:
+        `verdict=approve but findings reported blocking=${args.findings?.blocking} — ` +
+        'on a gate-on-blocking scope the counts override the approval and ' +
+        'post REQUEST_CHANGES',
+    };
+  }
+
   if (args.verdict !== 'request-changes') return null;
 
   if (args.findings && args.findings.blocking === 0) {
